@@ -3,6 +3,21 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CredentialRef {
+    pub credential_ref_id: String,
+    pub source: CredentialSource,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CredentialSource {
+    Environment,
+    SecretStore,
+    WorkerScope,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderProfile {
     pub provider_profile_id: String,
     pub status: ProfileStatus,
@@ -11,7 +26,9 @@ pub struct ProviderProfile {
     pub default_model_alias: Option<String>,
     pub routing_policy_id: String,
     pub allowed_model_aliases: Vec<String>,
-    pub fallback_chain: Vec<String>,
+    pub credential_ref: CredentialRef,
+    pub retry_policy: Option<Value>,
+    pub transform_policy: Option<Value>,
     pub reasoning_defaults: Value,
     pub tool_visibility_profile: Option<String>,
     pub timeout_ms: Option<u64>,
@@ -68,8 +85,7 @@ pub struct ProviderRouteDecision {
     pub selected_model_alias: String,
     pub provider_id: String,
     pub provider_model_name: String,
-    pub fallback_applied: bool,
-    pub fallback_from_model_alias: Option<String>,
+    pub credential_ref_id: String,
     pub resolved_at: String,
 }
 
@@ -95,7 +111,6 @@ pub enum ProviderStreamEventType {
     UsageUpdated,
     ProviderWarning,
     ProviderRetry,
-    ProviderFallback,
     StreamCompleted,
     StreamFailed,
     StreamCancelled,
@@ -122,6 +137,7 @@ pub struct ProviderStreamSession {
     pub session_id: String,
     pub request: StreamRequest,
     pub route_decision: ProviderRouteDecision,
+    pub provider_slot_lease_id: String,
     pub status: ProviderStreamStatus,
     pub stream_events: Vec<ProviderStreamEvent>,
     pub usage: ProviderUsage,

@@ -1,6 +1,5 @@
-mod common;
+use crate::common::*;
 use agent_os_store::{BlobStore, LocalBlobStore};
-use common::*;
 
 #[test]
 fn patch_artifact_requires_diff_evidence() {

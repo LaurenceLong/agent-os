@@ -1,0 +1,6 @@
+{
+  "policy_name": "software-engineering-review",
+  "required_verdicts": ["accept", "reject", "needs_revision"],
+  "required_evidence_types": ["review_finding"],
+  "finding_severities": ["P0", "P1", "P2", "P3"]
+}

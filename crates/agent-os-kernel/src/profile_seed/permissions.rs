@@ -24,6 +24,11 @@ pub(super) fn core_permissions(now: &str) -> Vec<PermissionProfile> {
             max_risk_level: 4,
             allowed_syscalls: strings(&[
                 "context.load",
+                "context.invalidate",
+                "context.commit_summary",
+                "memory.propose_write",
+                "memory.commit_write",
+                "memory.invalidate",
                 "artifact.commit",
                 "evidence.attach",
                 "task.update",
@@ -44,6 +49,8 @@ pub(super) fn core_permissions(now: &str) -> Vec<PermissionProfile> {
             ]),
             resource_scopes: strings(&[
                 "read:*",
+                "context:*",
+                "memory:*",
                 "test:*",
                 "workspace:*",
                 "artifact:*",

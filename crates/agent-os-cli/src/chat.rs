@@ -17,13 +17,11 @@ pub(crate) fn run_chat(options: &ChatOptions) -> AgentOsResult<Value> {
         .api_base
         .clone()
         .or_else(|| std::env::var("LLM_BASE_URL").ok())
-        .or_else(|| std::env::var("OPENAI_API_BASE").ok())
         .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
     let model = options
         .model
         .clone()
         .or_else(|| std::env::var("LLM_MODEL").ok())
-        .or_else(|| std::env::var("AGENT_OS_MODEL").ok())
         .unwrap_or_else(|| "gpt-4o".to_string());
     let api_style = LlmApiStyle::from_env_or_base(&api_base)?;
 
@@ -114,13 +112,9 @@ fn resolve_api_key(options: &ChatOptions) -> AgentOsResult<String> {
     if let Some(key) = &options.api_key {
         return Ok(key.clone());
     }
-    std::env::var("LLM_API_KEY")
-        .or_else(|_| std::env::var("OPENAI_API_KEY"))
-        .map_err(|_| {
-            AgentOsError::Validation(
-                "API key required: pass --api-key or set LLM_API_KEY or OPENAI_API_KEY".to_string(),
-            )
-        })
+    std::env::var("LLM_API_KEY").map_err(|_| {
+        AgentOsError::Validation("API key required: pass --api-key or set LLM_API_KEY".to_string())
+    })
 }
 
 struct ChatSession {

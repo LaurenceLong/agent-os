@@ -150,6 +150,46 @@ impl Kernel {
                 event_ids.extend(self.latest_events_for(&snapshot.context_id)?);
                 to_value(snapshot)?
             }
+            "context.invalidate" => {
+                self.authorize(&syscall)?;
+                let context_id = required_string(&syscall.payload, "context_id")?;
+                let snapshot =
+                    self.invalidate_context_with_cause(&context_id, Some(syscall_id.clone()))?;
+                event_ids.extend(self.latest_events_for(&snapshot.context_id)?);
+                to_value(snapshot)?
+            }
+            "context.commit_summary" => {
+                self.authorize(&syscall)?;
+                let input: CompactContextInput = parse_payload(&syscall.payload)?;
+                let compaction =
+                    self.compact_context_with_cause(input, Some(syscall_id.clone()))?;
+                event_ids.extend(self.latest_events_for(&compaction.compaction_id)?);
+                to_value(compaction)?
+            }
+            "memory.propose_write" => {
+                self.authorize(&syscall)?;
+                let input: ProposeMemoryWriteInput = parse_payload(&syscall.payload)?;
+                let memory =
+                    self.propose_memory_write_with_cause(input, Some(syscall_id.clone()))?;
+                event_ids.extend(self.latest_events_for(&memory.memory_id)?);
+                to_value(memory)?
+            }
+            "memory.commit_write" => {
+                self.authorize(&syscall)?;
+                let input: CommitMemoryWriteInput = parse_payload(&syscall.payload)?;
+                let memory =
+                    self.commit_memory_write_with_cause(input, Some(syscall_id.clone()))?;
+                event_ids.extend(self.latest_events_for(&memory.memory_id)?);
+                to_value(memory)?
+            }
+            "memory.invalidate" => {
+                self.authorize(&syscall)?;
+                let memory_id = required_string(&syscall.payload, "memory_id")?;
+                let memory =
+                    self.invalidate_memory_with_cause(&memory_id, Some(syscall_id.clone()))?;
+                event_ids.extend(self.latest_events_for(&memory.memory_id)?);
+                to_value(memory)?
+            }
             "tool.discover" => {
                 self.authorize(&syscall)?;
                 let tools: Vec<_> = self
@@ -262,7 +302,11 @@ impl Kernel {
                 self.authorize(&syscall)?;
                 json!({"decision": "allow"})
             }
-            other => return Err(AgentOsError::Unsupported(other.to_string())),
+            other => {
+                return Err(AgentOsError::Validation(format!(
+                    "unknown syscall op {other}"
+                )));
+            }
         };
 
         let result = SyscallResult::accepted(syscall.syscall_id, event_ids, output);

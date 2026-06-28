@@ -1,7 +1,7 @@
 use std::env;
 use std::fs;
 
-mod common;
+use crate::common;
 
 #[test]
 fn openai_adapter_pattern_drives_full_integration_task() {
@@ -59,8 +59,8 @@ fn openai_adapter_pattern_drives_full_integration_task() {
         })
         .unwrap();
 
-    let script = agent_os_thread::ScriptedModelClient::new([
-        agent_os_thread::ScriptedStep::ToolCall(agent_os_thread::ToolAction::new(
+    let script = common::DeterministicModelClient::new([
+        common::DeterministicStep::ToolCall(agent_os_thread::ToolAction::new(
             "read_file",
             common::json!({
                 "workspace_root": workspace.to_string_lossy(),
@@ -69,7 +69,7 @@ fn openai_adapter_pattern_drives_full_integration_task() {
             1,
             Some("target file was inspected before edit".to_string()),
         )),
-        agent_os_thread::ScriptedStep::ToolCall(agent_os_thread::ToolAction::new(
+        common::DeterministicStep::ToolCall(agent_os_thread::ToolAction::new(
             "replace_text",
             common::json!({
                 "workspace_root": workspace.to_string_lossy(),
@@ -80,7 +80,7 @@ fn openai_adapter_pattern_drives_full_integration_task() {
             4,
             Some("exact edit applied: add changed to multiply".to_string()),
         )),
-        agent_os_thread::ScriptedStep::Final {
+        common::DeterministicStep::Final {
             summary: "Changed add to multiply in src/lib.rs".to_string(),
             known_risks: Vec::new(),
             tests_run: vec!["verified file contents".to_string()],
@@ -160,8 +160,8 @@ fn openai_adapter_workspace_root_injection_pattern() {
         .unwrap();
 
     let ws = workspace.to_string_lossy().to_string();
-    let script = agent_os_thread::ScriptedModelClient::new([
-        agent_os_thread::ScriptedStep::ToolCall(agent_os_thread::ToolAction::new(
+    let script = common::DeterministicModelClient::new([
+        common::DeterministicStep::ToolCall(agent_os_thread::ToolAction::new(
             "write_file",
             common::json!({
                 "workspace_root": ws,
@@ -171,7 +171,7 @@ fn openai_adapter_workspace_root_injection_pattern() {
             4,
             Some("output file was created".to_string()),
         )),
-        agent_os_thread::ScriptedStep::Final {
+        common::DeterministicStep::Final {
             summary: "Wrote hello.txt".to_string(),
             known_risks: Vec::new(),
             tests_run: vec!["verified file write".to_string()],
@@ -259,8 +259,8 @@ fn openai_adapter_command_execution_and_evidence() {
 
     let current_exe = env::current_exe().unwrap();
     let ws = workspace.to_string_lossy().to_string();
-    let script = agent_os_thread::ScriptedModelClient::new([
-        agent_os_thread::ScriptedStep::ToolCall(agent_os_thread::ToolAction::new(
+    let script = common::DeterministicModelClient::new([
+        common::DeterministicStep::ToolCall(agent_os_thread::ToolAction::new(
             "read_file",
             common::json!({
                 "workspace_root": ws,
@@ -269,7 +269,7 @@ fn openai_adapter_command_execution_and_evidence() {
             1,
             Some("data file was read".to_string()),
         )),
-        agent_os_thread::ScriptedStep::ToolCall(agent_os_thread::ToolAction::new(
+        common::DeterministicStep::ToolCall(agent_os_thread::ToolAction::new(
             "write_file",
             common::json!({
                 "workspace_root": ws,
@@ -279,7 +279,7 @@ fn openai_adapter_command_execution_and_evidence() {
             4,
             Some("verification result was written".to_string()),
         )),
-        agent_os_thread::ScriptedStep::ToolCall(agent_os_thread::ToolAction::new(
+        common::DeterministicStep::ToolCall(agent_os_thread::ToolAction::new(
             "run_command",
             common::json!({
                 "program": current_exe.to_string_lossy(),
@@ -289,7 +289,7 @@ fn openai_adapter_command_execution_and_evidence() {
             4,
             Some("verification command was executed".to_string()),
         )),
-        agent_os_thread::ScriptedStep::Final {
+        common::DeterministicStep::Final {
             summary: "Read data file, wrote verification result, and ran verification command"
                 .to_string(),
             known_risks: Vec::new(),

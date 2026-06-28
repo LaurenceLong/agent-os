@@ -14,7 +14,7 @@ Every Agent Thread that needs LLM cognition must obtain its stream from a unifie
 - how models are named and aliased
 - how credentials are resolved
 - how routing policy works
-- how fallback works
+- how retry and failure policy works
 - how streaming sessions are opened
 - how provider quirks are normalized
 - how usage and cost are recorded
@@ -40,7 +40,7 @@ The Provider System owns:
 - credential resolution
 - environment-specific overrides
 - routing policy
-- fallback policy
+- retry policy and fail-closed failure handling
 - rate limiting and quotas
 - stream session lifecycle
 - usage and cost accounting
@@ -104,27 +104,35 @@ and Anthropic-compatible calling.
 
 Provider configuration must be unified and system-visible.
 
-Suggested shape:
+Current seed shape:
 
 ```yaml
 provider_profiles:
-  default-coding:
-    routing_policy: coding-default
-    default_provider: primary-llm-provider
-    adapter: openai-compatible
-    default_model_alias: coding-primary
-    fallback_chain:
+  prov_default:
+    routing_policy_id: route_default
+    default_provider_id: primary-provider
+    default_model_alias: general-primary
+    allowed_model_aliases:
       - coding-primary
-      - coding-fallback
-    reasoning_defaults:
-      effort: high
-      summary: concise
-    tool_visibility_profile: coding-tools
+      - review-primary
+      - general-primary
+      - text-only
+    credential_ref:
+      credential_ref_id: cred_default_llm
+      source: environment
+      name: AGENT_OS_LLM_API_KEY
+    retry_policy:
+      max_attempts: 2
+      backoff_ms: 0
+    transform_policy:
+      adapter_style: openai-compatible
+    reasoning_defaults: {}
+    tool_visibility_profile: null
     timeout_ms: 120000
     max_output_tokens: 16000
 
 routing_policies:
-  coding-default:
+  route_default:
     rules:
       - when:
           role: WorkerAgent
@@ -136,20 +144,23 @@ routing_policies:
           model_alias: review-primary
 
 model_aliases:
-  fast-read:
-    provider: primary-llm-provider
-    provider_model_name: vendor-fast-readable-model
   coding-primary:
-    provider: primary-llm-provider
-    provider_model_name: vendor-coding-primary-model
+    provider_id: primary-provider
+    provider_model_name: primary-coding-model
   review-primary:
-    provider: secondary-llm-provider
-    provider_model_name: vendor-review-primary-model
+    provider_id: primary-provider
+    provider_model_name: primary-review-model
+  general-primary:
+    provider_id: primary-provider
+    provider_model_name: primary-general-model
+  text-only:
+    provider_id: primary-provider
+    provider_model_name: primary-text-model
 ```
 
-The model names above are placeholders. Real provider model names belong in the versioned Model Catalog so vendor naming changes do not make design docs stale. The exact file format can evolve, but the system-level idea is fixed: threads bind to profiles and policies, not to ad hoc provider SDK calls.
+The active `model_aliases` map is the current Model Catalog contract. A provider route resolves through the thread's provider profile, routing policy, allowed alias list, and active alias record; missing, inactive, or capability-incompatible aliases are rejected before a stream session opens. Threads bind to profile IDs, credential references, retry policy, transform policy, and routing policies, not to ad hoc provider SDK calls.
 
-Minimal environment-based distributions may map `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY`, and optional `LLM_API_STYLE` into provider profiles. Existing OpenAI-compatible variables can remain as compatibility aliases, but the normalized profile must still record the resolved adapter style for audit and replay.
+Minimal environment-based distributions may map `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY`, and optional `LLM_API_STYLE` into provider profiles. `LLM_*` is the canonical environment surface. Other provider-specific environment names are outside the core contract.
 
 ## 6. Thread Integration
 
@@ -203,7 +214,6 @@ ToolCallCompleted
 UsageUpdated
 ProviderWarning
 ProviderRetry
-ProviderFallback
 StreamCompleted
 StreamFailed
 StreamCancelled
@@ -258,19 +268,22 @@ Rules:
 - a worker cannot jump to an arbitrary provider if policy forbids it
 - provider selection is audited
 
-## 10. Fallback and Failover
+## 10. Retry and Failure
 
-Fallback belongs to the Provider System, not each Agent Thread.
+Retry belongs to the Provider System, not each Agent Thread.
 
-Fallback policy should support:
+Retry policy supports:
 
-- retry same provider same model
-- retry same provider different model
-- switch provider same capability tier
-- fail closed for strict tasks
-- fail open for exploratory tasks when policy allows
+- retrying the selected provider and model according to the active provider
+  profile
+- recording each retry as a durable provider stream event
+- failing closed after retry policy is exhausted
+- releasing the provider-slot lease on completion, failure, or cancellation
 
-Every fallback must emit a durable event.
+Routing chooses the provider and model before stream open. Once a stream session
+is opened, the provider and model remain fixed for that session. If the selected
+route cannot produce a valid stream, the stream fails and the failure is
+recorded.
 
 ## 11. Credentials and Secrets
 
@@ -324,9 +337,10 @@ Minimum tests:
 2. Stream session must be opened through Provider System.
 3. Same profile and routing policy resolve deterministically.
 4. Forbidden provider override is rejected.
-5. Fallback emits durable event.
-6. Usage and cost are recorded even across fallback.
-7. Provider capability mismatch is rejected before stream open.
-8. Turn-scoped provider session state does not leak across turns.
-9. Secret values are not exposed in thread-visible state.
-10. Model alias changes do not require Agent Thread code changes.
+5. Provider retry emits a durable event.
+6. Failed streams release provider-slot leases and record failure state.
+7. Usage and cost are recorded for metered provider sessions.
+8. Provider capability mismatch is rejected before stream open.
+9. Turn-scoped provider session state does not leak across turns.
+10. Secret values are not exposed in thread-visible state.
+11. Model alias changes do not require Agent Thread code changes.

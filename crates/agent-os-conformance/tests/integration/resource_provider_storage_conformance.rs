@@ -1,6 +1,5 @@
-mod common;
+use crate::common::*;
 use agent_os_store_sqlite::SqliteStore;
-use common::*;
 use std::{env, fs};
 
 #[test]
@@ -203,7 +202,7 @@ fn provider_routing_uses_role_policy_and_model_aliases() {
         })
         .unwrap();
     assert_eq!(decision.selected_model_alias, "coding-primary");
-    assert_eq!(decision.provider_id, "mock-provider");
+    assert_eq!(decision.provider_id, "primary-provider");
 }
 
 #[test]
@@ -269,17 +268,157 @@ fn provider_stream_session_records_usage_and_replays() {
     assert!(events
         .iter()
         .any(|event| event.event_type == "ProviderStreamCompleted"));
+    assert!(events
+        .iter()
+        .any(|event| event.event_type == "ResourceLeaseGranted"));
+    assert!(events
+        .iter()
+        .any(|event| event.event_type == "ResourceLeaseReleased"));
 
     let replayed = Kernel::from_events(&events).unwrap();
-    let replayed_session = replayed
-        .state_snapshot()
-        .unwrap()
+    let replayed_state = replayed.state_snapshot().unwrap();
+    let replayed_session = replayed_state
         .provider_stream_sessions
         .get(&opened.session_id)
         .unwrap()
         .clone();
     assert_eq!(replayed_session.status, ProviderStreamStatus::Completed);
     assert_eq!(replayed_session.usage.input_tokens, 12);
+    assert_eq!(
+        replayed_state
+            .resource_leases
+            .get(&opened.provider_slot_lease_id)
+            .unwrap()
+            .status,
+        ResourceLeaseStatus::Released
+    );
+    assert_eq!(
+        replayed_session.route_decision.credential_ref_id,
+        "cred_default_llm"
+    );
+}
+
+#[test]
+fn scheduler_rejects_turn_when_provider_profile_budget_is_exhausted() {
+    let fx = fixture();
+    let ledger = fx
+        .kernel
+        .create_budget_ledger(
+            BudgetScope::ProviderProfile,
+            "prov_default",
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(0),
+        )
+        .unwrap();
+    let _ = fx.kernel.debit_budget(
+        &ledger.budget_ledger_id,
+        BudgetDebit {
+            tokens: 0,
+            tool_calls: 0,
+            wall_time_ms: 0,
+            cost: 0.0,
+            human_interrupts: 0,
+            model_requests: 1,
+        },
+    );
+    let err = fx.kernel.start_turn(&fx.worker.thread_id).unwrap_err();
+    assert!(matches!(err, AgentOsError::BudgetExhausted(_)));
+}
+
+#[test]
+fn scheduler_rejects_turn_when_human_attention_budget_is_exhausted() {
+    let fx = fixture();
+    let ledger = fx
+        .kernel
+        .create_budget_ledger(
+            BudgetScope::HumanAttention,
+            fx.goal.goal_id.clone(),
+            None,
+            None,
+            None,
+            None,
+            Some(0),
+            None,
+        )
+        .unwrap();
+    let _ = fx.kernel.debit_budget(
+        &ledger.budget_ledger_id,
+        BudgetDebit {
+            tokens: 0,
+            tool_calls: 0,
+            wall_time_ms: 0,
+            cost: 0.0,
+            human_interrupts: 1,
+            model_requests: 0,
+        },
+    );
+    let err = fx.kernel.start_turn(&fx.worker.thread_id).unwrap_err();
+    assert!(matches!(err, AgentOsError::BudgetExhausted(_)));
+}
+
+#[test]
+fn scheduler_rejects_turn_when_provider_slot_is_unavailable() {
+    let fx = fixture();
+    fx.kernel
+        .request_resource_lease(
+            ResourceType::ProviderSlot,
+            "primary-provider",
+            "other-agent",
+            "other-thread",
+            fx.goal.goal_id.clone(),
+            fx.task.task_id.clone(),
+            LeaseMode::Exclusive,
+            Some("other model call".to_string()),
+        )
+        .unwrap();
+    let err = fx.kernel.start_turn(&fx.worker.thread_id).unwrap_err();
+    assert!(matches!(err, AgentOsError::ResourceConflict(_)));
+}
+
+#[test]
+fn ready_queue_orders_ready_threads_by_task_priority() {
+    let fx = fixture();
+    let high = fx
+        .kernel
+        .spawn_task(SpawnTaskInput {
+            goal_id: fx.goal.goal_id.clone(),
+            parent_task_id: None,
+            title: "High priority".to_string(),
+            description: "High priority".to_string(),
+            depends_on: Vec::new(),
+            required_artifact_types: Vec::new(),
+            required_evidence_types: Vec::new(),
+            priority: 100,
+            risk_level: 1,
+        })
+        .unwrap();
+    let high_agent = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: high.task_id,
+            role_profile_id: "role_worker".to_string(),
+            owner: "tester".to_string(),
+            local_goal: "high".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: vec![".".to_string()],
+        })
+        .unwrap();
+    fx.kernel
+        .transition_thread(&fx.worker.thread_id, ThreadStatus::Ready, None)
+        .unwrap();
+    fx.kernel
+        .transition_thread(&high_agent.thread_id, ThreadStatus::Ready, None)
+        .unwrap();
+    assert_eq!(
+        fx.kernel.ready_queue_snapshot().unwrap(),
+        vec![high_agent.thread_id, fx.worker.thread_id]
+    );
 }
 
 #[test]
@@ -302,9 +441,6 @@ fn forbidden_provider_override_is_rejected() {
         .unwrap_err();
     assert!(matches!(err, AgentOsError::PermissionDenied(_)));
     let events = fx.kernel.events().unwrap();
-    assert!(!events
-        .iter()
-        .any(|event| event.event_type == "ProviderFallbackApplied"));
     assert!(!events
         .iter()
         .any(|event| event.event_type == "ProviderStreamSessionOpened"));
@@ -343,9 +479,9 @@ fn provider_capability_mismatch_is_rejected_before_stream_open() {
 }
 
 #[test]
-fn provider_fallback_emits_durable_event() {
+fn provider_capability_mismatch_is_strictly_rejected() {
     let fx = fixture();
-    let opened = fx
+    let err = fx
         .kernel
         .open_stream_session(StreamRequest {
             thread_id: fx.worker.thread_id.clone(),
@@ -364,25 +500,21 @@ fn provider_fallback_emits_durable_event() {
                 }
             })),
         })
-        .unwrap();
-    assert!(opened.route_decision.fallback_applied);
-    assert_eq!(opened.route_decision.selected_model_alias, "mock-model");
-    assert_eq!(
-        opened.route_decision.fallback_from_model_alias.as_deref(),
-        Some("text-only")
-    );
-    assert!(opened
-        .stream_events
-        .iter()
-        .any(|event| event.event_type == ProviderStreamEventType::ProviderFallback));
+        .unwrap_err();
+    assert!(matches!(err, AgentOsError::PermissionDenied(_)));
 
     let events = fx.kernel.events().unwrap();
-    assert!(events
-        .iter()
-        .any(|event| event.event_type == "ProviderFallbackApplied"));
-    assert!(events
+    assert!(!events
         .iter()
         .any(|event| event.event_type == "ProviderStreamSessionOpened"));
+    assert!(!events.iter().any(|event| {
+        event.event_type == "ResourceLeaseGranted"
+            && event
+                .payload
+                .get("resource_type")
+                .and_then(serde_json::Value::as_str)
+                == Some("provider_slot")
+    }));
 }
 
 #[test]

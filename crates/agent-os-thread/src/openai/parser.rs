@@ -256,6 +256,7 @@ fn build_final_submission(arguments: &Value, request: &ModelTurnRequest) -> Fina
         .unwrap_or_default();
 
     let evidence_map: Vec<EvidenceMapEntry> = request
+        .context
         .tool_results
         .iter()
         .filter(|r| !r.evidence_ids.is_empty())
@@ -269,6 +270,7 @@ fn build_final_submission(arguments: &Value, request: &ModelTurnRequest) -> Fina
         .collect();
 
     let changed_artifacts: Vec<String> = request
+        .context
         .artifacts
         .iter()
         .map(|a| a.artifact_id.clone())

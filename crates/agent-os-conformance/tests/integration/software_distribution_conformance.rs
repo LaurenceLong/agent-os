@@ -1,7 +1,28 @@
-mod common;
+use crate::common::*;
+use agent_os_sys::{PackageManifest, PackageType};
 use agent_os_thread::{SoftwareCodeTask, SoftwareEditPlanSource, SoftwareEngineeringPipeline};
-use common::*;
 use std::{env, fs, path::PathBuf};
+
+#[test]
+fn software_engineering_distro_package_has_manifest_and_policy_packs() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("distros/software-engineering");
+    let manifest: PackageManifest =
+        serde_json::from_str(&fs::read_to_string(root.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(manifest.package_name, "software-engineering");
+    assert_eq!(manifest.package_type, PackageType::Distro);
+    assert!(root.join("prompts/supervisor.md").exists());
+    assert!(root.join("prompts/worker.md").exists());
+    assert!(root.join("prompts/reviewer.md").exists());
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(
+            &fs::read_to_string(root.join("policy/final-answer.json")).unwrap()
+        )
+        .unwrap()["policy_name"],
+        "software-engineering-final-answer"
+    );
+}
 
 #[test]
 fn software_distribution_runs_through_required_roles() {
@@ -12,7 +33,7 @@ fn software_distribution_runs_through_required_roles() {
         "pub fn answer() -> i32 { 1 }\n",
     )
     .unwrap();
-    let pipeline = SoftwareEngineeringPipeline::new(Kernel::new());
+    let pipeline = SoftwareEngineeringPipeline::new(Kernel::new()).unwrap();
     let report = pipeline
         .run_code_task(SoftwareCodeTask::exact_edit(
             &workspace,
@@ -50,7 +71,7 @@ fn failed_tests_block_supervisor_final_acceptance() {
         "pub fn answer() -> i32 { 1 }\n",
     )
     .unwrap();
-    let pipeline = SoftwareEngineeringPipeline::new(Kernel::new());
+    let pipeline = SoftwareEngineeringPipeline::new(Kernel::new()).unwrap();
     let err = pipeline
         .run_code_task(SoftwareCodeTask::exact_edit(
             &workspace,
@@ -97,7 +118,7 @@ fn task_only_code_request_can_infer_single_safe_edit() {
     assert_eq!(spec.old, "1");
     assert_eq!(spec.new, "2");
 
-    let pipeline = SoftwareEngineeringPipeline::new(Kernel::new());
+    let pipeline = SoftwareEngineeringPipeline::new(Kernel::new()).unwrap();
     let report = pipeline.run_code_task(spec).unwrap();
     assert_eq!(report.status, ThreadStatus::Completed);
     assert_eq!(report.edit_plan_source, SoftwareEditPlanSource::Inferred);

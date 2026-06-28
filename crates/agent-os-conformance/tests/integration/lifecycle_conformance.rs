@@ -1,6 +1,5 @@
-mod common;
-use agent_os_thread::{mock_turn_start_op, AgentThreadHandle};
-use common::*;
+use crate::common::*;
+use agent_os_thread::{turn_start_op, AgentThreadHandle};
 
 #[test]
 fn invalid_lifecycle_transition_is_rejected() {
@@ -53,10 +52,10 @@ fn state_replay_rebuilds_kernel_projection() {
 }
 
 #[test]
-fn mock_runtime_admits_turns_and_rejects_stale_steering() {
+fn agent_thread_handle_admits_turns_and_rejects_stale_steering() {
     let fx = fixture();
     let handle = AgentThreadHandle::new(fx.kernel.clone(), fx.worker.thread_id.clone());
-    let ack = handle.try_start_turn(mock_turn_start_op(fx.worker.thread_id.clone()));
+    let ack = handle.try_start_turn(turn_start_op(fx.worker.thread_id.clone()));
     assert!(ack.is_ok());
 
     let stale = AgentOp {
@@ -402,11 +401,18 @@ fn agent_control_lifecycle_actions_update_state_and_trace() {
             },
         )
         .unwrap();
-    assert!(trace.output.as_ref().unwrap()["output"]["events"]
+    let trace_output = &trace.output.as_ref().unwrap()["output"];
+    assert!(trace_output["event_count"].as_u64().unwrap() > 0);
+    assert!(trace_output["events"].is_null());
+    assert!(
+        trace_output["preview_events"].as_array().unwrap().len()
+            <= trace_output["preview_event_limit"].as_u64().unwrap() as usize
+    );
+    assert!(trace_output["event_types"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|event| event["event_type"] == "ThreadConfigured"));
+        .any(|event_type| event_type == "ThreadConfigured"));
 
     let stopped = fx
         .kernel

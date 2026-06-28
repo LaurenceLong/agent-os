@@ -99,25 +99,25 @@ fn live_anthropic_compatible_llm_goal_driven_full_tool_surface_e2e() {
 
 #[test]
 #[ignore = "requires LLM_API_KEY and live OpenAI-compatible endpoint"]
-fn live_openai_compatible_llm_goal_driven_agent_control_unsupported_e2e() {
-    run_live_llm_goal_driven_agent_control_unsupported_e2e(
+fn live_openai_compatible_llm_goal_driven_agent_control_rejection_e2e() {
+    run_live_llm_goal_driven_agent_control_rejection_e2e(
         "openai-compatible",
         LlmApiStyle::OpenAiCompatible,
         "LLM_OPENAI_BASE_URL",
         "http://model.mify.ai.srv/v1",
-        "live-openai-compatible-goal-agent-control-unsupported.jsonl",
+        "live-openai-compatible-goal-agent-control-rejection.jsonl",
     );
 }
 
 #[test]
 #[ignore = "requires LLM_API_KEY and live Anthropic-compatible endpoint"]
-fn live_anthropic_compatible_llm_goal_driven_agent_control_unsupported_e2e() {
-    run_live_llm_goal_driven_agent_control_unsupported_e2e(
+fn live_anthropic_compatible_llm_goal_driven_agent_control_rejection_e2e() {
+    run_live_llm_goal_driven_agent_control_rejection_e2e(
         "anthropic-compatible",
         LlmApiStyle::AnthropicCompatible,
         "LLM_ANTHROPIC_BASE_URL",
         "http://model.mify.ai.srv/anthropic",
-        "live-anthropic-compatible-goal-agent-control-unsupported.jsonl",
+        "live-anthropic-compatible-goal-agent-control-rejection.jsonl",
     );
 }
 
@@ -128,12 +128,8 @@ fn run_live_llm_e2e(
     default_base: &str,
     log_file_name: &str,
 ) {
-    let api_key = std::env::var("LLM_API_KEY")
-        .or_else(|_| std::env::var("OPENAI_API_KEY"))
-        .expect("LLM_API_KEY or OPENAI_API_KEY is required for live LLM e2e");
-    let model = std::env::var("LLM_MODEL")
-        .or_else(|_| std::env::var("AGENT_OS_MODEL"))
-        .unwrap_or_else(|_| "tongyi/qwen3.6-plus".to_string());
+    let api_key = std::env::var("LLM_API_KEY").expect("LLM_API_KEY is required for live LLM e2e");
+    let model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "tongyi/qwen3.6-plus".to_string());
     let api_base = std::env::var(base_env).unwrap_or_else(|_| default_base.to_string());
     let tmp = std::env::temp_dir().join(format!(
         "aos-live-{}-{}",
@@ -199,12 +195,8 @@ fn run_live_llm_goal_driven_workspace_e2e(
     default_base: &str,
     log_file_name: &str,
 ) {
-    let api_key = std::env::var("LLM_API_KEY")
-        .or_else(|_| std::env::var("OPENAI_API_KEY"))
-        .expect("LLM_API_KEY or OPENAI_API_KEY is required for live LLM e2e");
-    let model = std::env::var("LLM_MODEL")
-        .or_else(|_| std::env::var("AGENT_OS_MODEL"))
-        .unwrap_or_else(|_| "tongyi/qwen3.6-plus".to_string());
+    let api_key = std::env::var("LLM_API_KEY").expect("LLM_API_KEY is required for live LLM e2e");
+    let model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "tongyi/qwen3.6-plus".to_string());
     let api_base = std::env::var(base_env).unwrap_or_else(|_| default_base.to_string());
     let tmp = std::env::temp_dir().join(format!(
         "aos-live-goal-workspace-{}-{}",
@@ -309,12 +301,8 @@ fn run_live_llm_goal_driven_control_plane_e2e(
     default_base: &str,
     log_file_name: &str,
 ) {
-    let api_key = std::env::var("LLM_API_KEY")
-        .or_else(|_| std::env::var("OPENAI_API_KEY"))
-        .expect("LLM_API_KEY or OPENAI_API_KEY is required for live LLM e2e");
-    let model = std::env::var("LLM_MODEL")
-        .or_else(|_| std::env::var("AGENT_OS_MODEL"))
-        .unwrap_or_else(|_| "tongyi/qwen3.6-plus".to_string());
+    let api_key = std::env::var("LLM_API_KEY").expect("LLM_API_KEY is required for live LLM e2e");
+    let model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "tongyi/qwen3.6-plus".to_string());
     let api_base = std::env::var(base_env).unwrap_or_else(|_| default_base.to_string());
     let tmp = std::env::temp_dir().join(format!(
         "aos-live-goal-control-{}-{}",
@@ -335,7 +323,7 @@ fn run_live_llm_goal_driven_control_plane_e2e(
     let (kernel, request) = make_kernel_request_for_role_with_blob_store_and_requirements(
             &tmp,
             "role_supervisor",
-            "Coordinate this live task as a supervisor. Inspect coordination_seed.md, refresh the durable task objective to say the live control-plane goal is achieved, mark a one-item checklist complete, save an evidence record for the coordination seed, report progress upward, publish one risk note for the shared team blackboard, ask the human to confirm there is no extra scope, start a child worker with a one-sentence assignment, and finish with a concise final result.",
+            "Complete this live control-plane checklist as a supervisor. 1. read_file coordination_seed.md. 2. set_objective to say the live control-plane goal is achieved. 3. update_checklist with one completed item. 4. record_evidence for the coordination seed. 5. report_supervisor with a concise progress message. 6. post_blackboard one task-scoped risk note on the risks channel. 7. ask_human exactly once to confirm there is no extra scope, then continue after delivery. 8. agent_control start a child worker with role_profile_id role_worker and a one-sentence assignment. 9. submit_final with summary exactly Control-plane coordination complete., tests_run containing read_file coordination_seed.md, and known_risks as an empty array. Do not skip report_supervisor.",
             Vec::new(),
             Vec::new(),
             vec![EvidenceType::SourceRef],
@@ -392,12 +380,8 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
     default_base: &str,
     log_file_name: &str,
 ) {
-    let api_key = std::env::var("LLM_API_KEY")
-        .or_else(|_| std::env::var("OPENAI_API_KEY"))
-        .expect("LLM_API_KEY or OPENAI_API_KEY is required for live LLM e2e");
-    let model = std::env::var("LLM_MODEL")
-        .or_else(|_| std::env::var("AGENT_OS_MODEL"))
-        .unwrap_or_else(|_| "tongyi/qwen3.6-plus".to_string());
+    let api_key = std::env::var("LLM_API_KEY").expect("LLM_API_KEY is required for live LLM e2e");
+    let model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "tongyi/qwen3.6-plus".to_string());
     let api_base = std::env::var(base_env).unwrap_or_else(|_| default_base.to_string());
     let tmp = std::env::temp_dir().join(format!(
         "aos-live-goal-full-surface-{}-{}",
@@ -415,89 +399,6 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
         .join(log_file_name);
     let _ = std::fs::remove_file(&audit_log_path);
 
-    let kernel = Kernel::new();
-    let goal = kernel
-        .register_goal(RegisterGoalInput {
-            namespace: "live-e2e".to_string(),
-            created_by: "agent-os-thread-live-test".to_string(),
-            title: "Live full tool surface".to_string(),
-            description: "Exercise every model-visible tool through a live LLM".to_string(),
-            acceptance_criteria: vec![
-                "workspace changes are verified".to_string(),
-                "control-plane actions are observable".to_string(),
-            ],
-            constraints: Vec::new(),
-            risk_level: 6,
-            deadline: None,
-        })
-        .unwrap();
-    let task = kernel
-        .spawn_task(SpawnTaskInput {
-            goal_id: goal.goal_id.clone(),
-            parent_task_id: None,
-            title: "Live full surface".to_string(),
-            description: "Live LLM must exercise every model-visible tool".to_string(),
-            depends_on: Vec::new(),
-            required_artifact_types: Vec::new(),
-            required_evidence_types: vec![
-                EvidenceType::SourceRef,
-                EvidenceType::DiffRef,
-                EvidenceType::CommandLog,
-            ],
-            priority: 10,
-            risk_level: 6,
-        })
-        .unwrap();
-    let supervisor = kernel
-        .spawn_agent(SpawnAgentInput {
-            task_id: task.task_id.clone(),
-            role_profile_id: "role_supervisor".to_string(),
-            owner: "agent-os-thread-live-test".to_string(),
-            local_goal: "placeholder".to_string(),
-            success_criteria: Vec::new(),
-            failure_criteria: Vec::new(),
-            parent_thread_id: None,
-            workspace_roots: vec![tmp.to_string_lossy().to_string()],
-        })
-        .unwrap();
-    let resume_target =
-        live_child_agent(&kernel, &task.task_id, &supervisor, "resume target", &tmp);
-    kernel
-        .transition_thread(&resume_target.thread_id, ThreadStatus::Ready, None)
-        .unwrap();
-    kernel
-        .transition_thread(&resume_target.thread_id, ThreadStatus::Suspended, None)
-        .unwrap();
-    let stop_target = live_child_agent(&kernel, &task.task_id, &supervisor, "stop target", &tmp);
-    let kill_target = live_child_agent(&kernel, &task.task_id, &supervisor, "kill target", &tmp);
-    kernel
-        .transition_thread(&kill_target.thread_id, ThreadStatus::Running, None)
-        .unwrap();
-    let approval_id = approve_live_tool_risk(&kernel, &task, &supervisor);
-    let mut request_thread = supervisor.clone();
-    request_thread.task.local_goal = format!(
-        "Complete a live full tool-surface validation using real tool calls. \
-Inspect read.txt with read_file. Write created.txt containing FULL_TOOL_SURFACE_OK followed by one newline. \
-Replace the exact text status=old with status=new in edit.txt. Delete obsolete.tmp. \
-Run this verifier from the workspace: {verifier_command}. \
-Use set_objective to record that the live full tool surface goal is achieved. \
-Use update_checklist with one completed item. Use record_evidence for read.txt with an external or source claim. \
-Use report_supervisor with a concise progress message. Use post_blackboard on channel test-results, scope goal, section test_result. \
-Use ask_human to ask whether there is any extra scope. Use agent_control start for a child worker. \
-For existing thread {resume_thread}, use agent_control status, output, set_hook, send, set_timeout, export_trace, and resume. \
-For existing thread {stop_thread}, use agent_control stop. For existing thread {kill_thread}, use agent_control kill. \
-Do not call delete_session or purge_state in this success run; separate live rejection tests cover them. \
-Finish with submit_final after the verifier passes.",
-        resume_thread = resume_target.thread_id,
-        stop_thread = stop_target.thread_id,
-        kill_thread = kill_target.thread_id,
-    );
-
-    let client = OpenAiModelClient::new(api_key, model.clone())
-        .with_api_base(api_base.clone())
-        .with_api_style(api_style)
-        .with_max_tokens(4096)
-        .with_audit_log(audit_log_path.clone());
     append_jsonl(
         &audit_log_path,
         &json!({
@@ -506,30 +407,38 @@ Finish with submit_final after the verifier passes.",
             "api_base": api_base,
             "model": model,
             "workspace": tmp,
-            "task_goal": request_thread.task.local_goal,
-            "resume_thread_id": resume_target.thread_id,
-            "stop_thread_id": stop_target.thread_id,
-            "kill_thread_id": kill_target.thread_id,
         }),
     )
     .unwrap();
 
-    let mut runtime = ThreadRuntime::new(kernel.clone(), request_thread.thread_id.clone(), client);
-    let mut config = RuntimeConfig::workspace_write(tmp.clone());
-    config.max_steps = 40;
-    config.tool_risk_ceiling = 6;
-    config.auto_commit_patch_artifacts = false;
-    let report = runtime
-        .run_to_completion_with_overrides(
-            config,
-            RuntimeRunOverrides {
-                sandbox_profile_id: Some("sbox_workspace_write".to_string()),
-                tool_approval_id: Some(approval_id),
-            },
-        )
+    let (workspace_kernel, workspace_request) =
+        make_kernel_request_for_role_with_blob_store_and_requirements(
+            &tmp,
+            "role_worker",
+            &format!(
+                "Complete this focused workspace validation. Read read.txt, write created.txt with exactly FULL_TOOL_SURFACE_OK followed by one newline, replace status=old with status=new in edit.txt, delete obsolete.tmp, run {verifier_command}, then submit_final with summary exactly Workspace surface complete., tests_run containing cmd /C verify_full_surface.cmd, and known_risks as an empty array."
+            ),
+            Vec::new(),
+            vec![ArtifactType::Patch],
+            vec![EvidenceType::CommandLog],
+        );
+    let workspace_client = OpenAiModelClient::new(api_key.clone(), model.clone())
+        .with_api_base(api_base.clone())
+        .with_api_style(api_style)
+        .with_max_tokens(2048)
+        .with_audit_log(audit_log_path.clone());
+    let mut workspace_runtime = ThreadRuntime::new(
+        workspace_kernel.clone(),
+        workspace_request.thread.thread_id.clone(),
+        workspace_client,
+    );
+    let mut workspace_config = RuntimeConfig::workspace_write(tmp.clone());
+    workspace_config.max_steps = 10;
+    let workspace_report = workspace_runtime
+        .run_to_completion(workspace_config)
         .unwrap();
-    assert!(report.final_submitted);
-    assert_all_tool_calls_completed(&report);
+    assert!(workspace_report.final_submitted);
+    assert_all_tool_calls_completed(&workspace_report);
     assert_eq!(
         std::fs::read_to_string(tmp.join("created.txt")).unwrap(),
         "FULL_TOOL_SURFACE_OK\n"
@@ -542,14 +451,54 @@ Finish with submit_final after the verifier passes.",
     assert_live_goal_tools(
         &audit_log_path,
         provider,
-        "full_tool_surface",
-        &report,
+        "full_tool_surface_workspace",
+        &workspace_report,
         &[
             "read_file",
             "write_file",
             "replace_text",
             "delete_file",
             "run_command",
+            "submit_final",
+        ],
+    );
+
+    std::fs::write(
+        tmp.join("coordination_seed.md"),
+        "Coordination seed: live full surface control-plane segment\n",
+    )
+    .unwrap();
+    let (control_kernel, control_request) =
+        make_kernel_request_for_role_with_blob_store_and_requirements(
+            &tmp,
+            "role_supervisor",
+            "Complete this focused control-plane validation. Read coordination_seed.md, set_objective to say the live full-surface control-plane segment is achieved, update_checklist with one completed item, record_evidence for coordination_seed.md as source_ref, report_supervisor with a short progress message, post_blackboard on channel test-results with scope task and section test_result, ask_human exactly once whether there is extra scope and continue after delivery, start one child worker with role_profile_id role_worker, then submit_final with summary exactly Control-plane surface complete., tests_run containing read_file coordination_seed.md, and known_risks as an empty array.",
+            Vec::new(),
+            Vec::new(),
+            vec![EvidenceType::SourceRef],
+        );
+    let control_client = OpenAiModelClient::new(api_key.clone(), model.clone())
+        .with_api_base(api_base.clone())
+        .with_api_style(api_style)
+        .with_max_tokens(2048)
+        .with_audit_log(audit_log_path.clone());
+    let mut control_runtime = ThreadRuntime::new(
+        control_kernel.clone(),
+        control_request.thread.thread_id.clone(),
+        control_client,
+    );
+    let mut control_config = RuntimeConfig::workspace_write(tmp.clone());
+    control_config.max_steps = 14;
+    let control_report = control_runtime.run_to_completion(control_config).unwrap();
+    assert!(control_report.final_submitted);
+    assert_all_tool_calls_completed(&control_report);
+    assert_live_goal_tools(
+        &audit_log_path,
+        provider,
+        "full_tool_surface_control_plane",
+        &control_report,
+        &[
+            "read_file",
             "set_objective",
             "update_checklist",
             "record_evidence",
@@ -563,20 +512,269 @@ Finish with submit_final after the verifier passes.",
     assert_agent_control_actions(
         &audit_log_path,
         provider,
-        "full_tool_surface",
-        &report,
-        &[
-            "start",
-            "status",
-            "output",
-            "set_hook",
-            "send",
-            "set_timeout",
-            "export_trace",
-            "resume",
-            "stop",
-            "kill",
-        ],
+        "full_tool_surface_control_plane",
+        &control_report,
+        &["start"],
+    );
+
+    std::fs::write(
+        tmp.join("agent_control_seed.md"),
+        "Agent control seed: focused live lifecycle validation\n",
+    )
+    .unwrap();
+    let lifecycle_kernel = Kernel::new();
+    let lifecycle_goal = lifecycle_kernel
+        .register_goal(RegisterGoalInput {
+            namespace: "live-e2e".to_string(),
+            created_by: "agent-os-thread-live-test".to_string(),
+            title: "Live agent control surface".to_string(),
+            description: "Exercise agent_control lifecycle actions through focused live LLM goals"
+                .to_string(),
+            acceptance_criteria: vec!["agent_control lifecycle actions are observable".to_string()],
+            constraints: Vec::new(),
+            risk_level: 6,
+            deadline: None,
+        })
+        .unwrap();
+    let lifecycle_target_task = lifecycle_kernel
+        .spawn_task(SpawnTaskInput {
+            goal_id: lifecycle_goal.goal_id.clone(),
+            parent_task_id: None,
+            title: "Live agent control targets".to_string(),
+            description: "Prepare target threads for focused agent_control live runs".to_string(),
+            depends_on: Vec::new(),
+            required_artifact_types: Vec::new(),
+            required_evidence_types: Vec::new(),
+            priority: 10,
+            risk_level: 6,
+        })
+        .unwrap();
+    let status_task = lifecycle_kernel
+        .spawn_task(SpawnTaskInput {
+            goal_id: lifecycle_goal.goal_id.clone(),
+            parent_task_id: None,
+            title: "Live agent control read".to_string(),
+            description: "Live LLM must exercise read-only agent_control actions".to_string(),
+            depends_on: Vec::new(),
+            required_artifact_types: Vec::new(),
+            required_evidence_types: vec![EvidenceType::SourceRef],
+            priority: 10,
+            risk_level: 6,
+        })
+        .unwrap();
+    let mutation_task = lifecycle_kernel
+        .spawn_task(SpawnTaskInput {
+            goal_id: lifecycle_goal.goal_id.clone(),
+            parent_task_id: None,
+            title: "Live agent control mutation".to_string(),
+            description: "Live LLM must exercise mutating agent_control actions".to_string(),
+            depends_on: Vec::new(),
+            required_artifact_types: Vec::new(),
+            required_evidence_types: vec![EvidenceType::SourceRef],
+            priority: 10,
+            risk_level: 6,
+        })
+        .unwrap();
+    let terminal_task = lifecycle_kernel
+        .spawn_task(SpawnTaskInput {
+            goal_id: lifecycle_goal.goal_id.clone(),
+            parent_task_id: None,
+            title: "Live agent control terminal".to_string(),
+            description: "Live LLM must exercise terminal agent_control actions".to_string(),
+            depends_on: Vec::new(),
+            required_artifact_types: Vec::new(),
+            required_evidence_types: vec![EvidenceType::SourceRef],
+            priority: 10,
+            risk_level: 6,
+        })
+        .unwrap();
+    let lifecycle_owner = lifecycle_kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: lifecycle_target_task.task_id.clone(),
+            role_profile_id: "role_supervisor".to_string(),
+            owner: "agent-os-thread-live-test".to_string(),
+            local_goal: "prepare focused live agent_control targets".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: vec![tmp.to_string_lossy().to_string()],
+        })
+        .unwrap();
+    let resume_target = live_child_agent(
+        &lifecycle_kernel,
+        &lifecycle_target_task.task_id,
+        &lifecycle_owner,
+        "resume target",
+        &tmp,
+    );
+    lifecycle_kernel
+        .transition_thread(&resume_target.thread_id, ThreadStatus::Ready, None)
+        .unwrap();
+    lifecycle_kernel
+        .transition_thread(&resume_target.thread_id, ThreadStatus::Suspended, None)
+        .unwrap();
+    let stop_target = live_child_agent(
+        &lifecycle_kernel,
+        &lifecycle_target_task.task_id,
+        &lifecycle_owner,
+        "stop target",
+        &tmp,
+    );
+    let kill_target = live_child_agent(
+        &lifecycle_kernel,
+        &lifecycle_target_task.task_id,
+        &lifecycle_owner,
+        "kill target",
+        &tmp,
+    );
+    lifecycle_kernel
+        .transition_thread(&kill_target.thread_id, ThreadStatus::Running, None)
+        .unwrap();
+
+    let status_supervisor = lifecycle_kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: status_task.task_id.clone(),
+            role_profile_id: "role_supervisor".to_string(),
+            owner: "agent-os-thread-live-test".to_string(),
+            local_goal: format!(
+                "Complete this focused agent_control read-only validation. Read agent_control_seed.md, then for thread_id {} call agent_control status, output, and export_trace exactly once each. Then submit_final with summary exactly Agent control read surface complete. and known_risks as an empty array.",
+                resume_target.thread_id
+            ),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: vec![tmp.to_string_lossy().to_string()],
+        })
+        .unwrap();
+    let status_client = OpenAiModelClient::new(api_key.clone(), model.clone())
+        .with_api_base(api_base.clone())
+        .with_api_style(api_style)
+        .with_max_tokens(1536)
+        .with_audit_log(audit_log_path.clone());
+    let mut status_runtime = ThreadRuntime::new(
+        lifecycle_kernel.clone(),
+        status_supervisor.thread_id.clone(),
+        status_client,
+    );
+    let mut status_config = RuntimeConfig::workspace_write(tmp.clone());
+    status_config.max_steps = 8;
+    let status_report = status_runtime.run_to_completion(status_config).unwrap();
+    assert!(status_report.final_submitted);
+    assert_all_tool_calls_completed(&status_report);
+    assert_live_goal_tools(
+        &audit_log_path,
+        provider,
+        "full_tool_surface_agent_control_read",
+        &status_report,
+        &["read_file", "agent_control", "submit_final"],
+    );
+    assert_agent_control_actions(
+        &audit_log_path,
+        provider,
+        "full_tool_surface_agent_control_read",
+        &status_report,
+        &["status", "output", "export_trace"],
+    );
+
+    let mutation_supervisor = lifecycle_kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: mutation_task.task_id.clone(),
+            role_profile_id: "role_supervisor".to_string(),
+            owner: "agent-os-thread-live-test".to_string(),
+            local_goal: format!(
+                "Complete this focused agent_control mutation validation. Read agent_control_seed.md, then for thread_id {} call agent_control set_hook, send, set_timeout, and resume exactly once each. Then submit_final with summary exactly Agent control mutation surface complete. and known_risks as an empty array.",
+                resume_target.thread_id
+            ),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: vec![tmp.to_string_lossy().to_string()],
+        })
+        .unwrap();
+    let mutation_client = OpenAiModelClient::new(api_key.clone(), model.clone())
+        .with_api_base(api_base.clone())
+        .with_api_style(api_style)
+        .with_max_tokens(1536)
+        .with_audit_log(audit_log_path.clone());
+    let mut mutation_runtime = ThreadRuntime::new(
+        lifecycle_kernel.clone(),
+        mutation_supervisor.thread_id.clone(),
+        mutation_client,
+    );
+    let mut mutation_config = RuntimeConfig::workspace_write(tmp.clone());
+    mutation_config.max_steps = 10;
+    let mutation_report = mutation_runtime.run_to_completion(mutation_config).unwrap();
+    assert!(mutation_report.final_submitted);
+    assert_all_tool_calls_completed(&mutation_report);
+    assert_live_goal_tools(
+        &audit_log_path,
+        provider,
+        "full_tool_surface_agent_control_mutation",
+        &mutation_report,
+        &["read_file", "agent_control", "submit_final"],
+    );
+    assert_agent_control_actions(
+        &audit_log_path,
+        provider,
+        "full_tool_surface_agent_control_mutation",
+        &mutation_report,
+        &["set_hook", "send", "set_timeout", "resume"],
+    );
+
+    let terminal_supervisor = lifecycle_kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: terminal_task.task_id.clone(),
+            role_profile_id: "role_supervisor".to_string(),
+            owner: "agent-os-thread-live-test".to_string(),
+            local_goal: format!(
+                "Complete this focused agent_control terminal validation. Read agent_control_seed.md, then call agent_control stop exactly once on thread_id {} and agent_control kill exactly once on thread_id {}. Then submit_final with summary exactly Agent control terminal surface complete. and known_risks as an empty array.",
+                stop_target.thread_id, kill_target.thread_id
+            ),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: vec![tmp.to_string_lossy().to_string()],
+        })
+        .unwrap();
+    let terminal_approval_id =
+        approve_live_tool_risk(&lifecycle_kernel, &terminal_task, &terminal_supervisor);
+    let terminal_client = OpenAiModelClient::new(api_key, model.clone())
+        .with_api_base(api_base.clone())
+        .with_api_style(api_style)
+        .with_max_tokens(1536)
+        .with_audit_log(audit_log_path.clone());
+    let mut terminal_runtime = ThreadRuntime::new(
+        lifecycle_kernel.clone(),
+        terminal_supervisor.thread_id.clone(),
+        terminal_client,
+    );
+    let mut terminal_config = RuntimeConfig::workspace_write(tmp.clone());
+    terminal_config.max_steps = 8;
+    terminal_config.tool_risk_ceiling = 6;
+    let terminal_report = terminal_runtime
+        .run_to_completion_with_overrides(
+            terminal_config,
+            RuntimeRunOverrides {
+                sandbox_profile_id: Some("sbox_workspace_write".to_string()),
+                tool_approval_id: Some(terminal_approval_id),
+            },
+        )
+        .unwrap();
+    assert!(terminal_report.final_submitted);
+    assert_all_tool_calls_completed(&terminal_report);
+    assert_live_goal_tools(
+        &audit_log_path,
+        provider,
+        "full_tool_surface_agent_control_terminal",
+        &terminal_report,
+        &["read_file", "agent_control", "submit_final"],
+    );
+    assert_agent_control_actions(
+        &audit_log_path,
+        provider,
+        "full_tool_surface_agent_control_terminal",
+        &terminal_report,
+        &["stop", "kill"],
     );
     println!(
         "live_goal_full_tool_surface_log={}",
@@ -585,7 +783,7 @@ Finish with submit_final after the verifier passes.",
     let _ = std::fs::remove_dir_all(tmp);
 }
 
-fn run_live_llm_goal_driven_agent_control_unsupported_e2e(
+fn run_live_llm_goal_driven_agent_control_rejection_e2e(
     provider: &str,
     api_style: LlmApiStyle,
     base_env: &str,
@@ -593,7 +791,7 @@ fn run_live_llm_goal_driven_agent_control_unsupported_e2e(
     log_file_name: &str,
 ) {
     for action in ["delete_session", "purge_state"] {
-        run_live_llm_goal_driven_single_unsupported_agent_control_e2e(
+        run_live_llm_goal_driven_single_rejection_agent_control_e2e(
             provider,
             api_style,
             base_env,
@@ -604,7 +802,7 @@ fn run_live_llm_goal_driven_agent_control_unsupported_e2e(
     }
 }
 
-fn run_live_llm_goal_driven_single_unsupported_agent_control_e2e(
+fn run_live_llm_goal_driven_single_rejection_agent_control_e2e(
     provider: &str,
     api_style: LlmApiStyle,
     base_env: &str,
@@ -612,15 +810,11 @@ fn run_live_llm_goal_driven_single_unsupported_agent_control_e2e(
     log_file_name: &str,
     action: &str,
 ) {
-    let api_key = std::env::var("LLM_API_KEY")
-        .or_else(|_| std::env::var("OPENAI_API_KEY"))
-        .expect("LLM_API_KEY or OPENAI_API_KEY is required for live LLM e2e");
-    let model = std::env::var("LLM_MODEL")
-        .or_else(|_| std::env::var("AGENT_OS_MODEL"))
-        .unwrap_or_else(|_| "tongyi/qwen3.6-plus".to_string());
+    let api_key = std::env::var("LLM_API_KEY").expect("LLM_API_KEY is required for live LLM e2e");
+    let model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "tongyi/qwen3.6-plus".to_string());
     let api_base = std::env::var(base_env).unwrap_or_else(|_| default_base.to_string());
     let tmp = std::env::temp_dir().join(format!(
-        "aos-live-agent-control-unsupported-{}-{}-{}",
+        "aos-live-agent-control-rejection-{}-{}-{}",
         action,
         provider.replace('-', "_"),
         new_id("t_")
@@ -635,8 +829,9 @@ fn run_live_llm_goal_driven_single_unsupported_agent_control_e2e(
         .register_goal(RegisterGoalInput {
             namespace: "live-e2e".to_string(),
             created_by: "agent-os-thread-live-test".to_string(),
-            title: format!("Live unsupported agent_control {action}"),
-            description: "Exercise unsupported agent_control action through a live LLM".to_string(),
+            title: format!("Live agent_control rejection {action}"),
+            description: "Exercise append-only-store agent_control rejection through a live LLM"
+                .to_string(),
             acceptance_criteria: vec![format!("agent_control {action} is rejected")],
             constraints: Vec::new(),
             risk_level: 6,
@@ -656,12 +851,12 @@ fn run_live_llm_goal_driven_single_unsupported_agent_control_e2e(
             risk_level: 6,
         })
         .unwrap();
-    let supervisor = kernel
+    let target_owner = kernel
         .spawn_agent(SpawnAgentInput {
             task_id: task.task_id.clone(),
             role_profile_id: "role_supervisor".to_string(),
             owner: "agent-os-thread-live-test".to_string(),
-            local_goal: "placeholder".to_string(),
+            local_goal: "prepare append-only-store rejection target".to_string(),
             success_criteria: Vec::new(),
             failure_criteria: Vec::new(),
             parent_thread_id: None,
@@ -671,16 +866,27 @@ fn run_live_llm_goal_driven_single_unsupported_agent_control_e2e(
     let target = live_child_agent(
         &kernel,
         &task.task_id,
-        &supervisor,
-        "unsupported target",
+        &target_owner,
+        "rejection target",
         &tmp,
     );
-    let approval_id = approve_live_tool_risk(&kernel, &task, &supervisor);
-    let mut request_thread = supervisor.clone();
-    request_thread.task.local_goal = format!(
-        "Attempt exactly one supervision action for this live negative e2e: call agent_control with action {action} on thread_id {thread_id}. Do not call any other tools before it.",
+    let detailed_goal = format!(
+        "Attempt exactly one supervision action for this live rejection e2e: call agent_control with action {action} on thread_id {thread_id}. Do not inspect files, run commands, update objective, update checklist, record evidence, report supervisor, ask human, or start another child before that call. After the expected append-only-store rejection, stop.",
         thread_id = target.thread_id,
     );
+    let supervisor = kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: task.task_id.clone(),
+            role_profile_id: "role_supervisor".to_string(),
+            owner: "agent-os-thread-live-test".to_string(),
+            local_goal: detailed_goal,
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: vec![tmp.to_string_lossy().to_string()],
+        })
+        .unwrap();
+    let approval_id = approve_live_tool_risk(&kernel, &task, &supervisor);
     let client = OpenAiModelClient::new(api_key, model.clone())
         .with_api_base(api_base.clone())
         .with_api_style(api_style)
@@ -689,19 +895,19 @@ fn run_live_llm_goal_driven_single_unsupported_agent_control_e2e(
     append_jsonl(
         &audit_log_path,
         &json!({
-            "type": "live_goal_driven_agent_control_unsupported_start",
+            "type": "live_goal_driven_agent_control_rejection_start",
             "provider": provider,
             "api_base": api_base,
             "model": model,
             "workspace": tmp,
             "action": action,
             "target_thread_id": target.thread_id,
-            "task_goal": request_thread.task.local_goal,
+            "task_goal": supervisor.task.local_goal,
         }),
     )
     .unwrap();
 
-    let mut runtime = ThreadRuntime::new(kernel.clone(), request_thread.thread_id.clone(), client);
+    let mut runtime = ThreadRuntime::new(kernel.clone(), supervisor.thread_id.clone(), client);
     let mut config = RuntimeConfig::workspace_write(tmp.clone());
     config.max_steps = 4;
     config.tool_risk_ceiling = 6;
@@ -714,7 +920,10 @@ fn run_live_llm_goal_driven_single_unsupported_agent_control_e2e(
             },
         )
         .unwrap_err();
-    assert!(matches!(err, AgentOsError::Unsupported(_)), "{err:?}");
+    assert!(
+        matches!(err, AgentOsError::Validation(ref message) if message.contains("append-only v0.1 store")),
+        "{err:?}"
+    );
     let state = kernel.state_snapshot().unwrap();
     assert!(state.tool_invocations.values().any(|invocation| {
         invocation.tool_name == "agent_control"
@@ -724,7 +933,7 @@ fn run_live_llm_goal_driven_single_unsupported_agent_control_e2e(
     append_jsonl(
         &audit_log_path,
         &json!({
-            "type": "live_goal_driven_agent_control_unsupported_summary",
+            "type": "live_goal_driven_agent_control_rejection_summary",
             "provider": provider,
             "action": action,
             "error": err.to_string(),
@@ -734,7 +943,7 @@ fn run_live_llm_goal_driven_single_unsupported_agent_control_e2e(
     )
     .unwrap();
     println!(
-        "live_goal_agent_control_unsupported_log={}",
+        "live_goal_agent_control_rejection_log={}",
         audit_log_path.display()
     );
     let _ = std::fs::remove_dir_all(tmp);

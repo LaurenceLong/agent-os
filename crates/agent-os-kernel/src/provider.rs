@@ -19,18 +19,6 @@ impl Kernel {
             None,
             &decision,
         )?;
-        if decision.fallback_applied {
-            self.emit(
-                "ProviderFallbackApplied",
-                "provider_route",
-                &aggregate_id,
-                None,
-                Some(request.task_id.clone()),
-                None,
-                None,
-                &decision,
-            )?;
-        }
         Ok(decision)
     }
 
@@ -38,37 +26,57 @@ impl Kernel {
         &self,
         request: StreamRequest,
     ) -> AgentOsResult<ProviderStreamSession> {
+        if self.read_state()?.budget_ledgers.values().any(|ledger| {
+            ledger.scope_type == BudgetScope::ProviderProfile
+                && ledger.scope_id == request.provider_profile_id
+                && ledger.status == BudgetStatus::Exhausted
+        }) {
+            return Err(AgentOsError::BudgetExhausted(format!(
+                "provider profile {} budget is exhausted",
+                request.provider_profile_id
+            )));
+        }
         let decision = self.resolve_provider_route(request.clone())?;
+        let acb = self
+            .read_state()?
+            .threads
+            .get(&request.thread_id)
+            .cloned()
+            .ok_or_else(|| AgentOsError::NotFound(format!("thread {}", request.thread_id)))?;
+        let provider_slot = self.request_resource_lease(
+            ResourceType::ProviderSlot,
+            decision.provider_id.clone(),
+            acb.agent_id.clone(),
+            request.thread_id.clone(),
+            acb.task.goal_id.clone(),
+            request.task_id.clone(),
+            LeaseMode::Exclusive,
+            Some(format!(
+                "provider stream for alias {}",
+                decision.selected_model_alias
+            )),
+        )?;
         let session_id = new_id("stream_");
         let now = now_rfc3339();
         let mut session = ProviderStreamSession {
             session_id: session_id.clone(),
             request,
             route_decision: decision.clone(),
+            provider_slot_lease_id: provider_slot.resource_lease_id,
             status: ProviderStreamStatus::Open,
             stream_events: Vec::new(),
             usage: ProviderUsage::default(),
             created_at: now.clone(),
             completed_at: None,
         };
-        if decision.fallback_applied {
-            session.stream_events.push(provider_stream_event(
-                &session_id,
-                ProviderStreamEventType::ProviderFallback,
-                json!({
-                    "from": decision.fallback_from_model_alias,
-                    "to": decision.selected_model_alias,
-                    "provider_id": decision.provider_id
-                }),
-            ));
-        }
         session.stream_events.push(provider_stream_event(
             &session_id,
             ProviderStreamEventType::StreamStarted,
             json!({
                 "model_alias": decision.selected_model_alias,
                 "provider_id": decision.provider_id,
-                "provider_model_name": decision.provider_model_name
+                "provider_model_name": decision.provider_model_name,
+                "credential_ref_id": decision.credential_ref_id,
             }),
         ));
         self.emit(
@@ -94,6 +102,30 @@ impl Kernel {
         session.usage.input_tokens += usage.input_tokens;
         session.usage.output_tokens += usage.output_tokens;
         session.usage.cost += usage.cost;
+        let provider_ledgers: Vec<String> = self
+            .read_state()?
+            .budget_ledgers
+            .values()
+            .filter(|ledger| {
+                ledger.scope_type == BudgetScope::ProviderProfile
+                    && ledger.scope_id == session.request.provider_profile_id
+                    && ledger.status == BudgetStatus::Active
+            })
+            .map(|ledger| ledger.budget_ledger_id.clone())
+            .collect();
+        for ledger_id in provider_ledgers {
+            self.debit_budget(
+                &ledger_id,
+                BudgetDebit {
+                    tokens: usage.input_tokens + usage.output_tokens,
+                    tool_calls: 0,
+                    wall_time_ms: 0,
+                    cost: usage.cost,
+                    human_interrupts: 0,
+                    model_requests: 1,
+                },
+            )?;
+        }
         session.stream_events.push(provider_stream_event(
             session_id,
             ProviderStreamEventType::UsageUpdated,
@@ -148,6 +180,7 @@ impl Kernel {
         ensure_open_provider_session(&session)?;
         session.status = ProviderStreamStatus::Completed;
         session.completed_at = Some(now_rfc3339());
+        self.release_resource_lease(&session.provider_slot_lease_id)?;
         session.stream_events.push(provider_stream_event(
             session_id,
             ProviderStreamEventType::StreamCompleted,
@@ -159,6 +192,35 @@ impl Kernel {
         ));
         self.emit(
             "ProviderStreamCompleted",
+            "provider_stream_session",
+            &session.session_id,
+            None,
+            Some(session.request.task_id.clone()),
+            None,
+            None,
+            &session,
+        )?;
+        Ok(session)
+    }
+
+    pub fn fail_stream_session(
+        &self,
+        session_id: &str,
+        reason: impl Into<String>,
+    ) -> AgentOsResult<ProviderStreamSession> {
+        let mut session = self.provider_stream_session(session_id)?;
+        ensure_open_provider_session(&session)?;
+        session.status = ProviderStreamStatus::Failed;
+        session.completed_at = Some(now_rfc3339());
+        let reason = reason.into();
+        self.release_resource_lease(&session.provider_slot_lease_id)?;
+        session.stream_events.push(provider_stream_event(
+            session_id,
+            ProviderStreamEventType::StreamFailed,
+            json!({ "reason": reason }),
+        ));
+        self.emit(
+            "ProviderStreamFailed",
             "provider_stream_session",
             &session.session_id,
             None,
@@ -211,27 +273,7 @@ impl Kernel {
             .or_else(|| profile.default_model_alias.clone())
             .ok_or_else(|| AgentOsError::Validation("no model alias available".to_string()))?;
         ensure_profile_allows_alias(profile, &preferred)?;
-        let (alias, fallback_from_model_alias) =
-            match active_streaming_alias(&state, &preferred, request.output_schema.as_ref()) {
-                Ok(alias) => (alias, None),
-                Err(error) if !profile.fallback_chain.is_empty() => {
-                    let fallback = profile
-                        .fallback_chain
-                        .iter()
-                        .filter(|candidate| profile_allows_alias(profile, candidate))
-                        .find_map(|candidate| {
-                            active_streaming_alias(
-                                &state,
-                                candidate,
-                                request.output_schema.as_ref(),
-                            )
-                            .ok()
-                        })
-                        .ok_or(error)?;
-                    (fallback, Some(preferred.clone()))
-                }
-                Err(error) => return Err(error),
-            };
+        let alias = active_streaming_alias(&state, &preferred, request.output_schema.as_ref())?;
         Ok(ProviderRouteDecision {
             provider_profile_id: profile.provider_profile_id.clone(),
             routing_policy_id: routing.routing_policy_id.clone(),
@@ -239,8 +281,7 @@ impl Kernel {
             selected_model_alias: alias.alias.clone(),
             provider_id: alias.provider_id.clone(),
             provider_model_name: alias.provider_model_name.clone(),
-            fallback_applied: fallback_from_model_alias.is_some(),
-            fallback_from_model_alias,
+            credential_ref_id: profile.credential_ref.credential_ref_id.clone(),
             resolved_at: now_rfc3339(),
         })
     }

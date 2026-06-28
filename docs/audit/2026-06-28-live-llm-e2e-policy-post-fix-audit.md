@@ -38,16 +38,16 @@ Date: 2026-06-28
   tests:
   - `live_openai_compatible_llm_goal_driven_full_tool_surface_e2e`
   - `live_anthropic_compatible_llm_goal_driven_full_tool_surface_e2e`
-- Added live OpenAI-compatible and Anthropic-compatible unsupported
-  `agent_control` action e2e tests:
-  - `live_openai_compatible_llm_goal_driven_agent_control_unsupported_e2e`
-  - `live_anthropic_compatible_llm_goal_driven_agent_control_unsupported_e2e`
+- Added live OpenAI-compatible and Anthropic-compatible append-only-store
+  rejection `agent_control` action e2e tests:
+  - `live_openai_compatible_llm_goal_driven_agent_control_rejection_e2e`
+  - `live_anthropic_compatible_llm_goal_driven_agent_control_rejection_e2e`
 - The live success scenario expects a real provider to exercise all
   model-visible tool families and these `agent_control` actions:
   `start`, `status`, `output`, `set_hook`, `send`, `set_timeout`,
   `export_trace`, `resume`, `stop`, and `kill`.
-- The live negative scenario expects real provider calls for unsupported
-  append-only-store actions: `delete_session` and `purge_state`.
+- The live negative scenario expects real provider calls for append-only-store
+  rejection actions: `delete_session` and `purge_state`.
 
 ## Current Live E2E Count
 

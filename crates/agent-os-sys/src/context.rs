@@ -84,3 +84,21 @@ pub struct MemoryRecord {
     pub activated_at: Option<String>,
     pub superseded_by: Option<String>,
 }
+
+/// A durable record of a context compaction, carrying the replacement
+/// provenance required by
+/// `docs/10-kernel-design/agent-thread-core-module.md:542-543`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextCompaction {
+    pub compaction_id: String,
+    pub thread_id: String,
+    pub agent_id: String,
+    pub task_id: String,
+    /// Artifact that summarizes the superseded context, if any.
+    pub summary_artifact_id: Option<String>,
+    /// Refs to the context entries replaced by this compaction. The original
+    /// history remains linked so replay can reconstruct the full window.
+    pub superseded_refs: Vec<String>,
+    pub token_estimate: u64,
+    pub created_at: String,
+}

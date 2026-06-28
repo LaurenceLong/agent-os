@@ -1,7 +1,7 @@
 use agent_os_sys::*;
 use serde_json::Value;
 
-pub fn mock_turn_start_op(thread_id: impl Into<String>) -> AgentOp {
+pub fn turn_start_op(thread_id: impl Into<String>) -> AgentOp {
     AgentOp {
         abi_version: ABI_VERSION.to_string(),
         op_id: new_id("op_"),

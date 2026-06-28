@@ -5,6 +5,8 @@ Date: 2026-06-28
 Correction note: the e2e classification in this document was superseded by
 `2026-06-28-live-llm-e2e-policy-post-fix-audit.md`. Deterministic scripted
 runtime coverage is now integration coverage, and e2e is live LLM only.
+The compatibility rationale in this historical audit is superseded by
+`2026-06-28-agents-forward-only-rules-post-fix-audit.md`.
 
 ## Code Identity
 
@@ -55,12 +57,12 @@ runtime coverage is now integration coverage, and e2e is live LLM only.
 
 - Added `RuntimeRunOverrides` and
   `ThreadRuntime::run_to_completion_with_overrides`.
-- The default `RuntimeConfig` shape and `run_to_completion` behavior remain
-  unchanged for compatibility.
+- The default `RuntimeConfig` shape and `run_to_completion` behavior remained
+  unchanged in this historical testing update.
 - Overrides allow tests or callers to provide a bounded approval id and sandbox
   profile override when deliberately exercising high-risk runtime paths.
 
-## Compatibility Notes
+## Historical Notes
 
 - No existing public `RuntimeConfig` fields were removed or changed.
 - The final implementation avoids adding fields to `RuntimeConfig`, because
@@ -82,9 +84,10 @@ All validation commands passed.
 
 ## Remaining Gaps
 
-- Existing flat conformance files remain in place for compatibility and should
-  be migrated gradually only when touching their scenarios.
-- Live LLM e2e tests remain ignored supplemental coverage; deterministic local
-  e2e now covers the full tool/action surface for CI.
+- The flat conformance-file compatibility layout was closed by
+  `docs/audit/2026-06-28-conformance-layout-post-fix-audit.md`.
+- Live LLM e2e tests remain ignored supplemental coverage by default because
+  they require provider credentials, network access, and possible provider
+  spend.
 - The 60/25/15 split is now documented as a target, but it is intentionally not
   enforced by a brittle raw-count gate.

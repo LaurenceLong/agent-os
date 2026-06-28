@@ -7,6 +7,7 @@ mod error;
 mod events;
 mod idempotency;
 mod migrations;
+mod projection;
 mod store;
 
 pub use store::SqliteStore;

@@ -32,9 +32,7 @@ impl LlmApiStyle {
     }
 
     pub fn from_env_or_base(api_base: &str) -> AgentOsResult<Self> {
-        if let Ok(style) =
-            std::env::var("LLM_API_STYLE").or_else(|_| std::env::var("AGENT_OS_API_STYLE"))
-        {
+        if let Ok(style) = std::env::var("LLM_API_STYLE") {
             return Self::from_value(&style);
         }
         Ok(Self::from_base(api_base))
@@ -107,27 +105,6 @@ impl OpenAiModelClient {
     pub fn with_audit_log(mut self, path: impl Into<PathBuf>) -> Self {
         self.audit_log_path = Some(path.into());
         self
-    }
-
-    pub fn from_env() -> AgentOsResult<Self> {
-        let api_key = std::env::var("LLM_API_KEY")
-            .or_else(|_| std::env::var("OPENAI_API_KEY"))
-            .map_err(|_| {
-                AgentOsError::Validation(
-                "LLM_API_KEY or OPENAI_API_KEY environment variable is required for model client"
-                    .to_string(),
-            )
-            })?;
-        let model = std::env::var("LLM_MODEL")
-            .or_else(|_| std::env::var("AGENT_OS_MODEL"))
-            .unwrap_or_else(|_| "gpt-4o".to_string());
-        let api_base = std::env::var("LLM_BASE_URL")
-            .or_else(|_| std::env::var("OPENAI_API_BASE"))
-            .unwrap_or_else(|_| DEFAULT_API_BASE.to_string());
-        let api_style = LlmApiStyle::from_env_or_base(&api_base)?;
-        Ok(Self::new(api_key, model)
-            .with_api_base(api_base)
-            .with_api_style(api_style))
     }
 
     pub fn model(&self) -> &str {

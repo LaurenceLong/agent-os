@@ -13,7 +13,7 @@ fn software_pipeline_runs_all_roles_and_submits_supervisor_final() {
         "pub fn answer() -> i32 { 1 }\n",
     )
     .unwrap();
-    let pipeline = SoftwareEngineeringPipeline::new(Kernel::new());
+    let pipeline = SoftwareEngineeringPipeline::new(Kernel::new()).unwrap();
     let report = pipeline
         .run_code_task(SoftwareCodeTask::exact_edit(
             &workspace,
@@ -49,7 +49,7 @@ fn review_finding_triggers_revision_before_supervisor_final() {
         "pub fn answer() -> i32 { 1 }\n",
     )
     .unwrap();
-    let pipeline = SoftwareEngineeringPipeline::new(Kernel::new());
+    let pipeline = SoftwareEngineeringPipeline::new(Kernel::new()).unwrap();
     let mut spec = SoftwareCodeTask::exact_edit(
         &workspace,
         "Change answer through review",
@@ -89,7 +89,7 @@ fn failed_test_blocks_supervisor_final() {
         "pub fn answer() -> i32 { 1 }\n",
     )
     .unwrap();
-    let pipeline = SoftwareEngineeringPipeline::new(Kernel::new());
+    let pipeline = SoftwareEngineeringPipeline::new(Kernel::new()).unwrap();
     let err = pipeline
         .run_code_task(SoftwareCodeTask::exact_edit(
             &workspace,

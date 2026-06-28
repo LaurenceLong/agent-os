@@ -1,5 +1,4 @@
-mod common;
-use common::*;
+use crate::common::*;
 
 #[test]
 fn selected_task_bundle_exports_replayable_projection_slice() {

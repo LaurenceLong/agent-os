@@ -100,6 +100,7 @@ pub struct SoftwareReplaySummary {
 #[derive(Debug, Clone)]
 pub struct SoftwareEngineeringPipeline {
     pub(super) kernel: Kernel,
+    pub(super) distro: super::distro::SoftwareEngineeringDistro,
 }
 
 #[derive(Debug)]

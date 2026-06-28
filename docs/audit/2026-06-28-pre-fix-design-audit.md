@@ -2,6 +2,12 @@
 
 Date: 2026-06-28
 
+Correction note: this pre-fix audit records the initial findings before the
+forward-only roadmap work. Current closure status for findings 1, 4, 5, 7, 8,
+9, and 10 is recorded in `2026-06-28-roadmap-gaps-post-fix-audit.md`. Current
+project-rule posture is recorded in
+`2026-06-28-agents-forward-only-rules-post-fix-audit.md`.
+
 ## Code Baseline
 
 - Git HEAD: `c2c2cbcc1b84ea1eebc042a7c8af0a342615b295`
@@ -74,11 +80,12 @@ gaps, not immediate compatibility defects.
    scheduler state, messages, mementos, memory, provider state, and audit.
 
 9. Provider System is an early control-plane skeleton.
-   Provider profile resolution, aliasing, fallback events, and usage accounting
+   Provider profile resolution, aliasing, route events, and usage accounting
    exist, but credential resolution, quota policy, retry policy, transforms, and
    provider-slot admission are not complete.
 
-10. The software-engineering distribution is still a helper pipeline.
+10. The software-engineering distribution is still a hard-coded workflow
+    pipeline.
     Existing code demonstrates the workflow, but the official distribution
     package, manifest, policy packs, prompt packs, and distro boundary are not
     complete.
@@ -92,7 +99,8 @@ persisted event shapes or introducing new storage migrations:
 - Implement durable, stateful behavior for common `agent_control` lifecycle
   actions where the existing ABI already supports it.
 - Register `submit_final` in the kernel tool descriptor registry while keeping
-  the existing lifecycle fast path for backward compatibility.
+  the existing lifecycle fast path during this initial fix.
 - Add focused conformance/unit tests for the changed public contract.
 
-The remaining findings are retained as design gaps for future iterations.
+The remaining findings were retained as design gaps at the time of this audit.
+Their current status is superseded by later post-fix audit records.

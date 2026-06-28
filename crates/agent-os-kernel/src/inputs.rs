@@ -151,6 +151,40 @@ pub struct LoadContextInput {
     pub token_estimate: u64,
 }
 
+/// Propose a durable memory write. Proposed memory is not authoritative until
+/// committed (`docs/10-kernel-design/kernel-data-model.md:849-850`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProposeMemoryWriteInput {
+    pub namespace: String,
+    pub content: Value,
+    pub created_by_agent_id: String,
+    #[serde(default)]
+    pub source_evidence_ids: Vec<String>,
+}
+
+/// Commit (activate) a previously proposed memory record.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommitMemoryWriteInput {
+    pub memory_id: String,
+    pub approved_by: String,
+}
+
+/// Compact a thread's context window, replacing older context entries with a
+/// summary and recording replacement provenance
+/// (`docs/10-kernel-design/agent-thread-core-module.md:542-543, 833`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompactContextInput {
+    pub thread_id: String,
+    pub agent_id: String,
+    pub task_id: String,
+    pub summary_artifact_id: Option<String>,
+    /// Opaque refs to the context entries being superseded by this compaction.
+    #[serde(default)]
+    pub superseded_refs: Vec<String>,
+    #[serde(default)]
+    pub token_estimate: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolInvokeInput {
     pub tool_name: String,

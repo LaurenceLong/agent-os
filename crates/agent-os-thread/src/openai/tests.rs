@@ -1,5 +1,8 @@
 use super::*;
-use crate::{ArtifactRecord, RuntimeConfig, RuntimeRunOverrides, RuntimeRunReport, ThreadRuntime};
+use crate::{
+    ArtifactRecord, ModelContextProjection, RuntimeConfig, RuntimeRunOverrides, RuntimeRunReport,
+    ThreadRuntime,
+};
 use agent_os_kernel::{
     Kernel, RecordApprovalInput, RegisterGoalInput, RequestApprovalInput, SpawnAgentInput,
     SpawnTaskInput, ToolInvokeInput,

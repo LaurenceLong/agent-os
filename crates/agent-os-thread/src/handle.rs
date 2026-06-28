@@ -69,7 +69,7 @@ impl AgentThreadHandle {
             other => Ok(AgentOpAck {
                 op_id: op.op_id,
                 accepted: false,
-                reason: Some(format!("unsupported mock runtime op {other}")),
+                reason: Some(format!("unknown runtime op {other}")),
             }),
         }
     }

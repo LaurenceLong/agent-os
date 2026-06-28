@@ -45,6 +45,8 @@ pub struct KernelState {
     pub locks: HashMap<String, Lock>,
     pub memory_records: HashMap<String, MemoryRecord>,
     pub final_submissions: HashMap<String, FinalSubmission>,
+    pub reconciliation_reports: HashMap<String, crate::recovery::ReconciliationReport>,
+    pub context_compactions: HashMap<String, ContextCompaction>,
     pub ready_queue: VecDeque<String>,
 }
 
@@ -173,6 +175,8 @@ fn clear_event_projection(state: &mut KernelState) {
     state.locks.clear();
     state.memory_records.clear();
     state.final_submissions.clear();
+    state.reconciliation_reports.clear();
+    state.context_compactions.clear();
     state.ready_queue.clear();
 }
 

@@ -1,2 +1,12 @@
+mod artifact_conformance;
+mod communication_conformance;
+mod context_conformance;
+mod lifecycle_conformance;
+mod openai_adapter_conformance;
+mod resource_provider_storage_conformance;
 mod runtime_goal_driven_tools;
+mod runtime_resume_conformance;
+mod security_conformance;
+mod software_distribution_conformance;
+mod state_replay_export_conformance;
 mod tool_broker;

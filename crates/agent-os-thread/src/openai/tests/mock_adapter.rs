@@ -106,8 +106,10 @@ fn mock_tool_call_strings_run_local_tools_and_build_llm_tool_results() {
         thread: agent,
         workspace_root: tmp.clone(),
         step_index: 1,
-        tool_results: records,
-        artifacts: Vec::new(),
+        context: ModelContextProjection {
+            tool_results: records,
+            ..ModelContextProjection::default()
+        },
     };
     let messages = build_messages(&next_request, tmp.to_str().unwrap(), &None);
     assert_eq!(messages.len(), 6);
@@ -134,7 +136,7 @@ fn mock_tool_call_strings_run_local_tools_and_build_llm_tool_results() {
         }),
         json!({
             "type": "tool_execution_records",
-            "records": next_request.tool_results.clone()
+            "records": next_request.context.tool_results.clone()
         }),
         json!({
             "type": "llm_messages_after_tools",
@@ -322,8 +324,10 @@ fn openai_compatible_mock_adapter_runs_every_core_tool() {
         thread: request.thread,
         workspace_root: tmp.clone(),
         step_index: 1,
-        tool_results: records,
-        artifacts: Vec::new(),
+        context: ModelContextProjection {
+            tool_results: records,
+            ..ModelContextProjection::default()
+        },
     };
     let messages = build_messages(&next_request, tmp.to_str().unwrap(), &None);
     write_mock_interaction_log(
@@ -353,7 +357,7 @@ fn openai_compatible_mock_adapter_runs_every_core_tool() {
             json!({
                 "type": "tool_execution_records",
                 "provider": "openai-compatible",
-                "records": next_request.tool_results
+                "records": next_request.context.tool_results.clone()
             }),
             json!({
                 "type": "provider_followup_request",
@@ -447,8 +451,10 @@ fn anthropic_compatible_mock_adapter_runs_every_core_tool() {
         thread: request.thread,
         workspace_root: tmp.clone(),
         step_index: 1,
-        tool_results: records,
-        artifacts: Vec::new(),
+        context: ModelContextProjection {
+            tool_results: records,
+            ..ModelContextProjection::default()
+        },
     };
     let messages = build_anthropic_messages(&next_request, tmp.to_str().unwrap());
     write_mock_interaction_log(
@@ -481,7 +487,7 @@ fn anthropic_compatible_mock_adapter_runs_every_core_tool() {
             json!({
                 "type": "tool_execution_records",
                 "provider": "anthropic-compatible",
-                "records": next_request.tool_results
+                "records": next_request.context.tool_results.clone()
             }),
             json!({
                 "type": "provider_followup_request",

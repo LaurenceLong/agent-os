@@ -8,8 +8,11 @@ use agent_os_sys::*;
 use serde_json::json;
 
 impl SoftwareEngineeringPipeline {
-    pub fn new(kernel: Kernel) -> Self {
-        Self { kernel }
+    pub fn new(kernel: Kernel) -> AgentOsResult<Self> {
+        Ok(Self {
+            kernel,
+            distro: super::distro::SoftwareEngineeringDistro::load_default()?,
+        })
     }
 
     pub fn kernel(&self) -> Kernel {
@@ -17,20 +20,36 @@ impl SoftwareEngineeringPipeline {
     }
 
     pub fn run_code_task(&self, spec: SoftwareCodeTask) -> AgentOsResult<SoftwarePipelineReport> {
+        let review_policy_name = self.distro.review_policy["policy_name"]
+            .as_str()
+            .ok_or_else(|| {
+                AgentOsError::Validation(
+                    "software distro review policy requires policy_name".to_string(),
+                )
+            })?;
         let goal = self.kernel.register_goal(RegisterGoalInput {
-            namespace: "software-engineering".to_string(),
-            created_by: "agent-os-software-pipeline".to_string(),
+            namespace: self.distro.manifest.package_name.clone(),
+            created_by: format!("distro:{}", self.distro.manifest.package_name),
             title: spec.task.clone(),
             description: spec.task.clone(),
-            acceptance_criteria: vec![
-                "WorkerAgent inspects scoped source".to_string(),
-                "WorkerAgent produces patch artifact".to_string(),
-                "WorkerAgent records command evidence".to_string(),
-                "ReviewerAgent reviews exact artifact".to_string(),
-                "WorkerAgent passes evidence verification".to_string(),
-                "SupervisorAgent submits evidence-backed final".to_string(),
-            ],
-            constraints: Vec::new(),
+            acceptance_criteria: self.distro.final_answer_policy["acceptance_criteria"]
+                .as_array()
+                .ok_or_else(|| {
+                    AgentOsError::Validation(
+                        "software distro final-answer policy requires acceptance_criteria"
+                            .to_string(),
+                    )
+                })?
+                .iter()
+                .map(|item| {
+                    item.as_str().map(str::to_string).ok_or_else(|| {
+                        AgentOsError::Validation(
+                            "software distro acceptance criteria must be strings".to_string(),
+                        )
+                    })
+                })
+                .collect::<AgentOsResult<Vec<_>>>()?,
+            constraints: vec![format!("review policy: {review_policy_name}")],
             risk_level: 4,
             deadline: None,
         })?;
@@ -170,7 +189,7 @@ impl SoftwareEngineeringPipeline {
             depends_on: Vec::new(),
             role_profile_id: "role_supervisor",
             title: "Supervise software task",
-            description: &spec.task,
+            description: &self.distro.supervisor_prompt,
             required_artifact_types: vec![ArtifactType::Patch],
             required_evidence_types: vec![
                 EvidenceType::DiffRef,
@@ -194,7 +213,7 @@ impl SoftwareEngineeringPipeline {
             depends_on: Vec::new(),
             role_profile_id: "role_worker",
             title: "Explore target file",
-            description: "Inspect scoped repository source before editing",
+            description: &self.distro.worker_prompt,
             required_artifact_types: Vec::new(),
             required_evidence_types: vec![EvidenceType::SourceRef],
             parent_thread_id: Some(&supervisor.agent.thread_id),
@@ -214,7 +233,7 @@ impl SoftwareEngineeringPipeline {
             depends_on,
             role_profile_id: "role_worker",
             title: "Apply exact patch",
-            description: "Apply the requested repository edit",
+            description: &self.distro.worker_prompt,
             required_artifact_types: vec![ArtifactType::Patch],
             required_evidence_types: vec![EvidenceType::DiffRef],
             parent_thread_id: Some(&supervisor.agent.thread_id),
@@ -234,7 +253,7 @@ impl SoftwareEngineeringPipeline {
             depends_on,
             role_profile_id: "role_worker",
             title: "Run verification command",
-            description: "Run the declared test command after patching",
+            description: &self.distro.worker_prompt,
             required_artifact_types: Vec::new(),
             required_evidence_types: vec![EvidenceType::CommandLog],
             parent_thread_id: Some(&supervisor.agent.thread_id),
@@ -254,7 +273,7 @@ impl SoftwareEngineeringPipeline {
             depends_on,
             role_profile_id: "role_reviewer",
             title: "Review exact artifact",
-            description: "Review the submitted patch artifact",
+            description: &self.distro.reviewer_prompt,
             required_artifact_types: Vec::new(),
             required_evidence_types: vec![EvidenceType::ReviewFinding],
             parent_thread_id: Some(&supervisor.agent.thread_id),
@@ -274,7 +293,7 @@ impl SoftwareEngineeringPipeline {
             depends_on: vec![review_task_id.to_string()],
             role_profile_id: "role_worker",
             title: "Revise patch from review finding",
-            description: "Apply reviewer-requested revision",
+            description: &self.distro.worker_prompt,
             required_artifact_types: vec![ArtifactType::Patch],
             required_evidence_types: vec![EvidenceType::DiffRef],
             parent_thread_id: Some(&supervisor.agent.thread_id),
@@ -294,7 +313,7 @@ impl SoftwareEngineeringPipeline {
             depends_on: vec![coder_task_id.to_string()],
             role_profile_id: "role_worker",
             title: "Re-run verification command",
-            description: "Run tests after reviewer-triggered revision",
+            description: &self.distro.worker_prompt,
             required_artifact_types: Vec::new(),
             required_evidence_types: vec![EvidenceType::CommandLog],
             parent_thread_id: Some(&supervisor.agent.thread_id),
@@ -314,7 +333,7 @@ impl SoftwareEngineeringPipeline {
             depends_on: vec![previous_review_task_id.to_string()],
             role_profile_id: "role_reviewer",
             title: "Review revised artifact",
-            description: "Review the revised patch artifact",
+            description: &self.distro.reviewer_prompt,
             required_artifact_types: Vec::new(),
             required_evidence_types: vec![EvidenceType::ReviewFinding],
             parent_thread_id: Some(&supervisor.agent.thread_id),
@@ -334,7 +353,7 @@ impl SoftwareEngineeringPipeline {
             depends_on: vec![review_task_id.to_string()],
             role_profile_id: "role_worker",
             title: "Verify evidence coverage",
-            description: "Verify final evidence coverage before supervisor final",
+            description: &self.distro.worker_prompt,
             required_artifact_types: Vec::new(),
             required_evidence_types: vec![EvidenceType::RuntimeTrace],
             parent_thread_id: Some(&supervisor.agent.thread_id),

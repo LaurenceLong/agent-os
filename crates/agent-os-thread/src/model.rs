@@ -12,8 +12,16 @@ pub struct ModelTurnRequest {
     pub thread: AgentControlBlock,
     pub workspace_root: PathBuf,
     pub step_index: u32,
+    pub context: ModelContextProjection,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ModelContextProjection {
     pub tool_results: Vec<ToolExecutionRecord>,
     pub artifacts: Vec<ArtifactRecord>,
+    pub context_snapshots: Vec<ContextSnapshot>,
+    pub memory_records: Vec<MemoryRecord>,
+    pub context_compactions: Vec<ContextCompaction>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -40,6 +40,31 @@ impl Kernel {
                 ThreadStatus::Running
             )));
         }
+        // Scheduler admission: budget ledgers and task dependencies are
+        // durable admission-control signals.
+        match self.evaluate_turn_admission(thread_id)? {
+            AdmissionDecision::Allowed => {}
+            AdmissionDecision::Rejected(rejection) => match rejection {
+                AdmissionRejection::OutOfBudget {
+                    scope_id,
+                    budget_ledger_id,
+                } => {
+                    return Err(AgentOsError::BudgetExhausted(format!(
+                        "turn.start rejected: budget ledger {budget_ledger_id} for scope {scope_id} is exhausted"
+                    )))
+                }
+                AdmissionRejection::DependencyBlocked { task_id, blocked_on } => {
+                    return Err(AgentOsError::InvalidTransition(format!(
+                        "turn.start rejected: task {task_id} is blocked on dependencies {blocked_on:?}"
+                    )))
+                }
+                AdmissionRejection::ProviderSlotUnavailable { provider_id } => {
+                    return Err(AgentOsError::ResourceConflict(format!(
+                        "turn.start rejected: provider slot {provider_id} is unavailable"
+                    )))
+                }
+            },
+        }
         let mut next = acb.clone();
         next.status = ThreadStatus::Running;
         next.status_reason = None;
@@ -190,11 +215,11 @@ impl Kernel {
                 failure_criteria: input.failure_criteria,
             },
             config_snapshot: ThreadConfigSnapshot {
-                model_provider_id: "mock-provider".to_string(),
-                model_id: "mock-model".to_string(),
+                model_provider_id: "primary-provider".to_string(),
+                model_id: "general-primary".to_string(),
                 provider_profile_id,
                 model_routing_policy_id: routing_policy_id,
-                provider_adapter_version: "mock-0.1".to_string(),
+                provider_adapter_version: "provider-adapter-0.1".to_string(),
                 role_profile_id: role.role_profile_id.clone(),
                 communication_profile_id: communication_profile_id.clone(),
                 permission_profile_id: permission.permission_profile_id.clone(),
@@ -332,6 +357,17 @@ impl Kernel {
                 ThreadStatus::Failed => TurnStatus::Failed,
                 _ => TurnStatus::Interrupted,
             });
+        }
+        // Mark the recovery cursor dirty on any side-effecting transition so
+        // a checkpoint after this point is meaningful, and record cooperative
+        // readiness in the scheduler's ready queue.
+        acb.recovery.dirty = true;
+        if next == ThreadStatus::Ready {
+            // Recorded before the event so the projection reflects the queue
+            // state consistent with the emitted ACB. The queue itself is not
+            // part of the event payload (it is derived scheduler state), so
+            // replay stays deterministic.
+            self.enqueue_ready(&acb.thread_id)?;
         }
         self.emit(
             "ThreadStatusChanged",

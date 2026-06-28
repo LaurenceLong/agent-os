@@ -174,7 +174,7 @@ The system MUST reject or mark incomplete:
 - profile self-upgrade attempt from inside Agent Thread
 - budget-exhausted work admitted without policy override
 - forbidden provider override
-- provider fallback without durable event
+- provider retry or stream failure without durable event
 - blackboard post without allowed channel or scope
 - human message without human communication route
 - Memento Fragment used as evidence without promotion

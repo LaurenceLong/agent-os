@@ -1,0 +1,31 @@
+{
+  "manifest_version": "0.1",
+  "package_name": "software-engineering",
+  "package_type": "distro",
+  "version": "0.1.0",
+  "entrypoint": "prompts/supervisor.md",
+  "required_kernel_version": "0.1",
+  "capabilities_requested": [
+    "tool.invoke",
+    "context.load",
+    "artifact.commit",
+    "evidence.attach",
+    "review.submit",
+    "verify.submit",
+    "submit_final"
+  ],
+  "roles_provided": [
+    "SupervisorAgent",
+    "WorkerAgent",
+    "ReviewerAgent"
+  ],
+  "tools_provided": [],
+  "schemas": [
+    "policy/review.json",
+    "policy/final-answer.json",
+    "prompts/supervisor.md",
+    "prompts/worker.md",
+    "prompts/reviewer.md"
+  ],
+  "signature": null
+}

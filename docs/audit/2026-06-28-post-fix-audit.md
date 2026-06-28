@@ -2,6 +2,12 @@
 
 Date: 2026-06-28
 
+Correction note: the remaining-gap status in this document is superseded by
+`2026-06-28-roadmap-gaps-post-fix-audit.md`, which records the eight roadmap
+items as closed for the current forward-only contract. The compatibility
+rationale in this historical audit is superseded by
+`2026-06-28-agents-forward-only-rules-post-fix-audit.md`.
+
 ## Code Baseline And Fix Hashes
 
 - Base Git HEAD: `c2c2cbcc1b84ea1eebc042a7c8af0a342615b295`
@@ -18,8 +24,8 @@ files after the code fixes and before writing this post-fix audit document.
 1. Added `submit_final` to the kernel tool descriptor registry.
    The lifecycle tool is now discoverable in the kernel tool surface and has a
    Tool Broker driver that records a `FinalSubmitted` event when invoked with an
-   evidence map. The existing runtime fast path for `ModelAction::Final` remains
-   intact for backward compatibility.
+   evidence map. The historical note about retaining the runtime fast path was
+   superseded by the later forward-only runtime work.
 
 2. Added a session lifecycle tool driver.
    `submit_final` now validates structured input through the normal descriptor
@@ -76,13 +82,13 @@ files after the code fixes and before writing this post-fix audit document.
     credentials.
 - `cargo clippy --workspace --all-targets -- -D warnings`: passed
 
-## Compatibility Notes
+## Historical Notes
 
 - No SQLite schema migration was added.
 - No persisted event shape was removed or changed.
 - `submit_final` tool registration is additive.
-- Runtime final submission behavior remains compatible with existing model
-  adapters.
+- Runtime final submission behavior was preserved in this audit. Later
+  forward-only work made the current contract authoritative.
 - Worker model tool views are stricter for privileged `agent_control` actions,
   matching the documented contract.
 - `delete_session` and `purge_state` now fail closed instead of returning a
@@ -91,7 +97,9 @@ files after the code fixes and before writing this post-fix audit document.
 
 ## Remaining Gaps
 
-The following gaps from the pre-fix audit remain open:
+The following gaps from the pre-fix audit were open at the time of this record.
+Their current status is superseded by
+`2026-06-28-roadmap-gaps-post-fix-audit.md`:
 
 - Scheduler admission is still not fully connected to budgets, provider slots,
   human attention, and resource pressure.
@@ -105,11 +113,12 @@ The following gaps from the pre-fix audit remain open:
 - Provider credential resolution, quota policy, retry policy, transforms, and
   provider-slot admission remain incomplete.
 - The official software-engineering distribution package boundary is still
-  represented by helper code rather than a full distro manifest and policy pack.
+  represented by hard-coded workflow code rather than a full distro manifest
+  and policy pack.
 
 ## Follow-Up Risk
 
 `agent_control.rs` is now 565 lines after adding stateful lifecycle behavior. It
 is below the repository's 600-line split-before-substantial-growth threshold,
-but future Agent Control expansion should extract action-specific helpers before
+but future Agent Control expansion should split action-specific modules before
 adding more responsibilities.

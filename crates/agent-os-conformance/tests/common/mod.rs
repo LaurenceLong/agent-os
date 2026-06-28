@@ -2,7 +2,94 @@
 
 pub use agent_os_kernel::*;
 pub use agent_os_sys::*;
+use agent_os_thread::{ModelAction, ModelClient, ModelTurnRequest, ModelTurnResponse, ToolAction};
 pub use serde_json::json;
+use std::collections::VecDeque;
+
+#[derive(Debug, Clone)]
+pub enum DeterministicStep {
+    ToolCall(ToolAction),
+    Final {
+        summary: String,
+        known_risks: Vec<String>,
+        tests_run: Vec<String>,
+        tests_not_run: Vec<String>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct DeterministicModelClient {
+    steps: VecDeque<DeterministicStep>,
+}
+
+impl DeterministicModelClient {
+    pub fn new(steps: impl IntoIterator<Item = DeterministicStep>) -> Self {
+        Self {
+            steps: steps.into_iter().collect(),
+        }
+    }
+}
+
+impl ModelClient for DeterministicModelClient {
+    fn next(&mut self, request: &ModelTurnRequest) -> AgentOsResult<ModelTurnResponse> {
+        let step = self.steps.pop_front().ok_or_else(|| {
+            AgentOsError::Validation(
+                "deterministic model exhausted before final submission".to_string(),
+            )
+        })?;
+        let action = match step {
+            DeterministicStep::ToolCall(action) => ModelAction::ToolCall(action),
+            DeterministicStep::Final {
+                summary,
+                known_risks,
+                tests_run,
+                tests_not_run,
+            } => {
+                let mut evidence_map = Vec::new();
+                for result in &request.context.tool_results {
+                    if result.evidence_ids.is_empty() {
+                        continue;
+                    }
+                    let claim = result.evidence_claim.clone().ok_or_else(|| {
+                        AgentOsError::Validation(format!(
+                            "tool {} omitted evidence claim",
+                            result.tool_name
+                        ))
+                    })?;
+                    evidence_map.push(EvidenceMapEntry {
+                        claim,
+                        evidence_refs: result.evidence_ids.clone(),
+                    });
+                }
+                ModelAction::Final {
+                    submission: FinalSubmission {
+                        summary,
+                        changed_artifacts: request
+                            .context
+                            .artifacts
+                            .iter()
+                            .map(|artifact| artifact.artifact_id.clone())
+                            .collect(),
+                        evidence_map,
+                        unverified_claims: Vec::new(),
+                        known_risks,
+                        tests_run,
+                        tests_not_run,
+                        approvals: Vec::new(),
+                    },
+                }
+            }
+        };
+        Ok(ModelTurnResponse {
+            actions: vec![action],
+            usage: ProviderUsage {
+                input_tokens: request.thread.task.local_goal.len() as u64,
+                output_tokens: 1,
+                cost: 0.0,
+            },
+        })
+    }
+}
 
 pub struct Fixture {
     pub kernel: Kernel,

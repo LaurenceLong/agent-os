@@ -20,7 +20,7 @@ pub(crate) fn build_messages(
         }),
     ];
 
-    for result in &request.tool_results {
+    for result in &request.context.tool_results {
         inject_tool_result_messages(&mut messages, result, workspace_root);
     }
 
@@ -36,7 +36,7 @@ pub(crate) fn build_anthropic_messages(
         "content": format_user_task_message(request, workspace_root)
     })];
 
-    for result in &request.tool_results {
+    for result in &request.context.tool_results {
         inject_anthropic_tool_result_messages(&mut messages, result);
     }
 

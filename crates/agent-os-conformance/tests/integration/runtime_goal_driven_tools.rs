@@ -1,8 +1,5 @@
 use crate::common::*;
-use agent_os_thread::{
-    RuntimeConfig, RuntimeRunOverrides, ScriptedModelClient, ScriptedStep, ThreadRuntime,
-    ToolAction,
-};
+use agent_os_thread::{RuntimeConfig, RuntimeRunOverrides, ThreadRuntime, ToolAction};
 use serde_json::Value;
 use std::{
     collections::BTreeSet,
@@ -19,7 +16,7 @@ fn goal_driven_runtime_integration_covers_tools_and_agent_control_actions() {
     fs::write(fx.workspace.join("edit.txt"), "alpha old beta\n").unwrap();
     fs::write(fx.workspace.join("delete.txt"), "remove me\n").unwrap();
 
-    let script = ScriptedModelClient::new(vec![
+    let script = DeterministicModelClient::new(vec![
         tool(
             "read_file",
             json!({"workspace_root": workspace_root.clone(), "path": "read.txt"}),
@@ -147,7 +144,7 @@ fn goal_driven_runtime_integration_covers_tools_and_agent_control_actions() {
         agent_control("resume", json!({"thread_id": fx.resume_thread_id}), 4),
         agent_control("stop", json!({"thread_id": fx.stop_thread_id}), 4),
         agent_control("kill", json!({"thread_id": fx.kill_thread_id}), 6),
-        ScriptedStep::Final {
+        DeterministicStep::Final {
             summary: "Goal-driven runtime covered all model-visible tools.".to_string(),
             known_risks: Vec::new(),
             tests_run: vec![
@@ -288,19 +285,19 @@ fn goal_driven_runtime_integration_covers_privileged_agent_control_rejections() 
         RejectionCase {
             action: "delete_session",
             risk_level: 6,
-            expected: ExpectedRejection::Unsupported,
+            expected: ExpectedRejection::AppendOnlyStoreRejected,
         },
         RejectionCase {
             action: "purge_state",
             risk_level: 6,
-            expected: ExpectedRejection::Unsupported,
+            expected: ExpectedRejection::AppendOnlyStoreRejected,
         },
     ] {
         let fx = runtime_fixture(&format!(
             "agent-os-runtime-integration-reject-{}",
             case.action
         ));
-        let script = ScriptedModelClient::new(vec![agent_control(
+        let script = DeterministicModelClient::new(vec![agent_control(
             case.action,
             json!({"thread_id": fx.kill_thread_id}),
             case.risk_level,
@@ -321,8 +318,11 @@ fn goal_driven_runtime_integration_covers_privileged_agent_control_rejections() 
             ExpectedRejection::PermissionDenied => {
                 assert!(matches!(err, AgentOsError::PermissionDenied(_)), "{err:?}");
             }
-            ExpectedRejection::Unsupported => {
-                assert!(matches!(err, AgentOsError::Unsupported(_)), "{err:?}");
+            ExpectedRejection::AppendOnlyStoreRejected => {
+                assert!(
+                    matches!(err, AgentOsError::Validation(ref message) if message.contains("append-only v0.1 store")),
+                    "{err:?}"
+                );
             }
         }
 
@@ -332,7 +332,7 @@ fn goal_driven_runtime_integration_covers_privileged_agent_control_rejections() 
                 && invocation.status == ToolCallStatus::Failed
                 && invocation.input.get("action").and_then(Value::as_str) == Some(case.action)
         }));
-        if matches!(case.expected, ExpectedRejection::Unsupported) {
+        if matches!(case.expected, ExpectedRejection::AppendOnlyStoreRejected) {
             assert!(state.agent_control_commands.values().any(|command| {
                 command.status == AgentControlCommandStatus::Rejected
                     && command.target_thread_id.as_deref() == Some(&fx.kill_thread_id)
@@ -364,7 +364,7 @@ struct RejectionCase {
 #[derive(Clone, Copy)]
 enum ExpectedRejection {
     PermissionDenied,
-    Unsupported,
+    AppendOnlyStoreRejected,
 }
 
 struct RuntimeFixture {
@@ -515,8 +515,8 @@ fn child_agent(
         .unwrap()
 }
 
-fn tool(tool_name: &str, input: Value, risk_level: u8) -> ScriptedStep {
-    ScriptedStep::ToolCall(ToolAction::new(
+fn tool(tool_name: &str, input: Value, risk_level: u8) -> DeterministicStep {
+    DeterministicStep::ToolCall(ToolAction::new(
         tool_name,
         input,
         risk_level,
@@ -524,7 +524,7 @@ fn tool(tool_name: &str, input: Value, risk_level: u8) -> ScriptedStep {
     ))
 }
 
-fn agent_control(action: &str, mut input: Value, risk_level: u8) -> ScriptedStep {
+fn agent_control(action: &str, mut input: Value, risk_level: u8) -> DeterministicStep {
     input
         .as_object_mut()
         .unwrap()

@@ -1,0 +1,17 @@
+{
+  "policy_name": "software-engineering-final-answer",
+  "acceptance_criteria": [
+    "WorkerAgent inspects scoped source",
+    "WorkerAgent produces patch artifact",
+    "WorkerAgent records command evidence",
+    "ReviewerAgent reviews exact artifact",
+    "WorkerAgent passes evidence verification",
+    "SupervisorAgent submits evidence-backed final"
+  ],
+  "required_evidence_types": [
+    "diff_ref",
+    "command_log",
+    "review_finding",
+    "runtime_trace"
+  ]
+}

@@ -106,6 +106,12 @@ impl Kernel {
                     .context_snapshots
                     .insert(snapshot.context_id.clone(), snapshot);
             }
+            "ContextCompacted" => {
+                let compaction: ContextCompaction = parse_payload(&event.payload)?;
+                state
+                    .context_compactions
+                    .insert(compaction.compaction_id.clone(), compaction);
+            }
             "ThreadConfigured" | "ThreadStatusChanged" | "TurnStarted" | "CheckpointCommitted" => {
                 let acb: AgentControlBlock = parse_payload(&event.payload)?;
                 state.threads.insert(acb.thread_id.clone(), acb);
@@ -132,7 +138,7 @@ impl Kernel {
                     .communication_profiles
                     .insert(profile.communication_profile_id.clone(), profile);
             }
-            "ProviderProfileResolved" | "ProviderFallbackApplied" => {
+            "ProviderProfileResolved" => {
                 let decision: ProviderRouteDecision = parse_payload(&event.payload)?;
                 state
                     .provider_route_decisions
@@ -160,7 +166,7 @@ impl Kernel {
                     .insert(descriptor.name.clone(), descriptor);
             }
             "ToolCallProposed" | "ToolCallStarted" | "ToolCallCompleted" | "ToolCallFailed"
-            | "ToolCallDenied" => {
+            | "ToolCallDenied" | "ToolCallReconciled" => {
                 let invocation: ToolInvocation = parse_payload(&event.payload)?;
                 state
                     .tool_invocations
@@ -170,13 +176,18 @@ impl Kernel {
                 let env: ExecutionEnvironment = parse_payload(&event.payload)?;
                 state.environments.insert(env.environment_id.clone(), env);
             }
-            "EnvironmentLeaseGranted" | "EnvironmentLeaseReleased" => {
+            "EnvironmentLeaseGranted"
+            | "EnvironmentLeaseReleased"
+            | "EnvironmentLeaseReclaimed" => {
                 let lease: EnvironmentLease = parse_payload(&event.payload)?;
                 state
                     .environment_leases
                     .insert(lease.environment_lease_id.clone(), lease);
             }
-            "ResourceLeaseGranted" | "ResourceLeaseDenied" | "ResourceLeaseReleased" => {
+            "ResourceLeaseGranted"
+            | "ResourceLeaseDenied"
+            | "ResourceLeaseReleased"
+            | "ResourceLeaseReclaimed" => {
                 let lease: ResourceLease = parse_payload(&event.payload)?;
                 state
                     .resource_leases
@@ -252,6 +263,12 @@ impl Kernel {
                 state
                     .final_submissions
                     .insert(event.aggregate_id.clone(), final_submission);
+            }
+            "ThreadReconciled" => {
+                let report: crate::recovery::ReconciliationReport = parse_payload(&event.payload)?;
+                state
+                    .reconciliation_reports
+                    .insert(report.reconciliation_id.clone(), report);
             }
             _ => {}
         }

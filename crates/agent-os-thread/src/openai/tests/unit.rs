@@ -56,23 +56,25 @@ fn build_messages_includes_tool_results() {
         thread: make_request(&tmp).thread,
         workspace_root: tmp.clone(),
         step_index: 1,
-        tool_results: vec![ToolExecutionRecord {
-            call_id: "call_001".to_string(),
-            tool_name: "read_file".to_string(),
-            status: ToolCallStatus::Completed,
-            input: None,
-            output: Some(json!({
-                "tool": "read_file",
-                "status": "ok",
-                "input": {"workspace_root": tmp.to_string_lossy(), "path": "README.md"},
-                "content": "# Hello",
-                "bytes_read": 7,
-                "path": "README.md",
-            })),
-            evidence_ids: vec!["evi_1".to_string()],
-            evidence_claim: Some("read README.md".to_string()),
-        }],
-        artifacts: Vec::new(),
+        context: ModelContextProjection {
+            tool_results: vec![ToolExecutionRecord {
+                call_id: "call_001".to_string(),
+                tool_name: "read_file".to_string(),
+                status: ToolCallStatus::Completed,
+                input: None,
+                output: Some(json!({
+                    "tool": "read_file",
+                    "status": "ok",
+                    "input": {"workspace_root": tmp.to_string_lossy(), "path": "README.md"},
+                    "content": "# Hello",
+                    "bytes_read": 7,
+                    "path": "README.md",
+                })),
+                evidence_ids: vec!["evi_1".to_string()],
+                evidence_claim: Some("read README.md".to_string()),
+            }],
+            ..ModelContextProjection::default()
+        },
     };
     let messages = build_messages(&request, tmp.to_str().unwrap(), &None);
     assert_eq!(messages.len(), 4);
@@ -123,7 +125,7 @@ fn parse_response_extracts_tool_calls() {
 }
 
 #[test]
-fn parse_response_accepts_object_arguments_for_compatibility() {
+fn parse_response_accepts_object_arguments_from_provider() {
     let tmp = std::env::temp_dir().join(format!("aos-openai-obj-{}", new_id("t_")));
     let request = make_request(&tmp);
     let body = json!({
@@ -184,21 +186,24 @@ fn parse_response_extracts_submit_final() {
         thread: make_request(&tmp).thread,
         workspace_root: tmp,
         step_index: 3,
-        tool_results: vec![ToolExecutionRecord {
-            call_id: "call_1".to_string(),
-            tool_name: "write_file".to_string(),
-            status: ToolCallStatus::Completed,
-            input: None,
-            output: Some(json!({"input": {"path": "out.txt"}})),
-            evidence_ids: vec!["evi_final".to_string()],
-            evidence_claim: Some("wrote output".to_string()),
-        }],
-        artifacts: vec![ArtifactRecord {
-            artifact_id: "art_1".to_string(),
-            artifact_type: ArtifactType::Patch,
-            blob_ref: None,
-            evidence_ids: vec![],
-        }],
+        context: ModelContextProjection {
+            tool_results: vec![ToolExecutionRecord {
+                call_id: "call_1".to_string(),
+                tool_name: "write_file".to_string(),
+                status: ToolCallStatus::Completed,
+                input: None,
+                output: Some(json!({"input": {"path": "out.txt"}})),
+                evidence_ids: vec!["evi_final".to_string()],
+                evidence_claim: Some("wrote output".to_string()),
+            }],
+            artifacts: vec![ArtifactRecord {
+                artifact_id: "art_1".to_string(),
+                artifact_type: ArtifactType::Patch,
+                blob_ref: None,
+                evidence_ids: vec![],
+            }],
+            ..ModelContextProjection::default()
+        },
     };
     let body = json!({
         "choices": [{
@@ -242,21 +247,24 @@ fn parse_anthropic_response_extracts_submit_final() {
         thread: make_request(&tmp).thread,
         workspace_root: tmp,
         step_index: 2,
-        tool_results: vec![ToolExecutionRecord {
-            call_id: "call_1".to_string(),
-            tool_name: "write_file".to_string(),
-            status: ToolCallStatus::Completed,
-            input: Some(json!({"path": "out.txt"})),
-            output: Some(json!({"written_path": "out.txt"})),
-            evidence_ids: vec!["evi_anthropic".to_string()],
-            evidence_claim: Some("wrote output".to_string()),
-        }],
-        artifacts: vec![ArtifactRecord {
-            artifact_id: "art_1".to_string(),
-            artifact_type: ArtifactType::Patch,
-            blob_ref: None,
-            evidence_ids: vec![],
-        }],
+        context: ModelContextProjection {
+            tool_results: vec![ToolExecutionRecord {
+                call_id: "call_1".to_string(),
+                tool_name: "write_file".to_string(),
+                status: ToolCallStatus::Completed,
+                input: Some(json!({"path": "out.txt"})),
+                output: Some(json!({"written_path": "out.txt"})),
+                evidence_ids: vec!["evi_anthropic".to_string()],
+                evidence_claim: Some("wrote output".to_string()),
+            }],
+            artifacts: vec![ArtifactRecord {
+                artifact_id: "art_1".to_string(),
+                artifact_type: ArtifactType::Patch,
+                blob_ref: None,
+                evidence_ids: vec![],
+            }],
+            ..ModelContextProjection::default()
+        },
     };
     let body = json!({
         "content": [{
@@ -474,7 +482,6 @@ fn api_style_parses_explicit_and_base_url_values() {
         LlmApiStyle::AnthropicCompatible
     );
     std::env::remove_var("LLM_API_STYLE");
-    std::env::remove_var("AGENT_OS_API_STYLE");
     assert_eq!(
         LlmApiStyle::from_env_or_base("http://model.mify.ai.srv/anthropic").unwrap(),
         LlmApiStyle::AnthropicCompatible
@@ -483,12 +490,4 @@ fn api_style_parses_explicit_and_base_url_values() {
         LlmApiStyle::from_env_or_base("http://model.mify.ai.srv/v1").unwrap(),
         LlmApiStyle::OpenAiCompatible
     );
-}
-
-#[test]
-fn from_env_fails_without_api_key() {
-    std::env::remove_var("LLM_API_KEY");
-    std::env::remove_var("OPENAI_API_KEY");
-    let result = OpenAiModelClient::from_env();
-    assert!(result.is_err());
 }

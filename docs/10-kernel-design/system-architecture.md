@@ -235,7 +235,7 @@ Responsibilities:
 - apply routing policy
 - resolve credentials
 - open normalized stream sessions
-- emit usage, cost, retry, and fallback events
+- emit usage, cost, retry, and failure events
 - isolate provider-specific SDK and API behavior behind adapters
 
 Agent Threads must obtain streams through Provider System. They must not construct provider SDK clients directly.

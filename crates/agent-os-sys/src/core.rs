@@ -28,8 +28,6 @@ pub enum AgentOsError {
     BudgetExhausted(String),
     #[error("idempotency conflict: {0}")]
     IdempotencyConflict(String),
-    #[error("unsupported operation: {0}")]
-    Unsupported(String),
     #[error("serialization failed: {0}")]
     Serialization(String),
 }

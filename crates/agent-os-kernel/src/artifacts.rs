@@ -174,6 +174,26 @@ impl Kernel {
             }
         }
         drop(state);
+        let outcome = self.evaluate_final_verification(task_id, &final_submission)?;
+        if !outcome.uncovered_high_impact_claims.is_empty() {
+            return Err(AgentOsError::Validation(format!(
+                "final answer leaves high-impact claims without covered evidence: {}",
+                outcome.uncovered_high_impact_claims.join(", ")
+            )));
+        }
+        if !outcome.stale_evidence_ids.is_empty() {
+            return Err(AgentOsError::Validation(format!(
+                "final answer relies on stale evidence: {}",
+                outcome.stale_evidence_ids.join(", ")
+            )));
+        }
+        self.record_final_verification(
+            agent_id,
+            task_id,
+            &final_submission,
+            &outcome,
+            causation_id.clone(),
+        )?;
         self.emit(
             "FinalSubmitted",
             "task",

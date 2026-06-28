@@ -1,7 +1,7 @@
 use super::*;
 use agent_os_store_sqlite::SqliteStore;
 use agent_os_sys::new_id;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 
 #[test]
@@ -84,8 +84,13 @@ fn cli_run_can_use_external_model_process() {
         new_id("case_")
     ));
     fs::create_dir_all(&workspace).unwrap();
-    let helper = compile_helper(
-        &workspace,
+    let source_path = workspace.join("external_run_model.rs");
+    let model_program = workspace.join(format!(
+        "external_run_model{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    fs::write(
+        &source_path,
         r##"
 use std::io::{self, Read};
 
@@ -148,6 +153,19 @@ fn first_evidence_id(input: &str) -> String {
     rest[..end].to_string()
 }
 "##,
+    )
+    .unwrap();
+    let rustc_output = Command::new("rustc")
+        .arg(&source_path)
+        .arg("-o")
+        .arg(&model_program)
+        .output()
+        .unwrap();
+    assert!(
+        rustc_output.status.success(),
+        "rustc failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&rustc_output.stdout),
+        String::from_utf8_lossy(&rustc_output.stderr)
     );
     let options = RunOptions {
         workspace: workspace.clone(),
@@ -155,7 +173,7 @@ fn first_evidence_id(input: &str) -> String {
         output: PathBuf::from("result.md"),
         bundle_output: None,
         state_db: None,
-        model_command: Some(helper),
+        model_command: Some(model_program),
         model_args: Vec::new(),
     };
     let output = run_e2e_task(&options).unwrap();
@@ -167,41 +185,4 @@ fn first_evidence_id(input: &str) -> String {
     assert_eq!(output["replay"]["final_submissions"], json!(1));
     assert_eq!(output["artifact_ids"].as_array().unwrap().len(), 1);
     let _ = fs::remove_dir_all(workspace);
-}
-
-fn compile_helper(workspace: &Path, source: &str) -> PathBuf {
-    let source_path = workspace.join("external_run_model.rs");
-    let helper_path = workspace.join(format!(
-        "external_run_model{}",
-        std::env::consts::EXE_SUFFIX
-    ));
-    fs::write(&source_path, source).unwrap();
-    let output = Command::new(rustc_path())
-        .arg(&source_path)
-        .arg("-o")
-        .arg(&helper_path)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "rustc failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    helper_path
-}
-
-fn rustc_path() -> PathBuf {
-    if let Some(rustc) = env::var_os("RUSTC") {
-        return rustc.into();
-    }
-    if let Some(cargo_home) = env::var_os("CARGO_HOME") {
-        let candidate = PathBuf::from(cargo_home)
-            .join("bin")
-            .join(format!("rustc{}", std::env::consts::EXE_SUFFIX));
-        if candidate.exists() {
-            return candidate;
-        }
-    }
-    PathBuf::from("rustc")
 }

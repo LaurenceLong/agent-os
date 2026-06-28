@@ -1,10 +1,10 @@
+use super::tool_workflow::ToolRoleFinal;
 use super::types::{
     ReviewRecord, RoleExecution, RoleSpawn, SoftwareCodeTask, SoftwareEngineeringPipeline,
     VerificationRecord,
 };
 use super::util::{evidence_by_type, test_command};
-use crate::ToolAction;
-use crate::{RuntimeConfig, RuntimeRunReport, ScriptedModelClient, ScriptedStep, ThreadRuntime};
+use crate::RuntimeRunReport;
 use agent_os_kernel::{
     AttachEvidenceInput, CompleteTaskInput, RequestReviewInput, SpawnAgentInput, SpawnTaskInput,
     SubmitReviewInput, SubmitVerificationInput, UpdateTaskInput,
@@ -19,34 +19,26 @@ impl SoftwareEngineeringPipeline {
         agent: &AgentControlBlock,
         spec: &SoftwareCodeTask,
     ) -> AgentOsResult<RuntimeRunReport> {
-        let script = ScriptedModelClient::new(vec![
-            ScriptedStep::ToolCall(ToolAction::new(
-                "read_file",
-                json!({
-                    "workspace_root": spec.workspace_root.to_string_lossy(),
-                    "path": spec.file.to_string_lossy(),
-                }),
-                1,
-                Some("WorkerAgent inspected the target source file".to_string()),
-            )),
-            ScriptedStep::Final {
+        let session = self.start_tool_role(agent, &spec.workspace_root, AttachMode::ReadOnly, 1)?;
+        let tool_result = self.invoke_planned_tool(
+            &session,
+            "read_file",
+            json!({
+                "workspace_root": spec.workspace_root.to_string_lossy(),
+                "path": spec.file.to_string_lossy(),
+            }),
+            1,
+            "WorkerAgent inspected the target source file",
+        )?;
+        self.complete_tool_role(
+            &session,
+            Vec::new(),
+            vec![tool_result],
+            ToolRoleFinal {
                 summary: format!("Inspected {}", spec.file.to_string_lossy()),
                 known_risks: Vec::new(),
                 tests_run: Vec::new(),
                 tests_not_run: Vec::new(),
-            },
-        ]);
-        self.run_runtime(
-            agent,
-            script,
-            RuntimeConfig {
-                workspace_root: spec.workspace_root.clone(),
-                attach_mode: AttachMode::ReadOnly,
-                max_steps: 4,
-                requested_model_alias: None,
-                tool_risk_ceiling: 1,
-                auto_commit_patch_artifacts: false,
-                fail_on_process_nonzero: true,
             },
         )
     }
@@ -58,29 +50,31 @@ impl SoftwareEngineeringPipeline {
         old: &str,
         new: &str,
     ) -> AgentOsResult<RuntimeRunReport> {
-        let script = ScriptedModelClient::new(vec![
-            ScriptedStep::ToolCall(ToolAction::new(
-                "replace_text",
-                json!({
-                    "workspace_root": spec.workspace_root.to_string_lossy(),
-                    "path": spec.file.to_string_lossy(),
-                    "old": old,
-                    "new": new,
-                }),
-                4,
-                Some("WorkerAgent applied the exact repository edit".to_string()),
-            )),
-            ScriptedStep::Final {
+        let session =
+            self.start_tool_role(agent, &spec.workspace_root, AttachMode::WorkspaceWrite, 4)?;
+        let tool_result = self.invoke_planned_tool(
+            &session,
+            "replace_text",
+            json!({
+                "workspace_root": spec.workspace_root.to_string_lossy(),
+                "path": spec.file.to_string_lossy(),
+                "old": old,
+                "new": new,
+            }),
+            4,
+            "WorkerAgent applied the exact repository edit",
+        )?;
+        let artifacts = vec![self.commit_patch_artifact_for_tool(&session, &tool_result)?];
+        self.complete_tool_role(
+            &session,
+            artifacts,
+            vec![tool_result],
+            ToolRoleFinal {
                 summary: format!("Applied exact edit to {}", spec.file.to_string_lossy()),
                 known_risks: Vec::new(),
                 tests_run: Vec::new(),
                 tests_not_run: Vec::new(),
             },
-        ]);
-        self.run_runtime(
-            agent,
-            script,
-            RuntimeConfig::workspace_write(&spec.workspace_root),
         )
     }
 
@@ -89,35 +83,40 @@ impl SoftwareEngineeringPipeline {
         agent: &AgentControlBlock,
         spec: &SoftwareCodeTask,
     ) -> AgentOsResult<RuntimeRunReport> {
-        let script = ScriptedModelClient::new(vec![
-            ScriptedStep::ToolCall(ToolAction::new(
-                "run_command",
-                json!({
-                    "program": spec.test_program.to_string_lossy(),
-                    "args": spec.test_args,
-                    "cwd": spec.workspace_root.to_string_lossy(),
-                }),
-                4,
-                Some("WorkerAgent ran the declared verification command".to_string()),
-            )),
-            ScriptedStep::Final {
+        let session = self.start_tool_role(agent, &spec.workspace_root, AttachMode::ReadOnly, 4)?;
+        let tool_result = self.invoke_planned_tool(
+            &session,
+            "run_command",
+            json!({
+                "program": spec.test_program.to_string_lossy(),
+                "args": spec.test_args,
+                "cwd": spec.workspace_root.to_string_lossy(),
+            }),
+            4,
+            "WorkerAgent ran the declared verification command",
+        )?;
+        let exit_code = tool_result
+            .output
+            .as_ref()
+            .and_then(|output| output.get("exit_code"))
+            .and_then(serde_json::Value::as_i64)
+            .ok_or_else(|| {
+                AgentOsError::Validation("run_command output omitted exit_code".to_string())
+            })?;
+        if exit_code != 0 {
+            return Err(AgentOsError::Validation(format!(
+                "run_command failed with exit code {exit_code}"
+            )));
+        }
+        self.complete_tool_role(
+            &session,
+            Vec::new(),
+            vec![tool_result],
+            ToolRoleFinal {
                 summary: "Test command passed".to_string(),
                 known_risks: Vec::new(),
                 tests_run: vec![test_command(spec)],
                 tests_not_run: Vec::new(),
-            },
-        ]);
-        self.run_runtime(
-            agent,
-            script,
-            RuntimeConfig {
-                workspace_root: spec.workspace_root.clone(),
-                attach_mode: AttachMode::ReadOnly,
-                max_steps: 4,
-                requested_model_alias: None,
-                tool_risk_ceiling: 4,
-                auto_commit_patch_artifacts: false,
-                fail_on_process_nonzero: true,
             },
         )
     }
@@ -364,16 +363,6 @@ impl SoftwareEngineeringPipeline {
             roles.insert(thread.role.clone(), thread.thread_id.clone());
         }
         Ok(roles)
-    }
-
-    fn run_runtime(
-        &self,
-        agent: &AgentControlBlock,
-        script: ScriptedModelClient,
-        config: RuntimeConfig,
-    ) -> AgentOsResult<RuntimeRunReport> {
-        let mut runtime = ThreadRuntime::new(self.kernel.clone(), agent.thread_id.clone(), script);
-        runtime.run_to_completion(config)
     }
 
     fn begin_manual_role(&self, agent: &AgentControlBlock, task_id: &str) -> AgentOsResult<()> {

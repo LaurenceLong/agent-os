@@ -54,7 +54,7 @@ pub(crate) fn run_code_task(options: &CodeOptions) -> AgentOsResult<Value> {
         )));
     }
 
-    let pipeline = SoftwareEngineeringPipeline::new(open_kernel(&options.state_db)?);
+    let pipeline = SoftwareEngineeringPipeline::new(open_kernel(&options.state_db)?)?;
     let report = pipeline.run_code_task(spec)?;
     let bundle_path = write_task_bundle_if_requested(
         &pipeline.kernel(),

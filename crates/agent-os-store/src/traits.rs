@@ -15,9 +15,9 @@ pub trait IdempotencyStore: Send + Sync {
     ) -> AgentOsResult<()>;
 }
 
-pub trait KernelStore: EventStore + IdempotencyStore {}
+pub trait KernelStore: ProjectionStore + IdempotencyStore {}
 
-impl<T> KernelStore for T where T: EventStore + IdempotencyStore {}
+impl<T> KernelStore for T where T: ProjectionStore + IdempotencyStore {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlobRecord {
@@ -37,3 +37,64 @@ pub trait EvidenceBlobStore: BlobStore {}
 
 impl<T> ArtifactBlobStore for T where T: BlobStore {}
 impl<T> EvidenceBlobStore for T where T: BlobStore {}
+
+/// Query the event log for every event whose `aggregate_type` matches.
+///
+/// This is the foundation read surface for the projection-style store
+/// families: each family below is a typed view over a slice of the event log,
+/// rebuilt into a projection by the kernel.
+pub trait ProjectionStore: EventStore {
+    /// All events that project into a given aggregate family (for example
+    /// `"lock"`, `"resource_lease"`, `"memory"`, `"context"`).
+    fn events_by_aggregate_type(&self, aggregate_type: &str) -> AgentOsResult<Vec<EventEnvelope>> {
+        Ok(self
+            .all_events()?
+            .into_iter()
+            .filter(|event| event.aggregate_type == aggregate_type)
+            .collect())
+    }
+}
+
+/// Durable record of resource locks (`docs/10-kernel-design/state-storage-and-replay.md:30-47`).
+pub trait LockStore: ProjectionStore {}
+
+/// Durable record of resource and environment leases.
+pub trait LeaseStore: ProjectionStore {}
+
+/// Durable record of provisioned execution environments and their leases.
+pub trait EnvironmentStore: ProjectionStore {}
+
+/// Durable record of role / permission / sandbox / scheduler / provider /
+/// routing / communication profiles.
+pub trait ProfileStore: ProjectionStore {}
+
+/// Durable record of scheduler policies and ready-queue state.
+pub trait SchedulerStore: ProjectionStore {}
+
+/// Durable record of agent-to-agent and human communication messages.
+pub trait MessageStore: ProjectionStore {}
+
+/// Durable record of memento fragments.
+pub trait MementoStore: ProjectionStore {}
+
+/// Durable record of long-term memory records and their write policy state.
+pub trait MemoryStore: ProjectionStore {}
+
+/// Durable record of provider profiles, route decisions, and stream sessions.
+pub trait ProviderStore: ProjectionStore {}
+
+/// Durable record of audit events.
+pub trait AuditStore: ProjectionStore {}
+
+// Blanket implementations: any projection store satisfies every
+// projection-family trait because the families are event-derived read views.
+impl<T: ProjectionStore> LockStore for T {}
+impl<T: ProjectionStore> LeaseStore for T {}
+impl<T: ProjectionStore> EnvironmentStore for T {}
+impl<T: ProjectionStore> ProfileStore for T {}
+impl<T: ProjectionStore> SchedulerStore for T {}
+impl<T: ProjectionStore> MessageStore for T {}
+impl<T: ProjectionStore> MementoStore for T {}
+impl<T: ProjectionStore> MemoryStore for T {}
+impl<T: ProjectionStore> ProviderStore for T {}
+impl<T: ProjectionStore> AuditStore for T {}

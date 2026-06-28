@@ -882,7 +882,7 @@ Deliver:
 - provider-neutral streaming interface
 - ModelTurnSession
 - model capability catalog
-- routing and fallback policy
+- routing, retry, and fail-closed failure policy
 - provider transform contract
 - token usage accounting
 
@@ -898,7 +898,8 @@ Deliver:
 - ToolCall lifecycle
 - Tool Broker integration
 - permission decision events
-- sandbox selection placeholder
+- sandbox profile resolution through the active execution environment lease
+- sandbox profile enforcement before workspace or process driver execution
 - tool result projection
 
 Gate:

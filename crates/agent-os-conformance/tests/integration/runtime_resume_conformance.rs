@@ -1,9 +1,6 @@
-mod common;
+use crate::common::*;
 use agent_os_store_sqlite::SqliteStore;
-use agent_os_thread::{
-    RuntimeConfig, ScriptedModelClient, ScriptedStep, ThreadRuntime, ToolAction,
-};
-use common::*;
+use agent_os_thread::{RuntimeConfig, ThreadRuntime, ToolAction};
 use std::{env, fs};
 
 #[test]
@@ -54,16 +51,17 @@ fn agent_thread_resumes_after_process_restart_with_persisted_tool_state() {
             workspace_roots: vec![workspace.to_string_lossy().to_string()],
         })
         .unwrap();
-    let first_script = ScriptedModelClient::new(vec![ScriptedStep::ToolCall(ToolAction::new(
-        "write_file",
-        json!({
-            "workspace_root": workspace.to_string_lossy(),
-            "path": "result.md",
-            "content": "written before restart\n"
-        }),
-        4,
-        Some("result was written before restart".to_string()),
-    ))]);
+    let first_script =
+        DeterministicModelClient::new(vec![DeterministicStep::ToolCall(ToolAction::new(
+            "write_file",
+            json!({
+                "workspace_root": workspace.to_string_lossy(),
+                "path": "result.md",
+                "content": "written before restart\n"
+            }),
+            4,
+            Some("result was written before restart".to_string()),
+        ))]);
     let mut first_runtime =
         ThreadRuntime::new(first_kernel.clone(), agent.thread_id.clone(), first_script);
     assert!(first_runtime
@@ -84,6 +82,10 @@ fn agent_thread_resumes_after_process_restart_with_persisted_tool_state() {
             .status,
         ThreadStatus::Running
     );
+    let reconciliation = resumed_kernel
+        .reconcile_thread_recovery(&agent.thread_id)
+        .unwrap();
+    assert_eq!(reconciliation.workspace_diff_refs.len(), 1);
     resumed_kernel
         .transition_thread(
             &agent.thread_id,
@@ -99,7 +101,7 @@ fn agent_thread_resumes_after_process_restart_with_persisted_tool_state() {
         )
         .unwrap();
 
-    let final_script = ScriptedModelClient::new(vec![ScriptedStep::Final {
+    let final_script = DeterministicModelClient::new(vec![DeterministicStep::Final {
         summary: "Resumed from durable state.".to_string(),
         known_risks: Vec::new(),
         tests_run: Vec::new(),

@@ -162,7 +162,6 @@ fn tool_definitions_with_privileged_actions(include_privileged_agent_control: bo
                         },
                         "claim": {"type": "string", "description": "What this evidence supports."},
                         "task_id": {"type": "string", "description": "Optional current task id. Omit unless explicitly known."},
-                        "artifact_id": {"type": "string"},
                         "blob_ref": {"type": "string"},
                         "content_hash": {"type": "string"},
                         "inline_content": {"type": "string", "description": "Small inline evidence payload when no blob_ref exists."},
@@ -214,7 +213,7 @@ fn tool_definitions_with_privileged_actions(include_privileged_agent_control: bo
             "type": "function",
             "function": {
                 "name": "ask_human",
-                "description": "Ask for human input through the Agent-OS Human route. Use only when human judgment or approval is genuinely required; Worker roles may be denied by policy.",
+                "description": "Ask for human input through the Agent-OS Human route. This records delivery of the question; do not repeat it or wait for an answer unless the task explicitly requires a blocking human reply. Worker roles may be denied by policy.",
                 "parameters": {
                     "type": "object",
                     "required": ["question"],
@@ -267,7 +266,7 @@ fn tool_definitions_with_privileged_actions(include_privileged_agent_control: bo
             "type": "function",
             "function": {
                 "name": "submit_final",
-                "description": "Submit the final task result to Agent-OS. Call only when the work is complete or a blocker is evidence-backed. The runtime attaches changed artifacts and tool evidence from prior calls.",
+                "description": "Submit the final task result to Agent-OS. Call immediately once requested work and verification are complete, or when a blocker is evidence-backed. Do not repeat successful tool calls before this. The runtime attaches changed artifacts and tool evidence from prior calls.",
                 "parameters": {
                     "type": "object",
                     "required": ["summary"],

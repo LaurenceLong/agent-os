@@ -120,7 +120,9 @@ Examples:
 - `BudgetDebited`
 - `BudgetExhausted`
 - `ProviderProfileResolved`
-- `ProviderFallbackApplied`
+- `ProviderStreamSessionOpened`
+- `ProviderRetry`
+- `ProviderStreamFailed`
 - `ProviderUsageRecorded`
 - `CommunicationMessageSent`
 - `CommunicationMessageDelivered`

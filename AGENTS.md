@@ -1,24 +1,22 @@
 # Agent-OS Project Rules
 
-This repository is already released. Treat every change as a maintained forward
-change, not as a greenfield rewrite.
+This repository is not released. Treat every change as part of a greenfield,
+forward-only system design.
 
-## Non-Negotiable Compatibility Rules
+## Non-Negotiable Forward-Only Rules
 
-- Backward compatibility matters. Prefer the safest maintainable forward change
-  that does not break existing users.
-- Do not remove supported behavior, fallbacks, compatibility aliases, legacy
-  code paths, or persisted-state handling unless the task explicitly requests it
-  and includes a clear migration plan.
-- Database and event-store changes require extra care. SQLite schemas,
-  migrations, replay behavior, idempotency records, and persisted event payloads
-  must remain readable by newer code unless an explicit migration plan says
-  otherwise.
-- Preserve existing public APIs, CLI flags, environment variables, serialized
-  JSON shapes, tool names, provider adapter styles, and profile identifiers by
-  default.
-- Compatibility shims may be cleaned up only after the replacement path is
-  documented, tested, and safe for existing state.
+- Choose the cleanest current contract over preserving old behavior.
+- Do not add fallbacks, compatibility layers, legacy adapters, deprecated paths,
+  migration shims, feature flags, or temporary workarounds.
+- When existing code conflicts with the intended architecture, refactor or
+  remove it instead of adapting around it.
+- Prefer one canonical implementation path over multiple supported paths.
+- Public APIs, CLI flags, environment variables, serialized JSON shapes, tool
+  names, provider adapter styles, and profile identifiers may change when the
+  forward design is clearer.
+- Database and event-store changes must preserve deterministic behavior for the
+  current schema and current event model. Historical compatibility with older
+  persisted state is not required for this build.
 
 ## Architecture Boundaries
 
@@ -45,35 +43,39 @@ change, not as a greenfield rewrite.
 - Files over 1000 lines are considered architectural debt. Do not add new
   responsibilities to them; extract cohesive modules first.
 - Test files may be larger than production modules, but long tests must still be
-  organized by scenario and helper modules.
+  organized by scenario and fixture modules.
 - Split by ownership, not by arbitrary line count. Good splits include:
   provider client, prompt/message construction, tool schema, parser, runtime
   loop, tool driver family, profile seed family, and test fixtures.
-- Avoid dumping unrelated helpers into `lib.rs`, `mod.rs`, or a broad `util.rs`.
-  Facade modules should mostly declare modules and re-export stable types.
+- Avoid dumping unrelated shared routines into `lib.rs`, `mod.rs`, or a broad
+  `util.rs`. Facade modules should mostly declare modules and re-export stable
+  types.
 
 ## Implementation Style
 
 - Make small, coherent changes that match the existing crate boundary.
 - Prefer typed structs/enums and serde-compatible schemas over ad hoc string
   parsing.
-- Keep compatibility aliases when accepting input from users, configs, or
-  providers.
-- Keep fallbacks that protect existing deployments unless a migration explicitly
-  removes them.
-- Add comments only for non-obvious invariants, compatibility behavior, or
+- Keep the implementation simple, direct, and explicit by default.
+- Do not introduce helper functions as an implementation pattern. Keep logic in
+  its owning function unless extraction creates a named domain operation,
+  ownership boundary, or independently testable contract.
+- Do not add wrappers, utility layers, adapters, or indirection merely to look
+  more modular.
+- Add comments only for non-obvious invariants, forward-only contract choices, or
   security-sensitive decisions.
 - Do not introduce a new framework or runtime dependency for core Agent-OS
   behavior without an ADR.
 
 ## Storage And Migration Rules
 
-- Schema migrations must be versioned, deterministic, and tested.
-- New persisted fields should be additive where possible.
-- Deserializers should tolerate older records when safe.
-- Replay must remain deterministic for existing event streams.
+- Schema changes must be versioned, deterministic, and tested when a physical
+  schema migration exists.
+- Persisted fields and event payloads should model the current contract directly.
+- Deserializers should reject records that do not match the current contract.
+- Replay must remain deterministic for current event streams.
 - Before changing store schemas or event payloads, update conformance tests that
-  exercise restart, replay, migration versioning, and idempotency.
+  exercise restart, replay, versioning, and idempotency.
 
 ## Testing Rules
 
@@ -103,7 +105,7 @@ change, not as a greenfield rewrite.
   subcommand/action in that tool surface. For `agent_control`, cover `start`,
   `status`, `output`, `set_hook`, `send`, `resume`, `stop`, `set_timeout`,
   `export_trace`, `kill`, `delete_session`, and `purge_state`, including
-  privileged success, denial, and currently unsupported append-only-store paths.
+  privileged success, denial, and append-only-store rejection paths.
 - `submit_final` must be covered both as a kernel tool-broker integration path
   and as the model-visible final-submission path through the runtime loop.
 - Goal-driven live tests should use the normal system prompt and normal runtime
@@ -114,7 +116,7 @@ change, not as a greenfield rewrite.
   tests at the right tier and should emit inspectable audit logs when the
   behavior is hard to see otherwise.
 - Shared test fixtures live in `tests/common` or a narrow crate-local support
-  module. Keep helpers scenario-focused and avoid dumping unrelated utilities
+  module. Keep fixtures scenario-focused and avoid dumping unrelated utilities
   into broad fixture files.
 - Run the relevant test suite and `cargo clippy --workspace --all-targets -- -D
   warnings` before handing off when feasible.
@@ -132,7 +134,7 @@ change, not as a greenfield rewrite.
   Do not treat documented out-of-scope roadmap items as immediate release
   blockers unless the task explicitly asks for them.
 - After code changes, write a post-fix audit document that records the new
-  validation results, changed files, implemented fixes, compatibility notes, and
+  validation results, changed files, implemented fixes, forward-only notes, and
   remaining gaps.
 - When the audit changes public behavior, tool schemas, runtime behavior,
   storage behavior, or conformance expectations, update focused tests in the

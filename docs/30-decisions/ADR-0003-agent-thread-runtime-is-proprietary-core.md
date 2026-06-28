@@ -24,7 +24,9 @@ Open-source agent frameworks do not provide this exact execution contract.
 
 Agent-OS will implement its own Agent Thread Runtime.
 
-Open-source agents may be supported as guest runtimes or compatibility layers only if all state changes, tool calls, artifacts, and evidence flow through Agent-OS kernel contracts.
+External agent frameworks may run only as distribution packages or external
+tools that use Agent-OS kernel contracts directly. All state changes, tool
+calls, artifacts, and evidence must flow through the kernel contract.
 
 ## Consequences
 

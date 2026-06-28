@@ -1,5 +1,6 @@
 use crate::{
-    ArtifactRecord, ModelAction, ModelClient, ModelTurnRequest, ToolAction, ToolExecutionRecord,
+    ArtifactRecord, ModelAction, ModelClient, ModelContextProjection, ModelTurnRequest, ToolAction,
+    ToolExecutionRecord,
 };
 use agent_os_kernel::{
     CommitArtifactInput, CompleteTaskInput, Kernel, ToolInvokeInput, UpdateTaskInput,
@@ -8,6 +9,9 @@ use agent_os_sys::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::PathBuf;
+
+const MAX_PROJECTED_TOOL_RESULTS: usize = 8;
+const MAX_PROJECTED_ARTIFACTS: usize = 8;
 
 #[derive(Debug, Clone)]
 pub struct RuntimeConfig {
@@ -118,16 +122,130 @@ impl<C: ModelClient> ThreadRuntime<C> {
         let mut final_submitted = false;
 
         for step_index in 0..config.max_steps {
+            // Yield boundary: before model call.
+            self.kernel.record_checkpoint(
+                &acb.thread_id,
+                format!("ckpt_before_model_{}", new_id("y_")),
+            )?;
             let stream = self.open_stream_session(&acb, step_index, &config)?;
             provider_stream_session_ids.push(stream.session_id.clone());
+            let state = self.kernel.state_snapshot()?;
+            let tool_result_recent_start = tool_results
+                .len()
+                .saturating_sub(MAX_PROJECTED_TOOL_RESULTS);
+            let projected_tool_results = tool_results
+                .iter()
+                .enumerate()
+                .filter(|(index, result)| {
+                    *index >= tool_result_recent_start || !result.evidence_ids.is_empty()
+                })
+                .map(|(_, result)| result.clone())
+                .collect();
+            let artifact_recent_start = artifacts.len().saturating_sub(MAX_PROJECTED_ARTIFACTS);
+            let projected_artifacts = artifacts
+                .iter()
+                .enumerate()
+                .filter(|(index, artifact)| {
+                    *index >= artifact_recent_start || !artifact.evidence_ids.is_empty()
+                })
+                .map(|(_, artifact)| artifact.clone())
+                .collect();
+            let mut context_snapshots: Vec<_> = state
+                .context_snapshots
+                .values()
+                .filter(|snapshot| {
+                    snapshot.task_id == acb.task.task_id
+                        && snapshot.freshness == ContextFreshness::Fresh
+                })
+                .cloned()
+                .collect();
+            context_snapshots.sort_by(|left, right| {
+                left.created_at
+                    .cmp(&right.created_at)
+                    .then_with(|| left.context_id.cmp(&right.context_id))
+            });
+            let mut memory_records: Vec<_> = state
+                .memory_records
+                .values()
+                .filter(|record| record.status == MemoryStatus::Active)
+                .cloned()
+                .collect();
+            memory_records.sort_by(|left, right| {
+                left.created_at
+                    .cmp(&right.created_at)
+                    .then_with(|| left.memory_id.cmp(&right.memory_id))
+            });
+            let mut context_compactions: Vec<_> = state
+                .context_compactions
+                .values()
+                .filter(|compaction| compaction.task_id == acb.task.task_id)
+                .cloned()
+                .collect();
+            context_compactions.sort_by(|left, right| {
+                left.created_at
+                    .cmp(&right.created_at)
+                    .then_with(|| left.compaction_id.cmp(&right.compaction_id))
+            });
+            let provider_profile = state
+                .provider_profiles
+                .get(&acb.config_snapshot.provider_profile_id)
+                .ok_or_else(|| {
+                    AgentOsError::NotFound(format!(
+                        "provider profile {}",
+                        acb.config_snapshot.provider_profile_id
+                    ))
+                })?;
+            let max_attempts = provider_profile
+                .retry_policy
+                .as_ref()
+                .and_then(|policy| policy.get("max_attempts"))
+                .and_then(Value::as_u64)
+                .unwrap_or(1)
+                .max(1);
+            let backoff_ms = provider_profile
+                .retry_policy
+                .as_ref()
+                .and_then(|policy| policy.get("backoff_ms"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
             let request = ModelTurnRequest {
                 thread: acb.clone(),
                 workspace_root: config.workspace_root.clone(),
                 step_index,
-                tool_results: tool_results.clone(),
-                artifacts: artifacts.clone(),
+                context: ModelContextProjection {
+                    tool_results: projected_tool_results,
+                    artifacts: projected_artifacts,
+                    context_snapshots,
+                    memory_records,
+                    context_compactions,
+                },
             };
-            let response = self.model_client.next(&request)?;
+            let mut attempt = 1;
+            let response = loop {
+                match self.model_client.next(&request) {
+                    Ok(response) => break response,
+                    Err(error) => {
+                        if attempt >= max_attempts {
+                            self.kernel
+                                .fail_stream_session(&stream.session_id, error.to_string())?;
+                            return Err(error);
+                        }
+                        self.kernel.record_provider_stream_event(
+                            &stream.session_id,
+                            ProviderStreamEventType::ProviderRetry,
+                            json!({
+                                "attempt": attempt,
+                                "max_attempts": max_attempts,
+                                "error": error.to_string()
+                            }),
+                        )?;
+                        if backoff_ms > 0 {
+                            std::thread::sleep(std::time::Duration::from_millis(backoff_ms));
+                        }
+                        attempt += 1;
+                    }
+                }
+            };
             for action in response.actions {
                 match action {
                     ModelAction::OutputText { text } => {
@@ -152,12 +270,27 @@ impl<C: ModelClient> ThreadRuntime<C> {
                                 &record,
                             )? {
                                 artifacts.push(artifact);
+                                // Yield boundary: after artifact commit.
+                                self.kernel.record_checkpoint(
+                                    &acb.thread_id,
+                                    format!("ckpt_after_artifact_commit_{}", new_id("y_")),
+                                )?;
                             }
                         }
                         enforce_tool_policy(&record, &config)?;
                         tool_results.push(record);
+                        // Yield boundary: after tool result.
+                        self.kernel.record_checkpoint(
+                            &acb.thread_id,
+                            format!("ckpt_after_tool_{}", new_id("y_")),
+                        )?;
                     }
                     ModelAction::Final { submission } => {
+                        // Yield boundary: before final submission.
+                        self.kernel.record_checkpoint(
+                            &acb.thread_id,
+                            format!("ckpt_before_final_{}", new_id("y_")),
+                        )?;
                         self.complete_with_final(&acb, &artifacts, &tool_results, submission)?;
                         final_submitted = true;
                     }
@@ -328,7 +461,7 @@ impl<C: ModelClient> ThreadRuntime<C> {
             Some("runtime final submitted".to_string()),
         )?;
         self.kernel
-            .record_checkpoint(&acb.thread_id, new_id("ckpt_"))?;
+            .record_checkpoint(&acb.thread_id, format!("ckpt_after_task_{}", new_id("y_")))?;
         Ok(())
     }
 

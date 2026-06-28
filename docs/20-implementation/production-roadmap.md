@@ -369,7 +369,7 @@ Deliverables:
 - package registry format
 - package signing
 - conformance test suite
-- compatibility labels
+- conformance labels
 - distro template
 - SDKs for TypeScript, Python, and Rust
 
@@ -378,4 +378,4 @@ Acceptance gates:
 - third-party agent package can be installed with declared capabilities
 - incompatible package is rejected
 - distribution can run conformance suite
-- compatibility report is machine-readable
+- conformance report is machine-readable

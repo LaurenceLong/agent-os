@@ -24,6 +24,10 @@ pub(crate) fn run_resume(options: &ResumeOptions) -> AgentOsResult<Value> {
         .get(&options.thread_id)
         .cloned()
         .ok_or_else(|| AgentOsError::NotFound(format!("thread {}", options.thread_id)))?;
+    // Reconcile durable state left mid-flight (orphan tool calls, expired
+    // leases) before resuming, per the recovery contract in
+    // `docs/10-kernel-design/agent-thread-core-module.md:747-770`.
+    let reconciliation = kernel.reconcile_thread_recovery(&options.thread_id)?;
     prepare_thread_for_resume(&kernel, &options.thread_id)?;
 
     let client =
@@ -56,6 +60,13 @@ pub(crate) fn run_resume(options: &ResumeOptions) -> AgentOsResult<Value> {
             "artifacts": replayed_state.artifacts.len(),
             "evidence": replayed_state.evidence.len(),
             "final_submissions": replayed_state.final_submissions.len()
+        },
+        "reconciliation": {
+            "reconciliation_id": reconciliation.reconciliation_id,
+            "orphan_tool_call_ids": reconciliation.orphan_tool_call_ids,
+            "workspace_diff_refs": reconciliation.workspace_diff_refs,
+            "reclaimed_resource_lease_ids": reconciliation.reclaimed_resource_lease_ids,
+            "reclaimed_environment_lease_ids": reconciliation.reclaimed_environment_lease_ids
         }
     }))
 }

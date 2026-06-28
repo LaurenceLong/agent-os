@@ -81,7 +81,6 @@ mod tests {
     use serde_json::json;
     use std::env;
     use std::fs;
-    use std::path::Path;
 
     #[test]
     fn external_process_client_reads_json_response() {
@@ -91,8 +90,13 @@ mod tests {
             new_id("case_")
         ));
         fs::create_dir_all(&workspace).unwrap();
-        let helper = compile_helper(
-            &workspace,
+        let source_path = workspace.join("external_model_success.rs");
+        let model_program = workspace.join(format!(
+            "external_model_success{}",
+            std::env::consts::EXE_SUFFIX
+        ));
+        fs::write(
+            &source_path,
             r##"
 use std::io::{self, Read, Write};
 
@@ -103,6 +107,19 @@ fn main() {
     io::stdout().write_all(br#"{"actions":[{"type":"output_text","text":"external model response"}],"usage":{"input_tokens":3,"output_tokens":2,"cost":0.0}}"#).unwrap();
 }
 "##,
+        )
+        .unwrap();
+        let output = Command::new("rustc")
+            .arg(&source_path)
+            .arg("-o")
+            .arg(&model_program)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "rustc failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
         );
 
         let kernel = Kernel::new();
@@ -144,14 +161,13 @@ fn main() {
             })
             .unwrap();
 
-        let mut client = ExternalProcessModelClient::new(helper, Vec::new());
+        let mut client = ExternalProcessModelClient::new(model_program, Vec::new());
         let response = client
             .next(&ModelTurnRequest {
                 thread: agent,
                 workspace_root: workspace.clone(),
                 step_index: 7,
-                tool_results: Vec::new(),
-                artifacts: Vec::new(),
+                context: crate::ModelContextProjection::default(),
             })
             .unwrap();
         assert_eq!(response.usage.input_tokens, 3);
@@ -170,14 +186,32 @@ fn main() {
             new_id("case_")
         ));
         fs::create_dir_all(&workspace).unwrap();
-        let helper = compile_helper(
-            &workspace,
+        let source_path = workspace.join("external_model_failure.rs");
+        let model_program = workspace.join(format!(
+            "external_model_failure{}",
+            std::env::consts::EXE_SUFFIX
+        ));
+        fs::write(
+            &source_path,
             r#"
 fn main() {
     eprintln!("model backend unavailable");
     std::process::exit(17);
 }
 "#,
+        )
+        .unwrap();
+        let output = Command::new("rustc")
+            .arg(&source_path)
+            .arg("-o")
+            .arg(&model_program)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "rustc failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
         );
         let kernel = Kernel::new();
         let goal = kernel
@@ -218,56 +252,18 @@ fn main() {
             })
             .unwrap();
 
-        let mut client = ExternalProcessModelClient::new(helper, Vec::new());
+        let mut client = ExternalProcessModelClient::new(model_program, Vec::new());
         let err = client
             .next(&ModelTurnRequest {
                 thread: agent,
                 workspace_root: workspace.clone(),
                 step_index: 0,
-                tool_results: Vec::new(),
-                artifacts: Vec::new(),
+                context: crate::ModelContextProjection::default(),
             })
             .unwrap_err();
         assert!(
             matches!(err, AgentOsError::Validation(message) if message.contains("model backend unavailable"))
         );
         let _ = fs::remove_dir_all(workspace);
-    }
-
-    fn compile_helper(workspace: &Path, source: &str) -> PathBuf {
-        let source_path = workspace.join("external_model_helper.rs");
-        let helper_path = workspace.join(format!(
-            "external_model_helper{}",
-            std::env::consts::EXE_SUFFIX
-        ));
-        fs::write(&source_path, source).unwrap();
-        let output = Command::new(rustc_path())
-            .arg(&source_path)
-            .arg("-o")
-            .arg(&helper_path)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "rustc failed\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        helper_path
-    }
-
-    fn rustc_path() -> PathBuf {
-        if let Some(rustc) = env::var_os("RUSTC") {
-            return rustc.into();
-        }
-        if let Some(cargo_home) = env::var_os("CARGO_HOME") {
-            let candidate = PathBuf::from(cargo_home)
-                .join("bin")
-                .join(format!("rustc{}", std::env::consts::EXE_SUFFIX));
-            if candidate.exists() {
-                return candidate;
-            }
-        }
-        PathBuf::from("rustc")
     }
 }

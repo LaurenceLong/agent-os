@@ -11,20 +11,18 @@ mod model;
 mod openai;
 mod ops;
 mod runtime;
-mod scripted;
 mod software;
 mod types;
 
 pub use external::ExternalProcessModelClient;
 pub use handle::AgentThreadHandle;
 pub use model::{
-    ArtifactRecord, ModelAction, ModelClient, ModelTurnRequest, ModelTurnResponse, ToolAction,
-    ToolExecutionRecord,
+    ArtifactRecord, ModelAction, ModelClient, ModelContextProjection, ModelTurnRequest,
+    ModelTurnResponse, ToolAction, ToolExecutionRecord,
 };
 pub use openai::{LlmApiStyle, OpenAiModelClient};
-pub use ops::mock_turn_start_op;
+pub use ops::turn_start_op;
 pub use runtime::{RuntimeConfig, RuntimeRunOverrides, RuntimeRunReport, ThreadRuntime};
-pub use scripted::{ScriptedModelClient, ScriptedStep};
 pub use software::{
     ReviewRevision, SoftwareCodeTask, SoftwareEditPlanSource, SoftwareEngineeringPipeline,
     SoftwarePipelineReport, SoftwareReplaySummary,

@@ -447,9 +447,9 @@ pub(crate) fn usage_json() -> Value {
         "chat_options": {
             "--workspace, -w": "Workspace directory. Default: .",
             "--task, -t": "Initial task to run before entering interactive mode.",
-            "--api-key": "LLM API key. Can also be set via LLM_API_KEY or OPENAI_API_KEY.",
-            "--api-base": "API base URL (default: https://api.openai.com/v1). Can also be LLM_BASE_URL or OPENAI_API_BASE. /anthropic bases use Anthropic-compatible calling.",
-            "--model, -m": "Model name (default: gpt-4o). Can also be LLM_MODEL or AGENT_OS_MODEL.",
+            "--api-key": "LLM API key. Can also be set via LLM_API_KEY.",
+            "--api-base": "API base URL (default: https://api.openai.com/v1). Can also be LLM_BASE_URL. /anthropic bases use Anthropic-compatible calling.",
+            "--model, -m": "Model name (default: gpt-4o). Can also be LLM_MODEL.",
             "--max-steps": "Maximum agent steps per task. Default: 32",
             "--max-tokens": "Maximum output tokens per model call.",
             "--temperature": "Model temperature (0.0 = deterministic). Default: 0.0",

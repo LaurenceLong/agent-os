@@ -463,7 +463,13 @@ name: string
 default_provider_id: string | null
 default_model_alias: string | null
 routing_policy_id: string
-fallback_chain: string[]
+allowed_model_aliases: string[]
+credential_ref:
+  credential_ref_id: string
+  source: Environment | SecretStore | WorkerScope
+  name: string
+retry_policy: object | null
+transform_policy: object | null
 reasoning_defaults: object
 tool_visibility_profile: string | null
 timeout_ms: integer | null
@@ -477,6 +483,10 @@ Rules:
 
 - Provider Profile is system-level configuration.
 - Agent Threads bind to profiles; they do not inline provider SDK configuration.
+- Credential references are opaque to Agent Threads. Threads may see the
+  `credential_ref_id` selected for audit, but not the raw secret value.
+- Retry policy is exhausted before a stream fails closed. Provider profiles keep
+  one selected route per stream session.
 
 ## 18. ModelAlias
 

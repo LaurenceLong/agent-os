@@ -24,7 +24,6 @@ fn chat_session_reports_summary() {
 #[test]
 fn resolve_api_key_requires_key() {
     std::env::remove_var("LLM_API_KEY");
-    std::env::remove_var("OPENAI_API_KEY");
     let options = ChatOptions {
         workspace: std::path::PathBuf::from("."),
         task: None,

@@ -120,8 +120,7 @@ pub(super) fn make_kernel_request_for_role_on_kernel_with_requirements(
         thread: agent,
         workspace_root: workspace.to_path_buf(),
         step_index: 0,
-        tool_results: Vec::new(),
-        artifacts: Vec::new(),
+        context: ModelContextProjection::default(),
     };
     (kernel, request)
 }

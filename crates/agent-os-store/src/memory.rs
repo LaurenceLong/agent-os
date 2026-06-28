@@ -1,4 +1,4 @@
-use crate::{EventStore, IdempotencyStore};
+use crate::{EventStore, IdempotencyStore, ProjectionStore};
 use agent_os_sys::{AgentOsError, AgentOsResult, EventEnvelope, SyscallResult};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -78,6 +78,20 @@ impl IdempotencyStore for InMemoryStore {
             ));
         }
         Ok(())
+    }
+}
+
+// In-memory driver supports the projection-family store traits via the
+// event-derived blanket implementations.
+impl ProjectionStore for InMemoryStore {
+    fn events_by_aggregate_type(&self, aggregate_type: &str) -> AgentOsResult<Vec<EventEnvelope>> {
+        Ok(self
+            .read()?
+            .events
+            .iter()
+            .filter(|event| event.aggregate_type == aggregate_type)
+            .cloned()
+            .collect())
     }
 }
 

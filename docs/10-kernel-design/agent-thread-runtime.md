@@ -22,7 +22,9 @@ An Agent Thread MUST NOT be defined as:
 - an OpenHands agent
 - a generic function-calling wrapper
 
-Those systems can be hosted behind compatibility layers, but the Agent Thread Runtime is part of Agent-OS core infrastructure.
+Those systems can integrate only through distribution packages or external tools
+that use Agent-OS kernel contracts directly. The Agent Thread Runtime is part of
+Agent-OS core infrastructure.
 
 ## 2. Agent Control Block
 

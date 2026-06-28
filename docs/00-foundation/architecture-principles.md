@@ -140,15 +140,14 @@ Object storage is the production artifact blob driver.
 
 The kernel contract is the event and state schema, not the database engine.
 
-## 8. Compatibility Principle
+## 8. Ecosystem Boundary Principle
 
-Existing open-source agent frameworks can be supported as:
+External agent frameworks can participate as:
 
-- guest agents
-- model adapters
-- tool adapters
-- compatibility distributions
-- experimental workloads
+- distribution packages
+- external tools
+- model providers
+- experimental workloads that use the current kernel contract
 
 They MUST NOT be allowed to define:
 
@@ -159,7 +158,8 @@ They MUST NOT be allowed to define:
 - kernel state layout
 - scheduling contract
 
-Compatibility should make Agent-OS useful to the ecosystem without surrendering the kernel.
+Ecosystem integration should make Agent-OS useful without surrendering the
+kernel contract or introducing alternate execution layers.
 
 ## 9. Production-First Principle
 
@@ -176,7 +176,7 @@ Production-first does not mean cloud-first. It means:
 - conformance tests
 - idempotent tool execution
 - signed packages where needed
-- compatibility gates
+- conformance gates
 
 Toy demos that cannot survive failure, review, or replay are not acceptable as architectural foundations.
 
