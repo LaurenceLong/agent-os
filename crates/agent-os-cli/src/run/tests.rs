@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[test]
-fn cli_run_completes_e2e_task_and_writes_output() {
+fn cli_run_completes_workspace_task_and_writes_output() {
     let workspace = env::temp_dir().join(format!(
-        "agent-os-cli-e2e-{}-{}",
+        "agent-os-cli-run-{}-{}",
         std::process::id(),
         new_id("case_")
     ));

@@ -4,9 +4,9 @@ use std::fs;
 mod common;
 
 #[test]
-fn openai_adapter_pattern_drives_full_e2e_task() {
+fn openai_adapter_pattern_drives_full_integration_task() {
     let workspace = env::temp_dir().join(format!(
-        "aos-openai-e2e-{}-{}",
+        "aos-openai-integration-{}-{}",
         std::process::id(),
         common::new_id("case_")
     ));
@@ -20,7 +20,7 @@ fn openai_adapter_pattern_drives_full_e2e_task() {
     let kernel = common::Kernel::new();
     let goal = kernel
         .register_goal(common::RegisterGoalInput {
-            namespace: "openai-e2e".to_string(),
+            namespace: "openai-integration".to_string(),
             created_by: "conformance".to_string(),
             title: "Change add to multiply".to_string(),
             description: "Change the add function to multiply".to_string(),

@@ -12,6 +12,7 @@ pub(super) fn run_agent_control(
 ) -> AgentOsResult<Value> {
     let action_text = required_string(input, "action")?;
     let action = parse_agent_control_action(&action_text)?;
+    require_agent_control_action_risk(action, syscall.risk_level)?;
     let payload = input.get("payload").cloned().unwrap_or_else(|| json!({}));
     let requester = kernel
         .thread_by_agent(&syscall.agent_id)?
@@ -116,11 +117,10 @@ pub(super) fn run_agent_control(
         | AgentControlAction::Stop
         | AgentControlAction::SetTimeout
         | AgentControlAction::ExportTrace
-        | AgentControlAction::Kill
-        | AgentControlAction::DeleteSession
-        | AgentControlAction::PurgeState => {
+        | AgentControlAction::Kill => {
             let target = resolve_agent_control_target(kernel, input, &payload)?;
-            record_agent_control_command(
+            let action_result = apply_lifecycle_action(kernel, syscall, action, &target, &payload)?;
+            let command = record_agent_control_command(
                 kernel,
                 syscall,
                 &requester,
@@ -136,12 +136,241 @@ pub(super) fn run_agent_control(
                 "driver_class": descriptor.driver_class,
                 "agent_id": target.agent_id,
                 "thread_id": target.thread_id,
-                "thread_status": target.status,
-                "output": [],
+                "command_id": command.command_id,
+                "thread_status": action_result.thread_status,
+                "output": action_result.output,
                 "cursor": null,
             }))
         }
+        AgentControlAction::DeleteSession | AgentControlAction::PurgeState => {
+            let target = resolve_agent_control_target(kernel, input, &payload)?;
+            record_agent_control_command(
+                kernel,
+                syscall,
+                &requester,
+                Some(&target),
+                action,
+                payload,
+                AgentControlCommandStatus::Rejected,
+            )?;
+            Err(AgentOsError::Unsupported(format!(
+                "agent_control action {action_text} is not available in the append-only v0.1 store"
+            )))
+        }
     }
+}
+
+struct AgentControlActionResult {
+    thread_status: ThreadStatus,
+    output: Value,
+}
+
+fn apply_lifecycle_action(
+    kernel: &Kernel,
+    syscall: &SyscallEnvelope,
+    action: AgentControlAction,
+    target: &AgentControlBlock,
+    payload: &Value,
+) -> AgentOsResult<AgentControlActionResult> {
+    match action {
+        AgentControlAction::Output => output_for_target(kernel, target),
+        AgentControlAction::Send => Ok(AgentControlActionResult {
+            thread_status: target.status,
+            output: json!({
+                "sent": true,
+                "payload": payload,
+            }),
+        }),
+        AgentControlAction::Resume => {
+            let acb = kernel.transition_thread(
+                &target.thread_id,
+                ThreadStatus::Ready,
+                Some("agent_control resume".to_string()),
+            )?;
+            Ok(AgentControlActionResult {
+                thread_status: acb.status,
+                output: json!({"resumed": true}),
+            })
+        }
+        AgentControlAction::Stop => {
+            let acb = terminate_target(
+                kernel,
+                target,
+                ThreadStatus::Terminated,
+                "agent_control stop",
+            )?;
+            Ok(AgentControlActionResult {
+                thread_status: acb.status,
+                output: json!({"stopped": true}),
+            })
+        }
+        AgentControlAction::SetTimeout => {
+            let acb = set_timeout_budget(kernel, syscall, target, payload)?;
+            Ok(AgentControlActionResult {
+                thread_status: acb.status,
+                output: json!({
+                    "timeout_ms": acb.budgets.wall_time_budget_ms,
+                }),
+            })
+        }
+        AgentControlAction::ExportTrace => export_trace_for_target(kernel, target),
+        AgentControlAction::Kill => {
+            let acb = terminate_target(
+                kernel,
+                target,
+                ThreadStatus::Terminated,
+                "agent_control kill",
+            )?;
+            Ok(AgentControlActionResult {
+                thread_status: acb.status,
+                output: json!({"killed": true}),
+            })
+        }
+        AgentControlAction::Start
+        | AgentControlAction::Status
+        | AgentControlAction::SetHook
+        | AgentControlAction::DeleteSession
+        | AgentControlAction::PurgeState => Err(AgentOsError::Unsupported(
+            "unsupported lifecycle helper action".to_string(),
+        )),
+    }
+}
+
+fn output_for_target(
+    kernel: &Kernel,
+    target: &AgentControlBlock,
+) -> AgentOsResult<AgentControlActionResult> {
+    let state = kernel.read_state()?;
+    let mut output: Vec<Value> = state
+        .provider_stream_sessions
+        .values()
+        .filter(|session| session.request.thread_id == target.thread_id)
+        .flat_map(|session| {
+            session.stream_events.iter().map(|event| {
+                json!({
+                    "session_id": session.session_id,
+                    "event_id": event.event_id,
+                    "event_type": event.event_type,
+                    "payload": event.payload,
+                    "created_at": event.created_at,
+                })
+            })
+        })
+        .collect();
+    output.sort_by(|left, right| {
+        left["created_at"]
+            .as_str()
+            .unwrap_or_default()
+            .cmp(right["created_at"].as_str().unwrap_or_default())
+    });
+    Ok(AgentControlActionResult {
+        thread_status: target.status,
+        output: json!(output),
+    })
+}
+
+fn export_trace_for_target(
+    kernel: &Kernel,
+    target: &AgentControlBlock,
+) -> AgentOsResult<AgentControlActionResult> {
+    let events: Vec<Value> = kernel
+        .events()?
+        .into_iter()
+        .filter(|event| {
+            event.aggregate_id == target.thread_id
+                || event.agent_id.as_deref() == Some(&target.agent_id)
+                || event.task_id.as_deref() == Some(&target.task.task_id)
+        })
+        .map(|event| serde_json::to_value(event).map_err(AgentOsError::from))
+        .collect::<AgentOsResult<Vec<_>>>()?;
+    Ok(AgentControlActionResult {
+        thread_status: target.status,
+        output: json!({
+            "events": events,
+        }),
+    })
+}
+
+fn set_timeout_budget(
+    kernel: &Kernel,
+    syscall: &SyscallEnvelope,
+    target: &AgentControlBlock,
+    payload: &Value,
+) -> AgentOsResult<AgentControlBlock> {
+    let timeout_ms = payload
+        .get("timeout_ms")
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            payload
+                .get("timeout_seconds")
+                .and_then(Value::as_u64)
+                .map(|seconds| seconds.saturating_mul(1000))
+        })
+        .ok_or_else(|| {
+            AgentOsError::Validation(
+                "set_timeout requires timeout_ms or timeout_seconds".to_string(),
+            )
+        })?;
+    let mut acb = target.clone();
+    acb.budgets.wall_time_budget_ms = Some(timeout_ms);
+    acb.audit.updated_at = now_rfc3339();
+    kernel.emit(
+        "ThreadConfigured",
+        "thread",
+        &acb.thread_id,
+        Some(acb.agent_id.clone()),
+        Some(acb.task.task_id.clone()),
+        Some(syscall.syscall_id.clone()),
+        Some(acb.task.goal_id.clone()),
+        &acb,
+    )?;
+    Ok(acb)
+}
+
+fn terminate_target(
+    kernel: &Kernel,
+    target: &AgentControlBlock,
+    terminal_status: ThreadStatus,
+    reason: &str,
+) -> AgentOsResult<AgentControlBlock> {
+    match kernel.transition_thread(&target.thread_id, terminal_status, Some(reason.to_string())) {
+        Ok(acb) => Ok(acb),
+        Err(AgentOsError::InvalidTransition(_)) if target.status == ThreadStatus::Running => {
+            kernel.transition_thread(
+                &target.thread_id,
+                ThreadStatus::Interrupted,
+                Some(reason.to_string()),
+            )?;
+            kernel.transition_thread(&target.thread_id, terminal_status, Some(reason.to_string()))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn require_agent_control_action_risk(
+    action: AgentControlAction,
+    risk_level: u8,
+) -> AgentOsResult<()> {
+    let required = match action {
+        AgentControlAction::Kill
+        | AgentControlAction::DeleteSession
+        | AgentControlAction::PurgeState => 6,
+        AgentControlAction::Start
+        | AgentControlAction::SetHook
+        | AgentControlAction::Send
+        | AgentControlAction::Resume
+        | AgentControlAction::Stop
+        | AgentControlAction::SetTimeout => 4,
+        AgentControlAction::Status
+        | AgentControlAction::Output
+        | AgentControlAction::ExportTrace => 1,
+    };
+    if risk_level < required {
+        return Err(AgentOsError::PermissionDenied(format!(
+            "agent_control action requires risk level {required}"
+        )));
+    }
+    Ok(())
 }
 
 fn parse_agent_control_action(value: &str) -> AgentOsResult<AgentControlAction> {

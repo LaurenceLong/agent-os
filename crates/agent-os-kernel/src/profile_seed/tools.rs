@@ -415,6 +415,66 @@ pub(super) fn core_tool_descriptors(now: &str) -> Vec<ToolDescriptor> {
             created_at: now.to_string(),
         },
         ToolDescriptor {
+            tool_id: "tool_submit_final".to_string(),
+            name: "submit_final".to_string(),
+            version: "0.1.0".to_string(),
+            driver_class: ToolDriverClass::KernelBuiltin,
+            risk_level: 2,
+            input_schema: json!({
+                "type": "object",
+                "required": ["summary", "evidence_map"],
+                "properties": {
+                    "summary": {"type": "string"},
+                    "changed_artifacts": {"type": "array", "items": {"type": "string"}},
+                    "evidence_map": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["claim", "evidence_refs"],
+                            "properties": {
+                                "claim": {"type": "string"},
+                                "evidence_refs": {"type": "array", "items": {"type": "string"}}
+                            },
+                            "additionalProperties": false
+                        }
+                    },
+                    "unverified_claims": {"type": "array", "items": {"type": "string"}},
+                    "known_risks": {"type": "array", "items": {"type": "string"}},
+                    "tests_run": {"type": "array", "items": {"type": "string"}},
+                    "tests_not_run": {"type": "array", "items": {"type": "string"}},
+                    "approvals": {"type": "array", "items": {"type": "string"}}
+                },
+                "additionalProperties": false
+            }),
+            output_schema: json!({
+                "type": "object",
+                "required": [
+                    "tool",
+                    "status",
+                    "input",
+                    "driver_class",
+                    "task_id",
+                    "final_submitted",
+                    "summary",
+                    "evidence_map_entries"
+                ],
+                "properties": {
+                    "tool": {"type": "string"},
+                    "status": {"enum": ["ok"]},
+                    "input": {"type": "object"},
+                    "driver_class": {"type": "string"},
+                    "task_id": {"type": "string"},
+                    "final_submitted": {"type": "boolean"},
+                    "summary": {"type": "string"},
+                    "evidence_map_entries": {"type": "integer"}
+                },
+                "additionalProperties": false
+            }),
+            idempotency: IdempotencyMode::KernelDeduplicated,
+            evidence_type: None,
+            created_at: now.to_string(),
+        },
+        ToolDescriptor {
             tool_id: "tool_agent_control".to_string(),
             name: "agent_control".to_string(),
             version: "0.1.0".to_string(),

@@ -279,6 +279,232 @@ fn agent_control_starts_child_and_records_hook_state() {
 }
 
 #[test]
+fn agent_control_lifecycle_actions_update_state_and_trace() {
+    let fx = fixture();
+    let supervisor = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_supervisor".to_string(),
+            owner: "tester".to_string(),
+            local_goal: "supervise lifecycle".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: vec![".".to_string()],
+        })
+        .unwrap();
+    let cap = fx
+        .kernel
+        .grant_capability(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            4,
+            None,
+        )
+        .unwrap();
+
+    let child = fx
+        .kernel
+        .invoke_tool(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            &supervisor.session_id,
+            cap.capability_id.clone(),
+            4,
+            ToolInvokeInput {
+                tool_name: "agent_control".to_string(),
+                input: json!({
+                    "action": "start",
+                    "payload": {
+                        "assignment": "child lifecycle target"
+                    }
+                }),
+                evidence_claim: None,
+            },
+        )
+        .unwrap();
+    let child_thread_id = child.output.as_ref().unwrap()["thread_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let timeout = fx
+        .kernel
+        .invoke_tool(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            &supervisor.session_id,
+            cap.capability_id.clone(),
+            4,
+            ToolInvokeInput {
+                tool_name: "agent_control".to_string(),
+                input: json!({
+                    "action": "set_timeout",
+                    "thread_id": child_thread_id,
+                    "payload": {"timeout_seconds": 45}
+                }),
+                evidence_claim: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        timeout.output.as_ref().unwrap()["output"]["timeout_ms"],
+        json!(45000)
+    );
+
+    fx.kernel
+        .transition_thread(&child_thread_id, ThreadStatus::Ready, None)
+        .unwrap();
+    fx.kernel
+        .transition_thread(&child_thread_id, ThreadStatus::Suspended, None)
+        .unwrap();
+    let resumed = fx
+        .kernel
+        .invoke_tool(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            &supervisor.session_id,
+            cap.capability_id.clone(),
+            4,
+            ToolInvokeInput {
+                tool_name: "agent_control".to_string(),
+                input: json!({
+                    "action": "resume",
+                    "thread_id": child_thread_id
+                }),
+                evidence_claim: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        resumed.output.as_ref().unwrap()["thread_status"],
+        json!("Ready")
+    );
+
+    let trace = fx
+        .kernel
+        .invoke_tool(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            &supervisor.session_id,
+            cap.capability_id.clone(),
+            1,
+            ToolInvokeInput {
+                tool_name: "agent_control".to_string(),
+                input: json!({
+                    "action": "export_trace",
+                    "thread_id": child_thread_id
+                }),
+                evidence_claim: None,
+            },
+        )
+        .unwrap();
+    assert!(trace.output.as_ref().unwrap()["output"]["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|event| event["event_type"] == "ThreadConfigured"));
+
+    let stopped = fx
+        .kernel
+        .invoke_tool(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            &supervisor.session_id,
+            cap.capability_id,
+            4,
+            ToolInvokeInput {
+                tool_name: "agent_control".to_string(),
+                input: json!({
+                    "action": "stop",
+                    "thread_id": child_thread_id
+                }),
+                evidence_claim: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        stopped.output.as_ref().unwrap()["thread_status"],
+        json!("Terminated")
+    );
+    assert_eq!(
+        fx.kernel
+            .state_snapshot()
+            .unwrap()
+            .threads
+            .get(&child_thread_id)
+            .unwrap()
+            .budgets
+            .wall_time_budget_ms,
+        Some(45000)
+    );
+}
+
+#[test]
+fn privileged_agent_control_actions_require_privileged_risk() {
+    let fx = fixture();
+    let supervisor = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_supervisor".to_string(),
+            owner: "tester".to_string(),
+            local_goal: "supervise privileged lifecycle".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: vec![".".to_string()],
+        })
+        .unwrap();
+    let child = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_worker".to_string(),
+            owner: supervisor.agent_id.clone(),
+            local_goal: "target".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: Some(supervisor.thread_id.clone()),
+            workspace_roots: vec![".".to_string()],
+        })
+        .unwrap();
+    let cap = fx
+        .kernel
+        .grant_capability(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            4,
+            None,
+        )
+        .unwrap();
+    let err = fx
+        .kernel
+        .invoke_tool(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            &supervisor.session_id,
+            cap.capability_id,
+            4,
+            ToolInvokeInput {
+                tool_name: "agent_control".to_string(),
+                input: json!({
+                    "action": "kill",
+                    "thread_id": child.thread_id
+                }),
+                evidence_claim: None,
+            },
+        )
+        .unwrap_err();
+    assert!(matches!(err, AgentOsError::PermissionDenied(_)));
+}
+
+#[test]
 fn task_ready_requires_completed_dependencies_and_completion_requires_evidence() {
     let fx = fixture();
     let dependent = fx

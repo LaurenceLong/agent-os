@@ -23,7 +23,7 @@ pub use model::{
 };
 pub use openai::{LlmApiStyle, OpenAiModelClient};
 pub use ops::mock_turn_start_op;
-pub use runtime::{RuntimeConfig, RuntimeRunReport, ThreadRuntime};
+pub use runtime::{RuntimeConfig, RuntimeRunOverrides, RuntimeRunReport, ThreadRuntime};
 pub use scripted::{ScriptedModelClient, ScriptedStep};
 pub use software::{
     ReviewRevision, SoftwareCodeTask, SoftwareEditPlanSource, SoftwareEngineeringPipeline,

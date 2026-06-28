@@ -2,7 +2,7 @@ use super::audit::{append_jsonl, truncate};
 use super::messages::{build_anthropic_messages, build_messages};
 use super::parser::{parse_anthropic_response, parse_response};
 use super::prompt::default_system_prompt;
-use super::tools::{anthropic_tool_definitions, tool_definitions};
+use super::tools::{anthropic_tool_definitions_for_thread, tool_definitions_for_thread};
 use crate::{ModelClient, ModelTurnRequest, ModelTurnResponse};
 use agent_os_sys::*;
 use serde_json::{json, Value};
@@ -155,7 +155,7 @@ impl OpenAiModelClient {
     ) -> AgentOsResult<ModelTurnResponse> {
         let workspace_root = request.workspace_root.to_string_lossy().to_string();
         let messages = build_messages(request, &workspace_root, &self.system_prompt_override);
-        let tools = tool_definitions();
+        let tools = tool_definitions_for_thread(&request.thread);
 
         let body = json!({
             "model": self.model,
@@ -222,7 +222,7 @@ impl OpenAiModelClient {
                 .clone()
                 .unwrap_or_else(|| default_system_prompt(request, &workspace_root)),
             "messages": build_anthropic_messages(request, &workspace_root),
-            "tools": anthropic_tool_definitions(),
+            "tools": anthropic_tool_definitions_for_thread(&request.thread),
             "tool_choice": {"type": "auto"},
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,

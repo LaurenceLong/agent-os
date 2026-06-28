@@ -77,20 +77,66 @@ change, not as a greenfield rewrite.
 
 ## Testing Rules
 
-- Unit tests cover local parsing, schema mapping, permission boundaries, and
-  failure modes.
-- Integration/conformance tests cover crate boundaries and durable contract
-  behavior.
-- Live LLM tests must use real provider responses and keep mock tests clearly
-  labeled as adapter/unit tests.
+- Maintain a practical test mix near 60% unit tests, 25% integration tests, and
+  15% e2e tests by meaningful scenarios and assertions, not by brittle raw line
+  counts. Document any material deviation when the risk profile calls for it.
+- Unit tests cover local parsing, schema mapping, permission boundaries,
+  deterministic reducers, and failure modes. Keep them close to the code under
+  `src/**/tests.rs`, `src/**/tests/*.rs`, or tight `#[cfg(test)]` modules.
+- Integration tests cover crate boundaries and durable contract behavior such as
+  kernel plus store, kernel plus tool broker, runtime plus kernel, and CLI plus
+  library orchestration. Organize new integration tests under
+  `crates/agent-os-conformance/tests/integration/` with a small top-level test
+  target that imports the directory modules.
+- E2E tests must be live LLM tests. They cover normal user or agent goals
+  through the regular runtime loop, normal system prompt, normal model/provider
+  adapter, normal capability grants, and realistic persisted state.
+- E2E tests must not use scripted model clients, mocked provider responses,
+  canned tool results, fake LLM outputs, or mock data standing in for a model
+  decision. Deterministic or mock model clients belong in unit, adapter, or
+  integration tests only and must not live under `e2e` paths or use e2e names.
+- E2E tests may prepare real local workspace fixtures and expected assertions,
+  but every model action in the e2e path must come from a live provider
+  response. Live LLM e2e tests may be `#[ignore]` by default when they require
+  credentials, network access, or provider spend.
+- Goal-driven e2e coverage must exercise every model-visible tool and every
+  subcommand/action in that tool surface. For `agent_control`, cover `start`,
+  `status`, `output`, `set_hook`, `send`, `resume`, `stop`, `set_timeout`,
+  `export_trace`, `kill`, `delete_session`, and `purge_state`, including
+  privileged success, denial, and currently unsupported append-only-store paths.
+- `submit_final` must be covered both as a kernel tool-broker integration path
+  and as the model-visible final-submission path through the runtime loop.
 - Goal-driven live tests should use the normal system prompt and normal runtime
   loop. They may construct a workspace scenario and task goal, but must not add
   hidden per-tool instructions that force a specific call sequence.
-- Any change to prompts, tool schemas, parser behavior, runtime loop, or provider
-  adapters must include focused tests and should emit inspectable audit logs when
-  the behavior is hard to see otherwise.
+- Any change to prompts, tool schemas, parser behavior, runtime loop, provider
+  adapters, storage schemas, migrations, or replay behavior must include focused
+  tests at the right tier and should emit inspectable audit logs when the
+  behavior is hard to see otherwise.
+- Shared test fixtures live in `tests/common` or a narrow crate-local support
+  module. Keep helpers scenario-focused and avoid dumping unrelated utilities
+  into broad fixture files.
 - Run the relevant test suite and `cargo clippy --workspace --all-targets -- -D
   warnings` before handing off when feasible.
+
+## Audit And Fix Workflow
+
+- For design or implementation audits that lead to code changes, use the
+  workflow `audit -> document -> fix -> document`.
+- Store audit records under `docs/audit/`. Create the directory when it is
+  missing.
+- Before editing code, write a pre-fix audit document that records the current
+  Git `HEAD`, Git tree hash, worktree status, audit scope, findings, validation
+  already run, and the intended fix scope.
+- Keep findings split between current-contract gaps and future-roadmap gaps.
+  Do not treat documented out-of-scope roadmap items as immediate release
+  blockers unless the task explicitly asks for them.
+- After code changes, write a post-fix audit document that records the new
+  validation results, changed files, implemented fixes, compatibility notes, and
+  remaining gaps.
+- When the audit changes public behavior, tool schemas, runtime behavior,
+  storage behavior, or conformance expectations, update focused tests in the
+  same change.
 
 ## Working With Dirty Trees
 

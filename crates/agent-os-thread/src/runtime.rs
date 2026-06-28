@@ -34,6 +34,12 @@ impl RuntimeConfig {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct RuntimeRunOverrides {
+    pub sandbox_profile_id: Option<String>,
+    pub tool_approval_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeRunReport {
     pub thread_id: String,
@@ -62,6 +68,14 @@ impl<C: ModelClient> ThreadRuntime<C> {
     }
 
     pub fn run_to_completion(&mut self, config: RuntimeConfig) -> AgentOsResult<RuntimeRunReport> {
+        self.run_to_completion_with_overrides(config, RuntimeRunOverrides::default())
+    }
+
+    pub fn run_to_completion_with_overrides(
+        &mut self,
+        config: RuntimeConfig,
+        overrides: RuntimeRunOverrides,
+    ) -> AgentOsResult<RuntimeRunReport> {
         let mut acb = self.acb()?;
         self.kernel.update_task(UpdateTaskInput {
             task_id: acb.task.task_id.clone(),
@@ -76,7 +90,10 @@ impl<C: ModelClient> ThreadRuntime<C> {
         let env = self.kernel.create_environment(
             BackendType::IsolatedWorktree,
             config.workspace_root.to_string_lossy(),
-            acb.config_snapshot.sandbox_profile_id.clone(),
+            overrides
+                .sandbox_profile_id
+                .clone()
+                .unwrap_or_else(|| acb.config_snapshot.sandbox_profile_id.clone()),
             ReusePolicy::TaskScoped,
         )?;
         let environment_lease = self.kernel.attach_environment(
@@ -92,7 +109,7 @@ impl<C: ModelClient> ThreadRuntime<C> {
             vec!["tool.invoke".to_string()],
             vec!["tool:*".to_string()],
             config.tool_risk_ceiling,
-            None,
+            overrides.tool_approval_id.clone(),
         )?;
 
         let mut provider_stream_session_ids = Vec::new();

@@ -202,7 +202,7 @@ pub(super) fn execute_tool_actions(
     records
 }
 
-pub(super) fn assert_core_tool_e2e_effects(
+pub(super) fn assert_core_tool_mock_effects(
     workspace: &std::path::Path,
     records: &[ToolExecutionRecord],
 ) {
@@ -243,7 +243,7 @@ pub(super) fn assert_core_tool_e2e_effects(
     };
     assert_eq!(
         output_for("set_objective")["objective"],
-        "complete provider-neutral all-tool e2e"
+        "complete provider-neutral all-tool mock adapter coverage"
     );
     assert_eq!(
         output_for("update_checklist")["items"][0]["status"],
@@ -264,7 +264,7 @@ pub(super) fn assert_core_tool_e2e_effects(
     assert_eq!(output_for("ask_human")["delivery_status"], "Delivered");
 }
 
-pub(super) fn write_e2e_interaction_log(file_name: &str, entries: &[Value]) -> std::path::PathBuf {
+pub(super) fn write_mock_interaction_log(file_name: &str, entries: &[Value]) -> std::path::PathBuf {
     let audit_log_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../target/agent-os-audit")
         .join(file_name);
@@ -274,6 +274,6 @@ pub(super) fn write_e2e_interaction_log(file_name: &str, entries: &[Value]) -> s
         use std::io::Write;
         writeln!(audit_log, "{}", serde_json::to_string(entry).unwrap()).unwrap();
     }
-    println!("e2e_interaction_log={}", audit_log_path.display());
+    println!("mock_interaction_log={}", audit_log_path.display());
     audit_log_path
 }

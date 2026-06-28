@@ -1,5 +1,6 @@
 use super::support::*;
 use super::*;
+use crate::openai::tools::{anthropic_tool_definitions_for_thread, tool_definitions_for_thread};
 
 #[test]
 fn build_messages_includes_system_and_user() {
@@ -353,6 +354,65 @@ fn anthropic_tool_definitions_mirror_core_tools() {
     assert!(anthropic_tools
         .iter()
         .all(|tool| tool.get("input_schema").is_some()));
+}
+
+#[test]
+fn worker_tool_view_hides_privileged_agent_control_actions() {
+    let tmp = std::env::temp_dir().join(format!("aos-openai-worker-tools-{}", new_id("t_")));
+    let request = make_request(&tmp);
+    let actions = agent_control_actions(&tool_definitions_for_thread(&request.thread));
+    assert!(actions.contains(&"start".to_string()));
+    assert!(actions.contains(&"stop".to_string()));
+    assert!(!actions.contains(&"kill".to_string()));
+    assert!(!actions.contains(&"delete_session".to_string()));
+    assert!(!actions.contains(&"purge_state".to_string()));
+}
+
+#[test]
+fn supervisor_tool_view_includes_privileged_agent_control_actions() {
+    let tmp = std::env::temp_dir().join(format!("aos-openai-supervisor-tools-{}", new_id("t_")));
+    let (_kernel, request) = make_kernel_request_for_role(
+        &tmp,
+        "role_supervisor",
+        "Supervise privileged action visibility",
+        vec!["tool view is role scoped".to_string()],
+    );
+    let actions = agent_control_actions(&tool_definitions_for_thread(&request.thread));
+    assert!(actions.contains(&"kill".to_string()));
+    assert!(actions.contains(&"delete_session".to_string()));
+    assert!(actions.contains(&"purge_state".to_string()));
+
+    let anthropic_actions = anthropic_tool_definitions_for_thread(&request.thread)
+        .into_iter()
+        .find(|tool| tool.get("name").and_then(Value::as_str) == Some("agent_control"))
+        .and_then(|tool| {
+            tool.pointer("/input_schema/properties/action/enum")
+                .and_then(Value::as_array)
+                .cloned()
+        })
+        .unwrap();
+    assert!(anthropic_actions
+        .iter()
+        .any(|action| action.as_str() == Some("kill")));
+}
+
+fn agent_control_actions(tools: &[Value]) -> Vec<String> {
+    tools
+        .iter()
+        .find(|tool| {
+            tool.get("function")
+                .and_then(|function| function.get("name"))
+                .and_then(Value::as_str)
+                == Some("agent_control")
+        })
+        .and_then(|tool| {
+            tool.pointer("/function/parameters/properties/action/enum")
+                .and_then(Value::as_array)
+        })
+        .into_iter()
+        .flatten()
+        .filter_map(|action| action.as_str().map(str::to_string))
+        .collect()
 }
 
 #[test]

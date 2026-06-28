@@ -213,7 +213,7 @@ fn openai_compatible_mock_adapter_runs_every_core_tool() {
     let (kernel, request) = make_kernel_request_for_role(
         &tmp,
         "role_supervisor",
-        "Supervise provider-neutral mock e2e",
+        "Supervise provider-neutral mock adapter coverage",
         vec!["all core tools return structured results".to_string()],
     );
     let capability = attach_workspace_and_grant(&kernel, &request, 4);
@@ -242,7 +242,7 @@ fn openai_compatible_mock_adapter_runs_every_core_tool() {
         (
             "call_objective",
             "set_objective",
-            json!({"objective": "complete provider-neutral all-tool e2e"}),
+            json!({"objective": "complete provider-neutral all-tool mock adapter coverage"}),
         ),
         (
             "call_checklist",
@@ -264,7 +264,7 @@ fn openai_compatible_mock_adapter_runs_every_core_tool() {
         (
             "call_report",
             "report_supervisor",
-            json!({"message": "provider mock all-tool e2e is progressing"}),
+            json!({"message": "provider mock all-tool coverage is progressing"}),
         ),
         (
             "call_blackboard",
@@ -273,13 +273,13 @@ fn openai_compatible_mock_adapter_runs_every_core_tool() {
                 "channel_id": "risks",
                 "scope": "goal",
                 "section": "risk",
-                "content": {"risk": "mock e2e risk entry"}
+                "content": {"risk": "mock adapter risk entry"}
             }),
         ),
         (
             "call_human",
             "ask_human",
-            json!({"question": "Confirm mock e2e human route wiring?"}),
+            json!({"question": "Confirm mock adapter human route wiring?"}),
         ),
         (
             "call_agent",
@@ -287,7 +287,7 @@ fn openai_compatible_mock_adapter_runs_every_core_tool() {
             json!({
                 "action": "start",
                 "payload": {
-                    "assignment": "inspect provider-neutral mock e2e",
+                    "assignment": "inspect provider-neutral mock adapter coverage",
                     "success_criteria": ["report status"]
                 }
             }),
@@ -316,7 +316,7 @@ fn openai_compatible_mock_adapter_runs_every_core_tool() {
     let response = parse_response(&body, &request).unwrap();
     let parsed_actions = response.actions.clone();
     let records = execute_tool_actions(&kernel, &request, &capability, response.actions);
-    assert_core_tool_e2e_effects(&tmp, &records);
+    assert_core_tool_mock_effects(&tmp, &records);
 
     let next_request = ModelTurnRequest {
         thread: request.thread,
@@ -326,7 +326,7 @@ fn openai_compatible_mock_adapter_runs_every_core_tool() {
         artifacts: Vec::new(),
     };
     let messages = build_messages(&next_request, tmp.to_str().unwrap(), &None);
-    write_e2e_interaction_log(
+    write_mock_interaction_log(
         "openai-compatible-mock-adapter-interaction.jsonl",
         &[
             json!({
@@ -390,7 +390,7 @@ fn anthropic_compatible_mock_adapter_runs_every_core_tool() {
     let (kernel, request) = make_kernel_request_for_role(
         &tmp,
         "role_supervisor",
-        "Supervise provider-neutral mock e2e",
+        "Supervise provider-neutral mock adapter coverage",
         vec!["all core tools return structured results".to_string()],
     );
     let capability = attach_workspace_and_grant(&kernel, &request, 4);
@@ -409,7 +409,7 @@ fn anthropic_compatible_mock_adapter_runs_every_core_tool() {
             {"type": "tool_use", "id": "toolu_replace", "name": "replace_text", "input": {"path": "edit.txt", "old": "old", "new": "new"}},
             {"type": "tool_use", "id": "toolu_delete", "name": "delete_file", "input": {"path": "delete.txt"}},
             {"type": "tool_use", "id": "toolu_run", "name": "run_command", "input": {"program": current_exe.to_string_lossy(), "args": ["--help"]}},
-            {"type": "tool_use", "id": "toolu_objective", "name": "set_objective", "input": {"objective": "complete provider-neutral all-tool e2e"}},
+            {"type": "tool_use", "id": "toolu_objective", "name": "set_objective", "input": {"objective": "complete provider-neutral all-tool mock adapter coverage"}},
             {"type": "tool_use", "id": "toolu_checklist", "name": "update_checklist", "input": {"items": [
                 {"text": "exercise every model-visible tool", "status": "completed"}
             ]}},
@@ -419,18 +419,18 @@ fn anthropic_compatible_mock_adapter_runs_every_core_tool() {
                 "blob_ref": "blob://mock-evidence",
                 "content_hash": "mock-hash"
             }},
-            {"type": "tool_use", "id": "toolu_report", "name": "report_supervisor", "input": {"message": "provider mock all-tool e2e is progressing"}},
+            {"type": "tool_use", "id": "toolu_report", "name": "report_supervisor", "input": {"message": "provider mock all-tool coverage is progressing"}},
             {"type": "tool_use", "id": "toolu_blackboard", "name": "post_blackboard", "input": {
                 "channel_id": "risks",
                 "scope": "goal",
                 "section": "risk",
-                "content": {"risk": "mock e2e risk entry"}
+                "content": {"risk": "mock adapter risk entry"}
             }},
-            {"type": "tool_use", "id": "toolu_human", "name": "ask_human", "input": {"question": "Confirm mock e2e human route wiring?"}},
+            {"type": "tool_use", "id": "toolu_human", "name": "ask_human", "input": {"question": "Confirm mock adapter human route wiring?"}},
             {"type": "tool_use", "id": "toolu_agent", "name": "agent_control", "input": {
                 "action": "start",
                 "payload": {
-                    "assignment": "inspect provider-neutral mock e2e",
+                    "assignment": "inspect provider-neutral mock adapter coverage",
                     "success_criteria": ["report status"]
                 }
             }}
@@ -441,7 +441,7 @@ fn anthropic_compatible_mock_adapter_runs_every_core_tool() {
     assert_eq!(response.usage.input_tokens, 40);
     let parsed_actions = response.actions.clone();
     let records = execute_tool_actions(&kernel, &request, &capability, response.actions);
-    assert_core_tool_e2e_effects(&tmp, &records);
+    assert_core_tool_mock_effects(&tmp, &records);
 
     let next_request = ModelTurnRequest {
         thread: request.thread,
@@ -451,7 +451,7 @@ fn anthropic_compatible_mock_adapter_runs_every_core_tool() {
         artifacts: Vec::new(),
     };
     let messages = build_anthropic_messages(&next_request, tmp.to_str().unwrap());
-    write_e2e_interaction_log(
+    write_mock_interaction_log(
         "anthropic-compatible-mock-adapter-interaction.jsonl",
         &[
             json!({

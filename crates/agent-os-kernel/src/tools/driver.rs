@@ -1,5 +1,6 @@
 mod agent_control;
 mod communication;
+mod session;
 mod work_state;
 mod workspace;
 
@@ -28,6 +29,7 @@ pub(super) fn run_tool_driver(
         "post_blackboard" => communication::run_post_blackboard(kernel, syscall, descriptor, input),
         "ask_human" => communication::run_ask_human(kernel, syscall, descriptor, input),
         "agent_control" => agent_control::run_agent_control(kernel, syscall, descriptor, input),
+        "submit_final" => session::run_submit_final(kernel, syscall, descriptor, input),
         _ => Ok(json!({
             "tool": descriptor.name.clone(),
             "status": "ok",

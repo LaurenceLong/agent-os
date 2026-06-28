@@ -1,7 +1,18 @@
 ﻿use serde_json::{json, Value};
 
+use agent_os_sys::AgentControlBlock;
+
+#[cfg(test)]
 pub(crate) fn tool_definitions() -> Vec<Value> {
-    vec![
+    tool_definitions_with_privileged_actions(true)
+}
+
+pub(crate) fn tool_definitions_for_thread(thread: &AgentControlBlock) -> Vec<Value> {
+    tool_definitions_with_privileged_actions(thread.role == "SupervisorAgent")
+}
+
+fn tool_definitions_with_privileged_actions(include_privileged_agent_control: bool) -> Vec<Value> {
+    let mut tools = vec![
         json!({
             "type": "function",
             "function": {
@@ -269,11 +280,22 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
                 }
             }
         }),
-    ]
+    ];
+    redact_privileged_agent_control_actions(&mut tools, include_privileged_agent_control);
+    tools
 }
 
+#[cfg(test)]
 pub(crate) fn anthropic_tool_definitions() -> Vec<Value> {
-    tool_definitions()
+    openai_tools_to_anthropic(tool_definitions())
+}
+
+pub(crate) fn anthropic_tool_definitions_for_thread(thread: &AgentControlBlock) -> Vec<Value> {
+    openai_tools_to_anthropic(tool_definitions_for_thread(thread))
+}
+
+fn openai_tools_to_anthropic(tools: Vec<Value>) -> Vec<Value> {
+    tools
         .into_iter()
         .filter_map(|tool| {
             let function = tool.get("function")?;
@@ -284,4 +306,29 @@ pub(crate) fn anthropic_tool_definitions() -> Vec<Value> {
             }))
         })
         .collect()
+}
+
+fn redact_privileged_agent_control_actions(tools: &mut [Value], include: bool) {
+    if include {
+        return;
+    }
+    for tool in tools {
+        let name = tool
+            .get("function")
+            .and_then(|function| function.get("name"))
+            .and_then(Value::as_str);
+        if name != Some("agent_control") {
+            continue;
+        }
+        if let Some(actions) = tool
+            .pointer_mut("/function/parameters/properties/action/enum")
+            .and_then(Value::as_array_mut)
+        {
+            actions.retain(|action| {
+                action.as_str().is_none_or(|action| {
+                    !matches!(action, "kill" | "delete_session" | "purge_state")
+                })
+            });
+        }
+    }
 }

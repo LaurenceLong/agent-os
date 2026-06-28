@@ -198,6 +198,63 @@ fn final_submission_requires_active_evidence_map() {
 }
 
 #[test]
+fn submit_final_lifecycle_tool_records_final_submission() {
+    let fx = fixture();
+    let evidence = fx
+        .kernel
+        .attach_evidence(evidence_input(&fx, EvidenceType::SourceRef))
+        .unwrap();
+    let cap = fx
+        .kernel
+        .grant_capability(
+            &fx.worker.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            2,
+            None,
+        )
+        .unwrap();
+    let invocation = fx
+        .kernel
+        .invoke_tool(
+            &fx.worker.agent_id,
+            &fx.task.task_id,
+            &fx.worker.session_id,
+            cap.capability_id,
+            2,
+            ToolInvokeInput {
+                tool_name: "submit_final".to_string(),
+                input: json!({
+                    "summary": "done",
+                    "evidence_map": [{
+                        "claim": "source was inspected",
+                        "evidence_refs": [evidence.evidence_id]
+                    }],
+                    "tests_not_run": ["not required"]
+                }),
+                evidence_claim: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(invocation.status, ToolCallStatus::Completed);
+    assert_eq!(
+        invocation
+            .output
+            .as_ref()
+            .and_then(|output| output.get("final_submitted"))
+            .and_then(|value| value.as_bool()),
+        Some(true)
+    );
+    assert!(fx
+        .kernel
+        .state_snapshot()
+        .unwrap()
+        .final_submissions
+        .contains_key(&fx.task.task_id));
+}
+
+#[test]
 fn tool_invocation_routes_through_kernel_and_attaches_evidence() {
     let fx = fixture();
     let workspace = std::env::temp_dir().join(format!(
@@ -494,6 +551,7 @@ fn default_tool_registry_is_minimal() {
             "post_blackboard",
             "ask_human",
             "agent_control",
+            "submit_final",
         ])
     );
 }

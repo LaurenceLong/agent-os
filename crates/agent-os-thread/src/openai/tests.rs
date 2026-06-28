@@ -1,7 +1,8 @@
 use super::*;
-use crate::{ArtifactRecord, RuntimeConfig, RuntimeRunReport, ThreadRuntime};
+use crate::{ArtifactRecord, RuntimeConfig, RuntimeRunOverrides, RuntimeRunReport, ThreadRuntime};
 use agent_os_kernel::{
-    Kernel, RegisterGoalInput, SpawnAgentInput, SpawnTaskInput, ToolInvokeInput,
+    Kernel, RecordApprovalInput, RegisterGoalInput, RequestApprovalInput, SpawnAgentInput,
+    SpawnTaskInput, ToolInvokeInput,
 };
 use agent_os_store::LocalBlobStore;
 
