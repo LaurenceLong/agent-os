@@ -1,0 +1,57 @@
+# ADR-0004: Agent Thread Core Module is source-informed and clean-room
+
+Status: accepted
+
+Date: 2026-06-25
+
+## Context
+
+Agent-OS needs a production Agent Thread runtime. Existing open-source agents provide useful implementation patterns, but none of them define the exact kernel contract Agent-OS needs.
+
+The project studied:
+
+- OpenCode public source for provider abstraction, typed message parts, tool lifecycle, permissions, snapshots, patches, compaction, and agent role overlays.
+- OpenAI Codex public source for Rust core architecture, thread/turn separation, submission and event queues, Agent Control, Agent Registry, spawn reservations, residency, permission profiles, tool routing, protocol schemas, and recovery surfaces.
+- Public Claude Code documentation for subagent behavior, worktree isolation, foreground/background execution, permission precedence, hooks, auto mode, and sandboxing behavior.
+
+The project must avoid dependence on leaked or non-public source material.
+
+## Decision
+
+Agent-OS will implement a dedicated Agent Thread Core Module with:
+
+- Agent Thread, Agent Turn, Agent Step, Agent Item, Tool Invocation, and Evidence Record as first-class objects.
+- Agent Thread Control Block as kernel-owned state.
+- Submission Queue and Event Queue semantics.
+- Turn-scoped model sessions.
+- system-level Provider System with a runtime-facing Model Gateway facade.
+- Tool Broker syscall pipeline.
+- deny-first capability and permission checks.
+- lifecycle policy hooks that may restrict but cannot grant authority.
+- Agent Control and Agent Registry for spawn, capacity, hierarchy, residency, and inter-agent communication.
+- workspace, process, permission, context, and memory isolation.
+- event-first recovery and conformance tests.
+
+Open-source agents may be hosted as guest runtimes only after they comply with Agent-OS syscalls, permissions, artifact, evidence, and audit contracts.
+
+## Consequences
+
+Positive:
+
+- Agent-OS has a stable kernel execution unit.
+- Development can start from a precise module contract.
+- Public source research informs maturity without importing incompatible architecture.
+- The design remains clean-room with respect to non-public code.
+- Third-party distributions can target a stable ABI.
+
+Negative:
+
+- More initial engineering work than wrapping an existing framework.
+- Agent-OS must own model-provider adaptation, tool lifecycle, and replay semantics.
+- Conformance tests are mandatory early, not optional polish.
+
+## Required Follow-Up
+
+Implementation MUST start with the Agent Thread protocol skeleton before building UI, marketplace, or distributed deployment.
+
+The first implementation milestone MUST prove replayable lifecycle state without using any LLM.

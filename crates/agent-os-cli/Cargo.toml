@@ -1,0 +1,16 @@
+[package]
+name = "agent-os-cli"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+
+[[bin]]
+name = "agent-os"
+path = "src/main.rs"
+
+[dependencies]
+agent-os-kernel.workspace = true
+agent-os-store-sqlite.workspace = true
+agent-os-thread.workspace = true
+agent-os-sys.workspace = true
+serde_json.workspace = true
