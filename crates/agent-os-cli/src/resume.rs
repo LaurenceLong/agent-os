@@ -164,7 +164,7 @@ mod tests {
                 task_id: task.task_id,
                 role_profile_id: "role_worker".to_string(),
                 owner: "agent-os-cli-test".to_string(),
-                local_goal: "Resume".to_string(),
+                goal: "Resume".to_string(),
                 success_criteria: Vec::new(),
                 failure_criteria: Vec::new(),
                 parent_thread_id: None,

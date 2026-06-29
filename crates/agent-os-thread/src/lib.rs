@@ -5,6 +5,7 @@
 //! artifacts, and final submission gates; this crate consumes model actions and
 //! turns them into kernel syscalls and structured runtime state.
 
+mod ecosystem;
 mod external;
 mod handle;
 mod model;
@@ -14,6 +15,7 @@ mod runtime;
 mod software;
 mod types;
 
+pub use ecosystem::{expand_command_template, import_workspace_ecosystem, EcosystemImportReport};
 pub use external::ExternalProcessModelClient;
 pub use handle::AgentThreadHandle;
 pub use model::{

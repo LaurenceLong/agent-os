@@ -45,6 +45,6 @@ fn thread_summary(thread: &AgentControlBlock) -> Value {
         "active_turn": thread.active_turn,
         "last_checkpoint_id": thread.recovery.last_checkpoint_id,
         "workspace_roots": thread.config_snapshot.workspace_roots,
-        "local_goal": thread.task.local_goal,
+        "goal": thread.task.goal,
     })
 }

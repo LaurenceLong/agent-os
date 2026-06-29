@@ -78,9 +78,9 @@ Resource Lease: The auditable grant that gives an Agent Thread shared or exclusi
 
 Budget Ledger: The durable accounting record for token, tool, wall-time, cost, model-request, or human-interrupt budgets.
 
-Supervisor Hierarchy: The control graph rooted at `S0`. Delegated Supervisors increment the level (`S1`, `S2`, ...), and every delegation is recorded as an invocation edge.
+Security Hierarchy: The control graph rooted at implicit human `S0`. Root agents start at `S1`, every child increments the level, and every delegation is recorded as an invocation edge.
 
-Agent Invocation: The durable edge that records who spawned, delegated to, reviewed, or escalated to which Agent Thread, with assignment, scope, supervisor level, and profile snapshots.
+Agent Invocation: The durable edge that records who spawned, delegated to, reviewed, or escalated to which Agent Thread, with child goal, scope, security level, and profile snapshots.
 
 Communication Profile: The creation-time policy that defines whether an Agent Thread may report to its Supervisor, post to scoped blackboard channels, or request human attention.
 

@@ -2,7 +2,7 @@
 
 Status: planning baseline
 
-Last updated: 2026-06-27
+Last updated: 2026-06-29
 
 ## 1. Strategy
 
@@ -19,7 +19,7 @@ The project SHOULD NOT start with a UI, a marketplace, or a generic workflow bui
 ## Current Implementation Snapshot
 
 The current repository is no longer only a planning artifact. It contains a
-single-node Rust implementation of the early v0.1 kernel and Agent Thread
+single-node Rust implementation of the early v0.2.0 kernel and Agent Thread
 runtime:
 
 - `agent-os-sys` owns ABI/data types.
@@ -36,7 +36,7 @@ runtime:
   security, communication, storage, provider routing, software distribution,
   runtime resume, and export behavior.
 
-The current model-visible v0.1 tool surface is:
+The current model-visible v0.2.0 tool surface is:
 
 ```text
 Host OS:
@@ -47,7 +47,8 @@ Host OS:
   run_command
 
 Work State:
-  set_objective
+  set_goal
+  accomplish_goal
   update_checklist
   record_evidence
 
@@ -68,6 +69,13 @@ Session Lifecycle:
 `set_timeout`, and `export_trace`; privileged administration actions are
 `kill`, `delete_session`, and `purge_state`.
 
+`agent_control(action=start)` uses `payload.goal` as the canonical child local
+goal. `set_goal` is Supervisor-only retargeting for the Supervisor's own thread
+or a direct child. `accomplish_goal` marks the caller's local goal accomplished
+and closes active hooks; `submit_final` remains the session's final tool call.
+`delete_session` and `purge_state` are replayable applied lifecycle commands
+over an append-only event history.
+
 OpenAI-compatible adapters serialize tool input objects as
 `function.arguments`; Anthropic-compatible adapters send the same structured
 objects as `tool_use.input`. The runtime, tool broker, evidence records, and
@@ -79,14 +87,14 @@ The current validation baseline is:
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 
-LLM_BASE_URL=http://model.mify.ai.srv/v1 \
-LLM_MODEL=tongyi/qwen3.6-plus \
-LLM_API_KEY=... \
+AGENT_OS_LIVE_OPENAI_API_KEY=... \
+AGENT_OS_LIVE_OPENAI_BASE_URL=https://api.openai.com/v1 \
+AGENT_OS_LIVE_OPENAI_MODEL=gpt-4o \
 cargo test -p agent-os-thread live_openai_compatible_llm_goal_driven -- --ignored --nocapture
 
-LLM_BASE_URL=http://model.mify.ai.srv/anthropic \
-LLM_MODEL=tongyi/qwen3.6-plus \
-LLM_API_KEY=... \
+AGENT_OS_LIVE_ANTHROPIC_API_KEY=... \
+AGENT_OS_LIVE_ANTHROPIC_BASE_URL=https://api.anthropic.com \
+AGENT_OS_LIVE_ANTHROPIC_MODEL=claude-sonnet-4-20250514 \
 cargo test -p agent-os-thread live_anthropic_compatible_llm_goal_driven -- --ignored --nocapture
 ```
 
@@ -224,9 +232,9 @@ Deliverables:
   - `delete_file`
   - `run_command`
 - Agent-OS control-plane tool taxonomy:
-  - work state: `set_objective`, `update_checklist`, `record_evidence`
-  - communication: `report_supervisor`, `post_blackboard`, `ask_human`
-  - agent supervision: `agent_control` with actions `start`, `status`, `output`, `set_hook`, `send`, `resume`, `stop`, `set_timeout`, and `export_trace`
+  - work state: `set_goal`, `accomplish_goal`, `update_checklist`, `record_evidence`
+  - communication: `report_supervisor`, `post_blackboard`, `ask_human`, `request_permissions`
+  - agent supervision: `agent_control` with actions `start`, `status`, `output`, `set_hook`, `send`, `resume`, `stop`, `set_timeout`, `export_trace`, `approve_permission`, and `deny_permission`
   - privileged administration: `agent_control` actions `kill`, `delete_session`, and `purge_state`
   - session lifecycle: `submit_final`
 - capability token model

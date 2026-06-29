@@ -24,14 +24,13 @@ pub(super) fn apply_lifecycle_action(
             }),
         }),
         AgentControlAction::Resume => {
-            let acb = kernel.transition_thread(
-                &target.thread_id,
-                ThreadStatus::Ready,
-                Some("agent_control resume".to_string()),
-            )?;
+            let acb = resume_target(kernel, syscall, target)?;
             Ok(AgentControlActionResult {
                 thread_status: acb.status,
-                output: json!({"resumed": true}),
+                output: json!({
+                    "resumed": true,
+                    "session_id": acb.session_id,
+                }),
             })
         }
         AgentControlAction::Stop => {
@@ -68,11 +67,33 @@ pub(super) fn apply_lifecycle_action(
                 output: json!({"killed": true}),
             })
         }
+        AgentControlAction::DeleteSession => {
+            let (acb, previous_session_id) = delete_session_for_target(kernel, syscall, target)?;
+            Ok(AgentControlActionResult {
+                thread_status: acb.status,
+                output: json!({
+                    "deleted_session": true,
+                    "previous_session_id": previous_session_id,
+                    "session_id": acb.session_id,
+                }),
+            })
+        }
+        AgentControlAction::PurgeState => {
+            let acb = purge_state_for_target(kernel, syscall, target)?;
+            Ok(AgentControlActionResult {
+                thread_status: acb.status,
+                output: json!({
+                    "purged": true,
+                    "tombstone_event": "AgentStatePurged",
+                    "session_id": acb.session_id,
+                }),
+            })
+        }
         AgentControlAction::Start
         | AgentControlAction::Status
         | AgentControlAction::SetHook
-        | AgentControlAction::DeleteSession
-        | AgentControlAction::PurgeState => Err(AgentOsError::Validation(format!(
+        | AgentControlAction::ApprovePermission
+        | AgentControlAction::DenyPermission => Err(AgentOsError::Validation(format!(
             "invalid lifecycle action dispatch: {action:?}"
         ))),
     }
@@ -186,6 +207,100 @@ fn set_timeout_budget(
     acb.audit.updated_at = now_rfc3339();
     kernel.emit(
         "ThreadConfigured",
+        "thread",
+        &acb.thread_id,
+        Some(acb.agent_id.clone()),
+        Some(acb.task.task_id.clone()),
+        Some(syscall.syscall_id.clone()),
+        Some(acb.task.goal_id.clone()),
+        &acb,
+    )?;
+    Ok(acb)
+}
+
+fn resume_target(
+    kernel: &Kernel,
+    syscall: &SyscallEnvelope,
+    target: &AgentControlBlock,
+) -> AgentOsResult<AgentControlBlock> {
+    if target.status == ThreadStatus::Unloaded || target.session_id.is_empty() {
+        let mut acb = target.clone();
+        acb.session_id = new_id("sess_");
+        acb.active_turn = ActiveTurn::default();
+        acb.status_reason = None;
+        acb.audit.updated_at = now_rfc3339();
+        kernel.emit(
+            "ThreadConfigured",
+            "thread",
+            &acb.thread_id,
+            Some(acb.agent_id.clone()),
+            Some(acb.task.task_id.clone()),
+            Some(syscall.syscall_id.clone()),
+            Some(acb.task.goal_id.clone()),
+            &acb,
+        )?;
+    }
+    kernel.transition_thread_with_cause(
+        &target.thread_id,
+        ThreadStatus::Ready,
+        Some("agent_control resume".to_string()),
+        Some(syscall.syscall_id.clone()),
+    )
+}
+
+fn delete_session_for_target(
+    kernel: &Kernel,
+    syscall: &SyscallEnvelope,
+    target: &AgentControlBlock,
+) -> AgentOsResult<(AgentControlBlock, String)> {
+    let previous_session_id = target.session_id.clone();
+    let mut acb = target.clone();
+    acb.session_id = String::new();
+    acb.status = ThreadStatus::Unloaded;
+    acb.status_reason = Some("agent_control delete_session".to_string());
+    acb.active_turn = ActiveTurn::default();
+    acb.resources = ThreadResources::default();
+    acb.recovery.dirty = true;
+    acb.audit.updated_at = now_rfc3339();
+    kernel.emit(
+        "ThreadConfigured",
+        "thread",
+        &acb.thread_id,
+        Some(acb.agent_id.clone()),
+        Some(acb.task.task_id.clone()),
+        Some(syscall.syscall_id.clone()),
+        Some(acb.task.goal_id.clone()),
+        &acb,
+    )?;
+    Ok((acb, previous_session_id))
+}
+
+fn purge_state_for_target(
+    kernel: &Kernel,
+    syscall: &SyscallEnvelope,
+    target: &AgentControlBlock,
+) -> AgentOsResult<AgentControlBlock> {
+    kernel.close_active_hooks_for_thread_with_cause(
+        &target.thread_id,
+        AgentHookStatus::Cancelled,
+        Some(syscall.syscall_id.clone()),
+    )?;
+    kernel.close_invocation_for_thread_with_cause(
+        &target.thread_id,
+        AgentInvocationStatus::Cancelled,
+        Some(syscall.syscall_id.clone()),
+    )?;
+    let mut acb = target.clone();
+    acb.status = ThreadStatus::Terminated;
+    acb.status_reason = Some("agent_control purge_state".to_string());
+    acb.active_turn = ActiveTurn::default();
+    acb.resources = ThreadResources::default();
+    acb.task.goal_status = AgentGoalStatus::Cancelled;
+    acb.audit.updated_at = now_rfc3339();
+    acb.audit.termination_reason = Some("agent_control purge_state".to_string());
+    acb.recovery.dirty = true;
+    kernel.emit(
+        "AgentStatePurged",
         "thread",
         &acb.thread_id,
         Some(acb.agent_id.clone()),

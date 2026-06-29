@@ -35,7 +35,8 @@ impl Kernel {
         risk_level: u8,
         input: ToolInvokeInput,
     ) -> AgentOsResult<ToolInvocation> {
-        let syscall = SyscallEnvelope::new(
+        let descriptor = self.tool_descriptor_for_invocation(&input)?;
+        let mut syscall = SyscallEnvelope::new(
             "tool.invoke",
             agent_id,
             task_id,
@@ -44,6 +45,7 @@ impl Kernel {
             risk_level,
             to_value(input.clone())?,
         );
+        syscall.resource_scope = tool_resource_scope(&descriptor, &input.input);
         if let Err(error) = self.authorize(&syscall) {
             self.record_denied_tool_call(&syscall, &input, &error, None)?;
             return Err(error);
@@ -104,6 +106,10 @@ impl Kernel {
                 "syscall risk exceeds tool descriptor risk declaration".to_string(),
             ));
         }
+        let acb = self
+            .thread_by_agent(&syscall.agent_id)?
+            .ok_or_else(|| AgentOsError::NotFound(format!("agent {}", syscall.agent_id)))?;
+        self.require_tool_authority(&acb, &descriptor, syscall.risk_level)?;
         validate_json_schema(&descriptor.input_schema, &input.input, "tool.input")?;
         let now = now_rfc3339();
         let mut invocation = ToolInvocation {
@@ -293,4 +299,49 @@ impl Kernel {
             .cloned()
             .ok_or_else(|| AgentOsError::NotFound(format!("tool {}", input.tool_name)))
     }
+}
+
+fn tool_resource_scope(
+    descriptor: &ToolDescriptor,
+    input: &serde_json::Value,
+) -> serde_json::Value {
+    let mut scopes = vec![format!("tool:{}", descriptor.name)];
+    scopes.extend(
+        descriptor
+            .runtime_input_policy
+            .required_resource_scopes
+            .iter()
+            .filter(|scope| !scope.contains('*'))
+            .cloned(),
+    );
+    match descriptor.name.as_str() {
+        "load_skill" => {
+            if let Some(name) = input.get("name").and_then(serde_json::Value::as_str) {
+                scopes.push(format!("skill:{name}"));
+            }
+        }
+        "read_skill_resource" => {
+            if let Some(name) = input.get("name").and_then(serde_json::Value::as_str) {
+                scopes.push(format!("skill:{name}"));
+                if let Some(path) = input.get("path").and_then(serde_json::Value::as_str) {
+                    scopes.push(format!("skill_file:{name}:{path}"));
+                }
+            }
+        }
+        _ if descriptor.driver_class == ToolDriverClass::Mcp => {
+            let server = descriptor
+                .driver_config
+                .get("server_name")
+                .and_then(serde_json::Value::as_str);
+            let tool = descriptor
+                .driver_config
+                .get("tool_name")
+                .and_then(serde_json::Value::as_str);
+            if let (Some(server), Some(tool)) = (server, tool) {
+                scopes.push(format!("mcp:{server}:{tool}"));
+            }
+        }
+        _ => {}
+    }
+    json!(scopes)
 }

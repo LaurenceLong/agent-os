@@ -17,7 +17,7 @@ fn tool_broker_integration_runs_all_model_visible_tool_families() {
             task_id: fx.task.task_id.clone(),
             role_profile_id: "role_supervisor".to_string(),
             owner: "integration-test".to_string(),
-            local_goal: "Exercise model-visible tools through the kernel broker".to_string(),
+            goal: "Exercise model-visible tools through the kernel broker".to_string(),
             success_criteria: vec!["all tool families persist state".to_string()],
             failure_criteria: Vec::new(),
             parent_thread_id: None,
@@ -94,8 +94,8 @@ fn tool_broker_integration_runs_all_model_visible_tool_families() {
     );
     tools.invoke(
         2,
-        "set_objective",
-        json!({"objective": "complete integration tool-broker coverage"}),
+        "set_goal",
+        json!({"goal": "complete integration tool-broker coverage"}),
         None,
     );
     tools.invoke(
@@ -144,16 +144,40 @@ fn tool_broker_integration_runs_all_model_visible_tool_families() {
         }),
         None,
     );
+    tools.invoke(
+        1,
+        "request_permissions",
+        json!({
+            "reason": "verify permission request tool broker path",
+            "scope": "session",
+            "permissions": {
+                "max_risk_level": 1,
+                "allowed_syscalls": ["tool.invoke"],
+                "resource_scopes": ["tool:*"],
+                "allowed_tool_names": ["read_file"],
+                "allowed_tool_driver_classes": ["filesystem"],
+                "approval_required_above": 1,
+                "requires_evidence_for": []
+            }
+        }),
+        None,
+    );
     let child = tools.invoke(
         4,
         "agent_control",
         json!({
             "action": "start",
             "payload": {
-                "assignment": "inspect integration broker child",
+                "goal": "inspect integration broker child",
                 "success_criteria": ["child agent was spawned"]
             }
         }),
+        None,
+    );
+    tools.invoke(
+        2,
+        "accomplish_goal",
+        json!({"summary": "integration broker local goal complete"}),
         None,
     );
     tools.invoke(
@@ -200,9 +224,11 @@ fn tool_broker_integration_runs_all_model_visible_tool_families() {
             "read_file",
             "record_evidence",
             "replace_text",
+            "request_permissions",
             "report_supervisor",
             "run_command",
-            "set_objective",
+            "set_goal",
+            "accomplish_goal",
             "submit_final",
             "update_checklist",
             "write_file",

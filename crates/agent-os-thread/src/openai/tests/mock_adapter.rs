@@ -242,9 +242,14 @@ fn openai_compatible_mock_adapter_runs_every_core_tool() {
             json!({"program": current_exe.to_string_lossy(), "args": ["--help"]}),
         ),
         (
-            "call_objective",
-            "set_objective",
-            json!({"objective": "complete provider-neutral all-tool mock adapter coverage"}),
+            "call_goal",
+            "set_goal",
+            json!({"goal": "complete provider-neutral all-tool mock adapter coverage"}),
+        ),
+        (
+            "call_accomplish_goal",
+            "accomplish_goal",
+            json!({"summary": "provider-neutral mock adapter local goal complete"}),
         ),
         (
             "call_checklist",
@@ -289,7 +294,7 @@ fn openai_compatible_mock_adapter_runs_every_core_tool() {
             json!({
                 "action": "start",
                 "payload": {
-                    "assignment": "inspect provider-neutral mock adapter coverage",
+                    "goal": "inspect provider-neutral mock adapter coverage",
                     "success_criteria": ["report status"]
                 }
             }),
@@ -372,7 +377,7 @@ fn openai_compatible_mock_adapter_runs_every_core_tool() {
             }),
         ],
     );
-    assert_eq!(messages.iter().filter(|m| m["role"] == "tool").count(), 12);
+    assert_eq!(messages.iter().filter(|m| m["role"] == "tool").count(), 13);
     let first_args: Value = serde_json::from_str(
         messages[2]["tool_calls"][0]["function"]["arguments"]
             .as_str()
@@ -413,7 +418,8 @@ fn anthropic_compatible_mock_adapter_runs_every_core_tool() {
             {"type": "tool_use", "id": "toolu_replace", "name": "replace_text", "input": {"path": "edit.txt", "old": "old", "new": "new"}},
             {"type": "tool_use", "id": "toolu_delete", "name": "delete_file", "input": {"path": "delete.txt"}},
             {"type": "tool_use", "id": "toolu_run", "name": "run_command", "input": {"program": current_exe.to_string_lossy(), "args": ["--help"]}},
-            {"type": "tool_use", "id": "toolu_objective", "name": "set_objective", "input": {"objective": "complete provider-neutral all-tool mock adapter coverage"}},
+            {"type": "tool_use", "id": "toolu_goal", "name": "set_goal", "input": {"goal": "complete provider-neutral all-tool mock adapter coverage"}},
+            {"type": "tool_use", "id": "toolu_accomplish_goal", "name": "accomplish_goal", "input": {"summary": "provider-neutral mock adapter local goal complete"}},
             {"type": "tool_use", "id": "toolu_checklist", "name": "update_checklist", "input": {"items": [
                 {"text": "exercise every model-visible tool", "status": "completed"}
             ]}},
@@ -434,7 +440,7 @@ fn anthropic_compatible_mock_adapter_runs_every_core_tool() {
             {"type": "tool_use", "id": "toolu_agent", "name": "agent_control", "input": {
                 "action": "start",
                 "payload": {
-                    "assignment": "inspect provider-neutral mock adapter coverage",
+                    "goal": "inspect provider-neutral mock adapter coverage",
                     "success_criteria": ["report status"]
                 }
             }}
@@ -514,7 +520,7 @@ fn anthropic_compatible_mock_adapter_runs_every_core_tool() {
                     .is_some_and(|content| content.iter().any(|part| part["type"] == "tool_result"))
             })
             .count(),
-        12
+        13
     );
     assert_eq!(messages[1]["content"][0]["type"], "tool_use");
     assert_eq!(messages[2]["content"][0]["type"], "tool_result");

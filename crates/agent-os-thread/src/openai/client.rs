@@ -2,7 +2,7 @@ use super::audit::{append_jsonl, truncate};
 use super::messages::{build_anthropic_messages, build_messages};
 use super::parser::{parse_anthropic_response, parse_response};
 use super::prompt::default_system_prompt;
-use super::tools::{anthropic_tool_definitions_for_thread, tool_definitions_for_thread};
+use super::tools::{anthropic_tool_definitions_for_request, tool_definitions_for_request};
 use crate::{ModelClient, ModelTurnRequest, ModelTurnResponse};
 use agent_os_sys::*;
 use serde_json::{json, Value};
@@ -26,19 +26,12 @@ impl LlmApiStyle {
                 Ok(Self::AnthropicCompatible)
             }
             other => Err(AgentOsError::Validation(format!(
-                "unsupported LLM_API_STYLE {other}; expected openai-compatible or anthropic-compatible"
+                "unsupported api_style {other}; expected openai-compatible or anthropic-compatible"
             ))),
         }
     }
 
-    pub fn from_env_or_base(api_base: &str) -> AgentOsResult<Self> {
-        if let Ok(style) = std::env::var("LLM_API_STYLE") {
-            return Self::from_value(&style);
-        }
-        Ok(Self::from_base(api_base))
-    }
-
-    fn from_base(api_base: &str) -> Self {
+    pub fn from_base_url(api_base: &str) -> Self {
         if api_base
             .trim_end_matches('/')
             .to_ascii_lowercase()
@@ -78,7 +71,7 @@ impl OpenAiModelClient {
 
     pub fn with_api_base(mut self, base: impl Into<String>) -> Self {
         self.api_base = base.into();
-        self.api_style = LlmApiStyle::from_base(&self.api_base);
+        self.api_style = LlmApiStyle::from_base_url(&self.api_base);
         self
     }
 
@@ -132,7 +125,7 @@ impl OpenAiModelClient {
     ) -> AgentOsResult<ModelTurnResponse> {
         let workspace_root = request.workspace_root.to_string_lossy().to_string();
         let messages = build_messages(request, &workspace_root, &self.system_prompt_override);
-        let tools = tool_definitions_for_thread(&request.thread);
+        let tools = tool_definitions_for_request(request);
 
         let body = json!({
             "model": self.model,
@@ -199,7 +192,7 @@ impl OpenAiModelClient {
                 .clone()
                 .unwrap_or_else(|| default_system_prompt(request, &workspace_root)),
             "messages": build_anthropic_messages(request, &workspace_root),
-            "tools": anthropic_tool_definitions_for_thread(&request.thread),
+            "tools": anthropic_tool_definitions_for_request(request),
             "tool_choice": {"type": "auto"},
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,

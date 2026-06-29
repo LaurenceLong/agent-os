@@ -81,7 +81,7 @@ WorkerAgent
 ReviewerAgent
 ```
 
-Supervisors are hierarchical. The top-level Supervisor for a goal is `S0`. A Supervisor created by delegation from `S0` is `S1`; further Supervisor delegation increments the level (`S2`, `S3`, and so on). The level is control-plane state, not a prompt convention.
+Agents are hierarchical. Human authority is implicit `S0` and is not stored as a normal AgentControlBlock. Any root agent created by human authority is `S1`; every nested child increments the parent security level (`S2`, `S3`, and so on). The level is control-plane state, not a prompt convention.
 
 Every Supervisor or worker creation caused by delegation MUST create a durable invocation edge. The edge records at least:
 
@@ -91,11 +91,11 @@ goal_id: string
 task_id: string
 caller_thread_id: string | null
 caller_agent_id: string | null
-caller_supervisor_level: integer | null
+caller_security_level: integer | null
 callee_thread_id: string
 callee_agent_id: string
 callee_role_profile_id: string
-callee_supervisor_level: integer | null
+callee_security_level: integer
 relationship: supervisor_delegation | worker_assignment | review_request | human_escalation
 assignment: string
 capability_snapshot_id: string | null

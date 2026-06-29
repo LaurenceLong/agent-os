@@ -402,7 +402,7 @@ fn ready_queue_orders_ready_threads_by_task_priority() {
             task_id: high.task_id,
             role_profile_id: "role_worker".to_string(),
             owner: "tester".to_string(),
-            local_goal: "high".to_string(),
+            goal: "high".to_string(),
             success_criteria: Vec::new(),
             failure_criteria: Vec::new(),
             parent_thread_id: None,

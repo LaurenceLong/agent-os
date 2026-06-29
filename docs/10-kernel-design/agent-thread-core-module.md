@@ -166,7 +166,7 @@ Memento Fragments are defined in [Memento Fragments](memento-fragments.md).
 
 They are commonly anchored to child completion, tool completion, approval resolution, compaction, review callbacks, or resume. They are projected back to the owner Agent Thread when triggered.
 
-A child Agent Thread MUST NOT read or mutate a parent's Memento Fragment. Child-facing instructions belong in the child assignment payload, not in Memento Fragments.
+A child Agent Thread MUST NOT read or mutate a parent's Memento Fragment. Child-facing instructions belong in the child goal payload, not in Memento Fragments.
 
 ### 5.8 Communication Profile
 
@@ -188,7 +188,7 @@ session_id: string
 root_thread_id: string
 parent_thread_id: string | null
 invocation_id: string | null
-supervisor_level: integer | null
+security_level: integer
 agent_path: string
 role: string
 owner: string
@@ -198,7 +198,10 @@ status_reason: string | null
 task:
   task_id: string
   goal_id: string
-  local_goal: string
+  goal: string
+  goal_status: Active | Accomplished | Cancelled
+  goal_revision: integer
+  accomplished_at: string | null
   success_criteria: string[]
   failure_criteria: string[]
 
@@ -656,7 +659,7 @@ Required responsibilities:
 - reserve spawn slots before creation
 - release reservations on failure
 - assign stable agent paths
-- assign Supervisor levels (`S0`, `S1`, `S2`, ...)
+- assign security levels (`S1`, `S2`, `S3`, ...) under implicit human `S0`
 - persist invocation edges for root Supervisors, Supervisor delegation, worker assignment, review request, and human escalation
 - enforce max active threads
 - enforce max depth
@@ -739,7 +742,7 @@ Recommended defaults:
 | Role | Workspace | Tool Risk Ceiling |
 |---|---|---|
 | SupervisorAgent | read-only | orchestration, approval, and final submission |
-| WorkerAgent | read-only, workspace-write, isolated worktree, or temp outputs depending on assignment | scoped file CRUD and command execution |
+| WorkerAgent | read-only, workspace-write, isolated worktree, or temp outputs depending on goal | scoped file CRUD and command execution |
 | ReviewerAgent | read-only | review only |
 
 Production distributions SHOULD make sandbox unavailability a hard failure for high-risk roles.

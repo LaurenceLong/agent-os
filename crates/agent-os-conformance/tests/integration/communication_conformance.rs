@@ -198,16 +198,6 @@ fn control_plane_tools_execute_through_tool_broker() {
             .unwrap()
     };
 
-    let objective = invoke(
-        "set_objective",
-        json!({"objective": "complete control-plane tool conformance"}),
-        2,
-    );
-    assert_eq!(
-        objective.output.as_ref().unwrap()["objective"],
-        "complete control-plane tool conformance"
-    );
-
     let checklist = invoke(
         "update_checklist",
         json!({"items": [{"text": "record state", "status": "completed"}]}),
@@ -255,9 +245,20 @@ fn control_plane_tools_execute_through_tool_broker() {
     );
     assert_eq!(blackboard.output.as_ref().unwrap()["section"], "risk");
 
+    let goal_completion = invoke(
+        "accomplish_goal",
+        json!({"summary": "complete control-plane tool conformance"}),
+        2,
+    );
+    assert_eq!(
+        goal_completion.output.as_ref().unwrap()["goal_accomplished"],
+        true
+    );
+
     let state = fx.kernel.state_snapshot().unwrap();
+    let worker = state.threads.get(&fx.worker.thread_id).unwrap();
     let task = state.tasks.get(&fx.task.task_id).unwrap();
-    assert_eq!(task.description, "complete control-plane tool conformance");
+    assert_eq!(worker.task.goal_status, AgentGoalStatus::Accomplished);
     assert_eq!(task.checklist[0].text, "record state");
     assert!(state.evidence.contains_key(&evidence_id));
     assert_eq!(state.blackboard_entries.len(), 1);
@@ -272,7 +273,7 @@ fn control_plane_tools_execute_through_tool_broker() {
             task_id: fx.task.task_id.clone(),
             role_profile_id: "role_supervisor".to_string(),
             owner: "tester".to_string(),
-            local_goal: "ask human".to_string(),
+            goal: "ask human".to_string(),
             success_criteria: Vec::new(),
             failure_criteria: Vec::new(),
             parent_thread_id: None,
@@ -333,7 +334,7 @@ fn memento_is_owner_scoped_and_triggered_by_child_completion() {
             task_id: fx.task.task_id.clone(),
             role_profile_id: "role_supervisor".to_string(),
             owner: "tester".to_string(),
-            local_goal: "supervise child completion".to_string(),
+            goal: "supervise child completion".to_string(),
             success_criteria: Vec::new(),
             failure_criteria: Vec::new(),
             parent_thread_id: None,
@@ -346,7 +347,7 @@ fn memento_is_owner_scoped_and_triggered_by_child_completion() {
             task_id: fx.task.task_id.clone(),
             role_profile_id: "role_worker".to_string(),
             owner: "tester".to_string(),
-            local_goal: "test".to_string(),
+            goal: "test".to_string(),
             success_criteria: Vec::new(),
             failure_criteria: Vec::new(),
             parent_thread_id: Some(supervisor.thread_id.clone()),

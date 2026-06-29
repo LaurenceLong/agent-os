@@ -200,10 +200,17 @@ impl Kernel {
             task_id,
             Some(agent_id.to_string()),
             Some(task_id.to_string()),
-            causation_id,
+            causation_id.clone(),
             None,
             &final_submission,
         )?;
+        if let Some(thread) = self.thread_by_agent(agent_id)? {
+            self.complete_active_hooks_for_thread_with_cause(
+                &thread.thread_id,
+                causation_id.clone(),
+            )?;
+            self.complete_invocation_for_thread_with_cause(&thread.thread_id, causation_id)?;
+        }
         Ok(())
     }
 

@@ -15,7 +15,7 @@ mod lifecycle;
 mod target;
 
 use super::string_array;
-use crate::util::required_string;
+use crate::util::{parse_payload, required_string};
 use crate::*;
 use agent_os_sys::*;
 use serde_json::{json, Value};
@@ -33,9 +33,11 @@ pub(super) fn run_agent_control(
     let requester = kernel
         .thread_by_agent(&syscall.agent_id)?
         .ok_or_else(|| AgentOsError::NotFound(format!("agent {}", syscall.agent_id)))?;
+    kernel.require_control_plane_security_level(&requester, "agent_control")?;
     match action {
         AgentControlAction::Start => {
-            let assignment = required_string(&payload, "assignment")?;
+            let goal = required_string(&payload, "goal")?;
+            let explicit_permissions = payload.get("permissions").map(parse_payload).transpose()?;
             let role_profile_id = payload
                 .get("role_profile_id")
                 .and_then(Value::as_str)
@@ -50,17 +52,18 @@ pub(super) fn run_agent_control(
                 &payload,
                 &requester.config_snapshot.workspace_roots,
             )?;
-            let child = kernel.spawn_agent_with_cause(
+            let child = kernel.spawn_agent_with_permissions_with_cause(
                 SpawnAgentInput {
                     task_id,
                     role_profile_id,
                     owner: syscall.agent_id.clone(),
-                    local_goal: assignment,
+                    goal,
                     success_criteria: string_array(&payload, "success_criteria")?,
                     failure_criteria: string_array(&payload, "failure_criteria")?,
                     parent_thread_id: Some(requester.thread_id.clone()),
                     workspace_roots,
                 },
+                explicit_permissions,
                 Some(syscall.syscall_id.clone()),
             )?;
             let hooks = hooks::configure_start_hooks(kernel, syscall, &child, &payload)?;
@@ -81,15 +84,17 @@ pub(super) fn run_agent_control(
                 "agent_id": child.agent_id,
                 "thread_id": child.thread_id,
                 "invocation_id": child.invocation_id,
-                "supervisor_level": child.supervisor_level,
+                "security_level": child.security_level,
                 "thread_status": child.status,
                 "session_id": child.session_id,
+                "goal": child.task.goal,
                 "output_handle": format!("thread:{}", child.thread_id),
                 "hooks": hooks,
             }))
         }
         AgentControlAction::Status => {
             let target = target::resolve_agent_control_target(kernel, input, &payload)?;
+            require_supervision_target(&requester, &target)?;
             let hooks = hooks::agent_hooks_for(kernel, &target.agent_id)?;
             Ok(json!({
                 "tool": descriptor.name.clone(),
@@ -99,14 +104,73 @@ pub(super) fn run_agent_control(
                 "agent_id": target.agent_id,
                 "thread_id": target.thread_id,
                 "invocation_id": target.invocation_id,
-                "supervisor_level": target.supervisor_level,
+                "security_level": target.security_level,
                 "thread_status": target.status,
                 "session_id": target.session_id,
                 "hooks": hooks,
             }))
         }
+        AgentControlAction::ApprovePermission | AgentControlAction::DenyPermission => {
+            let permission_request_id = required_string(&payload, "permission_request_id")?;
+            let decision_reason = payload
+                .get("decision_reason")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let granted_permissions = if action == AgentControlAction::ApprovePermission {
+                let permissions = payload.get("permissions").ok_or_else(|| {
+                    AgentOsError::Validation(
+                        "approve_permission requires payload.permissions".to_string(),
+                    )
+                })?;
+                let permissions: PermissionSet = parse_payload(permissions)?;
+                if permissions.max_risk_level > syscall.risk_level {
+                    return Err(AgentOsError::PermissionDenied(format!(
+                        "approve_permission requires risk level {}",
+                        permissions.max_risk_level
+                    )));
+                }
+                Some(permissions)
+            } else {
+                None
+            };
+            let (request, grant) = kernel.respond_permission_request_with_cause(
+                &syscall.agent_id,
+                &permission_request_id,
+                granted_permissions,
+                decision_reason,
+                Some(syscall.syscall_id.clone()),
+            )?;
+            let target = kernel
+                .read_state()?
+                .threads
+                .get(&request.requester_thread_id)
+                .cloned();
+            let command = command::record_agent_control_command(
+                kernel,
+                syscall,
+                &requester,
+                target.as_ref(),
+                action,
+                payload,
+                AgentControlCommandStatus::Applied,
+            )?;
+            Ok(json!({
+                "tool": descriptor.name.clone(),
+                "status": "ok",
+                "action": action_text,
+                "driver_class": descriptor.driver_class,
+                "command_id": command.command_id,
+                "permission_request_id": request.permission_request_id,
+                "request_status": request.status,
+                "permission_grant_id": grant.as_ref().map(|grant| grant.permission_grant_id.as_str()),
+                "scope": request.scope,
+                "target_agent_id": request.requester_agent_id,
+                "target_thread_id": request.requester_thread_id,
+            }))
+        }
         AgentControlAction::SetHook => {
             let target = target::resolve_agent_control_target(kernel, input, &payload)?;
+            require_supervision_target(&requester, &target)?;
             let hook = hooks::configure_agent_hook(kernel, syscall, &target, &payload)?;
             command::record_agent_control_command(
                 kernel,
@@ -133,8 +197,11 @@ pub(super) fn run_agent_control(
         | AgentControlAction::Stop
         | AgentControlAction::SetTimeout
         | AgentControlAction::ExportTrace
-        | AgentControlAction::Kill => {
+        | AgentControlAction::Kill
+        | AgentControlAction::DeleteSession
+        | AgentControlAction::PurgeState => {
             let target = target::resolve_agent_control_target(kernel, input, &payload)?;
+            require_supervision_target(&requester, &target)?;
             let action_result =
                 lifecycle::apply_lifecycle_action(kernel, syscall, action, &target, &payload)?;
             let command = command::record_agent_control_command(
@@ -159,22 +226,21 @@ pub(super) fn run_agent_control(
                 "cursor": null,
             }))
         }
-        AgentControlAction::DeleteSession | AgentControlAction::PurgeState => {
-            let target = target::resolve_agent_control_target(kernel, input, &payload)?;
-            command::record_agent_control_command(
-                kernel,
-                syscall,
-                &requester,
-                Some(&target),
-                action,
-                payload,
-                AgentControlCommandStatus::Rejected,
-            )?;
-            Err(AgentOsError::Validation(format!(
-                "agent_control action {action_text} is rejected by the append-only v0.1 store"
-            )))
-        }
     }
+}
+
+fn require_supervision_target(
+    requester: &AgentControlBlock,
+    target: &AgentControlBlock,
+) -> AgentOsResult<()> {
+    if target.thread_id == requester.thread_id
+        || target.parent_thread_id.as_deref() == Some(&requester.thread_id)
+    {
+        return Ok(());
+    }
+    Err(AgentOsError::PermissionDenied(
+        "agent_control can only target the requester thread or a direct child".to_string(),
+    ))
 }
 
 /// Result of a stateful lifecycle action: the new thread status plus any

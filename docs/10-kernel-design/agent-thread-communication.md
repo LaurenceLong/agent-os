@@ -213,7 +213,7 @@ Example:
 ```yaml
 agent.spawn_child:
   role: WorkerAgent
-  assignment: "Inspect replay invariants."
+  goal: "Inspect replay invariants."
   communication_profile:
     supervisor:
       enabled: true

@@ -56,8 +56,8 @@ fn goal_driven_runtime_integration_covers_tools_and_agent_control_actions() {
             4,
         ),
         tool(
-            "set_objective",
-            json!({"objective": "complete every model-visible tool in a runtime goal"}),
+            "set_goal",
+            json!({"goal": "complete every model-visible tool in a runtime goal"}),
             2,
         ),
         tool(
@@ -104,14 +104,12 @@ fn goal_driven_runtime_integration_covers_tools_and_agent_control_actions() {
             "start",
             json!({
                 "payload": {
-                    "assignment": "inspect child task from goal-driven integration",
+                    "goal": "inspect child task from goal-driven integration",
                     "success_criteria": ["child was spawned"]
                 }
             }),
             4,
         ),
-        agent_control("status", json!({"thread_id": fx.resume_thread_id}), 1),
-        agent_control("output", json!({"thread_id": fx.resume_thread_id}), 1),
         agent_control(
             "set_hook",
             json!({
@@ -140,10 +138,23 @@ fn goal_driven_runtime_integration_covers_tools_and_agent_control_actions() {
             }),
             4,
         ),
+        agent_control(
+            "delete_session",
+            json!({"thread_id": fx.resume_thread_id}),
+            6,
+        ),
+        agent_control("status", json!({"thread_id": fx.resume_thread_id}), 1),
+        agent_control("output", json!({"thread_id": fx.resume_thread_id}), 1),
         agent_control("export_trace", json!({"thread_id": fx.resume_thread_id}), 1),
         agent_control("resume", json!({"thread_id": fx.resume_thread_id}), 4),
         agent_control("stop", json!({"thread_id": fx.stop_thread_id}), 4),
         agent_control("kill", json!({"thread_id": fx.kill_thread_id}), 6),
+        agent_control("purge_state", json!({"thread_id": fx.purge_thread_id}), 6),
+        tool(
+            "accomplish_goal",
+            json!({"summary": "Goal-driven runtime local goal accomplished."}),
+            2,
+        ),
         DeterministicStep::Final {
             summary: "Goal-driven runtime covered all model-visible tools.".to_string(),
             known_risks: Vec::new(),
@@ -175,7 +186,7 @@ fn goal_driven_runtime_integration_covers_tools_and_agent_control_actions() {
 
     assert_eq!(report.status, ThreadStatus::Completed);
     assert!(report.final_submitted);
-    assert_eq!(report.tool_results.len(), 21);
+    assert_eq!(report.tool_results.len(), 24);
     assert_eq!(
         fs::read_to_string(fx.workspace.join("created.txt")).unwrap(),
         "created through goal-driven integration\n"
@@ -203,7 +214,8 @@ fn goal_driven_runtime_integration_covers_tools_and_agent_control_actions() {
             "replace_text",
             "report_supervisor",
             "run_command",
-            "set_objective",
+            "set_goal",
+            "accomplish_goal",
             "update_checklist",
             "write_file",
         ])
@@ -221,8 +233,10 @@ fn goal_driven_runtime_integration_covers_tools_and_agent_control_actions() {
         observed_agent_actions,
         BTreeSet::from([
             "export_trace",
+            "delete_session",
             "kill",
             "output",
+            "purge_state",
             "resume",
             "send",
             "set_hook",
@@ -261,6 +275,18 @@ fn goal_driven_runtime_integration_covers_tools_and_agent_control_actions() {
         state.threads.get(&fx.kill_thread_id).unwrap().status,
         ThreadStatus::Terminated
     );
+    assert_eq!(
+        state.threads.get(&fx.purge_thread_id).unwrap().status,
+        ThreadStatus::Terminated
+    );
+    assert!(state.agent_control_commands.values().any(|command| {
+        command.action == AgentControlAction::DeleteSession
+            && command.status == AgentControlCommandStatus::Applied
+    }));
+    assert!(state.agent_control_commands.values().any(|command| {
+        command.action == AgentControlAction::PurgeState
+            && command.status == AgentControlCommandStatus::Applied
+    }));
 
     write_audit_log(
         "goal-driven-all-tools-integration.jsonl",
@@ -275,96 +301,59 @@ fn goal_driven_runtime_integration_covers_tools_and_agent_control_actions() {
 }
 
 #[test]
-fn goal_driven_runtime_integration_covers_privileged_agent_control_rejections() {
-    for case in [
-        RejectionCase {
-            action: "kill",
-            risk_level: 4,
-            expected: ExpectedRejection::PermissionDenied,
-        },
-        RejectionCase {
-            action: "delete_session",
-            risk_level: 6,
-            expected: ExpectedRejection::AppendOnlyStoreRejected,
-        },
-        RejectionCase {
-            action: "purge_state",
-            risk_level: 6,
-            expected: ExpectedRejection::AppendOnlyStoreRejected,
-        },
-    ] {
-        let fx = runtime_fixture(&format!(
-            "agent-os-runtime-integration-reject-{}",
-            case.action
-        ));
-        let script = DeterministicModelClient::new(vec![agent_control(
-            case.action,
-            json!({"thread_id": fx.kill_thread_id}),
-            case.risk_level,
-        )]);
-        let mut runtime =
-            ThreadRuntime::new(fx.kernel.clone(), fx.supervisor_thread_id.clone(), script);
-        let mut config = RuntimeConfig::workspace_write(&fx.workspace);
-        config.max_steps = 2;
-        config.tool_risk_ceiling = 6;
-        let overrides = RuntimeRunOverrides {
-            sandbox_profile_id: None,
-            tool_approval_id: Some(fx.tool_approval_id.clone()),
-        };
-        let err = runtime
-            .run_to_completion_with_overrides(config, overrides)
-            .unwrap_err();
-        match case.expected {
-            ExpectedRejection::PermissionDenied => {
-                assert!(matches!(err, AgentOsError::PermissionDenied(_)), "{err:?}");
-            }
-            ExpectedRejection::AppendOnlyStoreRejected => {
-                assert!(
-                    matches!(err, AgentOsError::Validation(ref message) if message.contains("append-only v0.1 store")),
-                    "{err:?}"
-                );
-            }
-        }
+fn goal_driven_runtime_integration_rejects_understated_privileged_agent_control_risk() {
+    let case = RejectionCase {
+        action: "kill",
+        risk_level: 4,
+    };
+    let fx = runtime_fixture(&format!(
+        "agent-os-runtime-integration-reject-{}",
+        case.action
+    ));
+    let script = DeterministicModelClient::new(vec![agent_control(
+        case.action,
+        json!({"thread_id": fx.kill_thread_id}),
+        case.risk_level,
+    )]);
+    let mut runtime =
+        ThreadRuntime::new(fx.kernel.clone(), fx.supervisor_thread_id.clone(), script);
+    let mut config = RuntimeConfig::workspace_write(&fx.workspace);
+    config.max_steps = 2;
+    config.tool_risk_ceiling = 6;
+    let overrides = RuntimeRunOverrides {
+        sandbox_profile_id: None,
+        tool_approval_id: Some(fx.tool_approval_id.clone()),
+    };
+    let err = runtime
+        .run_to_completion_with_overrides(config, overrides)
+        .unwrap_err();
+    assert!(matches!(err, AgentOsError::PermissionDenied(_)), "{err:?}");
 
-        let state = fx.kernel.state_snapshot().unwrap();
-        assert!(state.tool_invocations.values().any(|invocation| {
-            invocation.tool_name == "agent_control"
-                && invocation.status == ToolCallStatus::Failed
-                && invocation.input.get("action").and_then(Value::as_str) == Some(case.action)
-        }));
-        if matches!(case.expected, ExpectedRejection::AppendOnlyStoreRejected) {
-            assert!(state.agent_control_commands.values().any(|command| {
-                command.status == AgentControlCommandStatus::Rejected
-                    && command.target_thread_id.as_deref() == Some(&fx.kill_thread_id)
-            }));
-        }
-        write_audit_log(
-            &format!(
-                "goal-driven-agent-control-{}-rejection-integration.jsonl",
-                case.action
-            ),
-            &[
-                json!({"type": "rejection_case", "action": case.action, "risk_level": case.risk_level}),
-                json!({"type": "error", "error": err.to_string()}),
-                json!({"type": "tool_invocations", "invocations": state.tool_invocations}),
-                json!({"type": "agent_control_commands", "commands": state.agent_control_commands}),
-            ],
-        );
-        let _ = fs::remove_dir_all(fx.workspace);
-    }
+    let state = fx.kernel.state_snapshot().unwrap();
+    assert!(state.tool_invocations.values().any(|invocation| {
+        invocation.tool_name == "agent_control"
+            && invocation.status == ToolCallStatus::Failed
+            && invocation.input.get("action").and_then(Value::as_str) == Some(case.action)
+    }));
+    write_audit_log(
+        &format!(
+            "goal-driven-agent-control-{}-rejection-integration.jsonl",
+            case.action
+        ),
+        &[
+            json!({"type": "rejection_case", "action": case.action, "risk_level": case.risk_level}),
+            json!({"type": "error", "error": err.to_string()}),
+            json!({"type": "tool_invocations", "invocations": state.tool_invocations}),
+            json!({"type": "agent_control_commands", "commands": state.agent_control_commands}),
+        ],
+    );
+    let _ = fs::remove_dir_all(fx.workspace);
 }
 
 #[derive(Clone, Copy)]
 struct RejectionCase {
     action: &'static str,
     risk_level: u8,
-    expected: ExpectedRejection,
-}
-
-#[derive(Clone, Copy)]
-enum ExpectedRejection {
-    PermissionDenied,
-    AppendOnlyStoreRejected,
 }
 
 struct RuntimeFixture {
@@ -374,6 +363,7 @@ struct RuntimeFixture {
     resume_thread_id: String,
     stop_thread_id: String,
     kill_thread_id: String,
+    purge_thread_id: String,
     tool_approval_id: String,
     workspace: PathBuf,
 }
@@ -419,7 +409,7 @@ fn runtime_fixture(prefix: &str) -> RuntimeFixture {
             task_id: task.task_id.clone(),
             role_profile_id: "role_supervisor".to_string(),
             owner: "agent-os-conformance".to_string(),
-            local_goal: "Use every model-visible tool to complete the coverage goal".to_string(),
+            goal: "Use every model-visible tool to complete the coverage goal".to_string(),
             success_criteria: vec!["all tool actions are observable".to_string()],
             failure_criteria: Vec::new(),
             parent_thread_id: None,
@@ -434,7 +424,13 @@ fn runtime_fixture(prefix: &str) -> RuntimeFixture {
             approval_type: ApprovalType::Human,
             scope: ApprovalScope {
                 syscall_types: vec!["tool.invoke".to_string()],
-                resource_scopes: Vec::new(),
+                resource_scopes: vec![
+                    json!("tool:*"),
+                    json!("instruction:*"),
+                    json!("skill:*"),
+                    json!("skill_file:*"),
+                    json!("mcp:*"),
+                ],
                 risk_ceiling: 6,
                 goal_id: task.goal_id.clone(),
                 task_id: Some(task.task_id.clone()),
@@ -481,6 +477,13 @@ fn runtime_fixture(prefix: &str) -> RuntimeFixture {
     kernel
         .transition_thread(&kill_target.thread_id, ThreadStatus::Running, None)
         .unwrap();
+    let purge_target = child_agent(
+        &kernel,
+        &task.task_id,
+        &supervisor,
+        "purge target",
+        &workspace,
+    );
 
     RuntimeFixture {
         kernel,
@@ -489,6 +492,7 @@ fn runtime_fixture(prefix: &str) -> RuntimeFixture {
         resume_thread_id: resume_target.thread_id,
         stop_thread_id: stop_target.thread_id,
         kill_thread_id: kill_target.thread_id,
+        purge_thread_id: purge_target.thread_id,
         tool_approval_id: approval.approval_id,
         workspace,
     }
@@ -498,7 +502,7 @@ fn child_agent(
     kernel: &Kernel,
     task_id: &str,
     supervisor: &AgentControlBlock,
-    local_goal: &str,
+    goal: &str,
     workspace: &Path,
 ) -> AgentControlBlock {
     kernel
@@ -506,7 +510,7 @@ fn child_agent(
             task_id: task_id.to_string(),
             role_profile_id: "role_worker".to_string(),
             owner: supervisor.agent_id.clone(),
-            local_goal: local_goal.to_string(),
+            goal: goal.to_string(),
             success_criteria: vec!["target action is observable".to_string()],
             failure_criteria: Vec::new(),
             parent_thread_id: Some(supervisor.thread_id.clone()),

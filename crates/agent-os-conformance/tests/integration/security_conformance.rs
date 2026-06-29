@@ -1,4 +1,5 @@
 use crate::common::*;
+use std::{fs, path::PathBuf};
 
 #[test]
 fn syscall_without_capability_is_rejected() {
@@ -42,7 +43,7 @@ fn reviewer_cannot_write_workspace_files() {
             task_id: fx.task.task_id.clone(),
             role_profile_id: "role_reviewer".to_string(),
             owner: "tester".to_string(),
-            local_goal: "review".to_string(),
+            goal: "review".to_string(),
             success_criteria: Vec::new(),
             failure_criteria: Vec::new(),
             parent_thread_id: None,
@@ -169,7 +170,7 @@ fn high_risk_capability_requires_active_bounded_approval() {
             task_id: fx.task.task_id.clone(),
             role_profile_id: "role_supervisor".to_string(),
             owner: "tester".to_string(),
-            local_goal: "orchestrate".to_string(),
+            goal: "orchestrate".to_string(),
             success_criteria: Vec::new(),
             failure_criteria: Vec::new(),
             parent_thread_id: None,
@@ -280,7 +281,7 @@ fn high_risk_capability_requires_active_bounded_approval() {
             task_id: fx.task.task_id.clone(),
             role_profile_id: "role_worker".to_string(),
             owner: "tester".to_string(),
-            local_goal: "inspect".to_string(),
+            goal: "inspect".to_string(),
             success_criteria: Vec::new(),
             failure_criteria: Vec::new(),
             parent_thread_id: Some(supervisor.thread_id),
@@ -351,4 +352,447 @@ fn expired_or_redecided_approval_is_rejected() {
         })
         .unwrap_err();
     assert!(matches!(repeat, AgentOsError::InvalidTransition(_)));
+}
+
+#[test]
+fn s_level_gate_denies_control_plane_tools_to_nested_supervisor() {
+    let fx = fixture();
+    let supervisor = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_supervisor".to_string(),
+            owner: "tester".to_string(),
+            goal: "root supervisor".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: Vec::new(),
+        })
+        .unwrap();
+    let nested = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_supervisor".to_string(),
+            owner: supervisor.agent_id.clone(),
+            goal: "nested supervisor".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: Some(supervisor.thread_id.clone()),
+            workspace_roots: Vec::new(),
+        })
+        .unwrap();
+    assert_eq!(nested.security_level, SecurityLevel(2));
+    let cap = fx
+        .kernel
+        .grant_capability(
+            &nested.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            4,
+            None,
+        )
+        .unwrap();
+
+    let set_goal = fx
+        .kernel
+        .invoke_tool(
+            &nested.agent_id,
+            &fx.task.task_id,
+            &nested.session_id,
+            cap.capability_id.clone(),
+            2,
+            ToolInvokeInput {
+                tool_name: "set_goal".to_string(),
+                input: json!({"goal": "try nested retarget"}),
+                evidence_claim: None,
+            },
+        )
+        .unwrap_err();
+    assert!(matches!(set_goal, AgentOsError::PermissionDenied(_)));
+
+    let agent_control = fx
+        .kernel
+        .invoke_tool(
+            &nested.agent_id,
+            &fx.task.task_id,
+            &nested.session_id,
+            cap.capability_id,
+            1,
+            ToolInvokeInput {
+                tool_name: "agent_control".to_string(),
+                input: json!({"action": "status", "thread_id": nested.thread_id}),
+                evidence_claim: None,
+            },
+        )
+        .unwrap_err();
+    assert!(matches!(agent_control, AgentOsError::PermissionDenied(_)));
+}
+
+#[test]
+fn parent_approved_session_permission_enables_child_tool_call() {
+    let fx = fixture();
+    let workspace = temp_workspace("agent-os-session-permission");
+    fs::create_dir_all(&workspace).unwrap();
+    let (supervisor, child) = supervisor_and_reviewer_child(&fx, &workspace);
+    let child_low_cap = fx
+        .kernel
+        .grant_capability(
+            &child.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            1,
+            None,
+        )
+        .unwrap();
+    let request = fx
+        .kernel
+        .invoke_tool(
+            &child.agent_id,
+            &fx.task.task_id,
+            &child.session_id,
+            child_low_cap.capability_id,
+            1,
+            ToolInvokeInput {
+                tool_name: "request_permissions".to_string(),
+                input: json!({
+                    "reason": "write the reviewed file after parent approval",
+                    "scope": "session",
+                    "permissions": write_file_permission()
+                }),
+                evidence_claim: None,
+            },
+        )
+        .unwrap();
+    let request_id = request.output.as_ref().unwrap()["permission_request_id"]
+        .as_str()
+        .unwrap();
+
+    approve_permission_request(&fx, &supervisor, request_id, write_file_permission());
+    let elevated_cap = fx
+        .kernel
+        .grant_capability(
+            &child.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            4,
+            None,
+        )
+        .unwrap();
+    attach_workspace_for_agent(&fx.kernel, &child, &fx.task.task_id, &workspace);
+    fx.kernel
+        .invoke_tool(
+            &child.agent_id,
+            &fx.task.task_id,
+            &child.session_id,
+            elevated_cap.capability_id,
+            4,
+            ToolInvokeInput {
+                tool_name: "write_file".to_string(),
+                input: json!({
+                    "workspace_root": workspace.to_string_lossy(),
+                    "path": "approved.txt",
+                    "content": "approved\n"
+                }),
+                evidence_claim: Some("approved child write succeeded".to_string()),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        fs::read_to_string(workspace.join("approved.txt")).unwrap(),
+        "approved\n"
+    );
+    let replayed = Kernel::from_events(&fx.kernel.events().unwrap()).unwrap();
+    assert_eq!(
+        replayed.state_snapshot().unwrap().permission_grants.len(),
+        1
+    );
+    let _ = fs::remove_dir_all(workspace);
+}
+
+#[test]
+fn denied_permission_request_does_not_change_child_authority() {
+    let fx = fixture();
+    let workspace = temp_workspace("agent-os-denied-permission");
+    fs::create_dir_all(&workspace).unwrap();
+    let (supervisor, child) = supervisor_and_reviewer_child(&fx, &workspace);
+    let child_low_cap = fx
+        .kernel
+        .grant_capability(
+            &child.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            1,
+            None,
+        )
+        .unwrap();
+    let request = fx
+        .kernel
+        .invoke_tool(
+            &child.agent_id,
+            &fx.task.task_id,
+            &child.session_id,
+            child_low_cap.capability_id,
+            1,
+            ToolInvokeInput {
+                tool_name: "request_permissions".to_string(),
+                input: json!({
+                    "reason": "try to write without approval",
+                    "scope": "session",
+                    "permissions": write_file_permission()
+                }),
+                evidence_claim: None,
+            },
+        )
+        .unwrap();
+    let request_id = request.output.as_ref().unwrap()["permission_request_id"]
+        .as_str()
+        .unwrap();
+    deny_permission_request(&fx, &supervisor, request_id);
+
+    let denied = fx
+        .kernel
+        .grant_capability(
+            &child.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            4,
+            None,
+        )
+        .unwrap_err();
+    assert!(matches!(denied, AgentOsError::PermissionDenied(_)));
+    assert!(fx
+        .kernel
+        .state_snapshot()
+        .unwrap()
+        .permission_grants
+        .is_empty());
+    let _ = fs::remove_dir_all(workspace);
+}
+
+#[test]
+fn turn_scoped_permission_grant_expires_after_turn_completes() {
+    let fx = fixture();
+    let workspace = temp_workspace("agent-os-turn-permission");
+    fs::create_dir_all(&workspace).unwrap();
+    let (supervisor, child) = supervisor_and_reviewer_child(&fx, &workspace);
+    fx.kernel.start_turn(&child.thread_id).unwrap();
+    let child_low_cap = fx
+        .kernel
+        .grant_capability(
+            &child.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            1,
+            None,
+        )
+        .unwrap();
+    let request = fx
+        .kernel
+        .invoke_tool(
+            &child.agent_id,
+            &fx.task.task_id,
+            &child.session_id,
+            child_low_cap.capability_id,
+            1,
+            ToolInvokeInput {
+                tool_name: "request_permissions".to_string(),
+                input: json!({
+                    "reason": "temporary write during this turn",
+                    "scope": "turn",
+                    "permissions": write_file_permission()
+                }),
+                evidence_claim: None,
+            },
+        )
+        .unwrap();
+    let request_id = request.output.as_ref().unwrap()["permission_request_id"]
+        .as_str()
+        .unwrap();
+    approve_permission_request(&fx, &supervisor, request_id, write_file_permission());
+    fx.kernel
+        .grant_capability(
+            &child.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            4,
+            None,
+        )
+        .unwrap();
+    fx.kernel
+        .transition_thread(&child.thread_id, ThreadStatus::Ready, None)
+        .unwrap();
+    let expired = fx
+        .kernel
+        .grant_capability(
+            &child.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            4,
+            None,
+        )
+        .unwrap_err();
+    assert!(matches!(expired, AgentOsError::PermissionDenied(_)));
+    let _ = fs::remove_dir_all(workspace);
+}
+
+fn supervisor_and_reviewer_child(
+    fx: &Fixture,
+    workspace: &std::path::Path,
+) -> (AgentControlBlock, AgentControlBlock) {
+    let supervisor = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_supervisor".to_string(),
+            owner: "tester".to_string(),
+            goal: "approve child permissions".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: vec![workspace.to_string_lossy().to_string()],
+        })
+        .unwrap();
+    let child = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_reviewer".to_string(),
+            owner: supervisor.agent_id.clone(),
+            goal: "request write permission".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: Some(supervisor.thread_id.clone()),
+            workspace_roots: vec![workspace.to_string_lossy().to_string()],
+        })
+        .unwrap();
+    (supervisor, child)
+}
+
+fn approve_permission_request(
+    fx: &Fixture,
+    supervisor: &AgentControlBlock,
+    permission_request_id: &str,
+    permissions: serde_json::Value,
+) {
+    let parent_cap = fx
+        .kernel
+        .grant_capability(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            4,
+            None,
+        )
+        .unwrap();
+    fx.kernel
+        .invoke_tool(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            &supervisor.session_id,
+            parent_cap.capability_id,
+            4,
+            ToolInvokeInput {
+                tool_name: "agent_control".to_string(),
+                input: json!({
+                    "action": "approve_permission",
+                    "payload": {
+                        "permission_request_id": permission_request_id,
+                        "permissions": permissions
+                    }
+                }),
+                evidence_claim: None,
+            },
+        )
+        .unwrap();
+}
+
+fn deny_permission_request(
+    fx: &Fixture,
+    supervisor: &AgentControlBlock,
+    permission_request_id: &str,
+) {
+    let parent_cap = fx
+        .kernel
+        .grant_capability(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            4,
+            None,
+        )
+        .unwrap();
+    fx.kernel
+        .invoke_tool(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            &supervisor.session_id,
+            parent_cap.capability_id,
+            4,
+            ToolInvokeInput {
+                tool_name: "agent_control".to_string(),
+                input: json!({
+                    "action": "deny_permission",
+                    "payload": {"permission_request_id": permission_request_id}
+                }),
+                evidence_claim: None,
+            },
+        )
+        .unwrap();
+}
+
+fn attach_workspace_for_agent(
+    kernel: &Kernel,
+    agent: &AgentControlBlock,
+    task_id: &str,
+    workspace: &std::path::Path,
+) {
+    let env = kernel
+        .create_environment(
+            BackendType::IsolatedWorktree,
+            workspace.to_string_lossy(),
+            "sbox_workspace_write",
+            ReusePolicy::TaskScoped,
+        )
+        .unwrap();
+    kernel
+        .attach_environment(
+            &env.environment_id,
+            &agent.agent_id,
+            &agent.thread_id,
+            task_id,
+            AttachMode::WorkspaceWrite,
+        )
+        .unwrap();
+}
+
+fn write_file_permission() -> serde_json::Value {
+    json!({
+        "max_risk_level": 4,
+        "allowed_syscalls": ["tool.invoke"],
+        "resource_scopes": ["tool:*"],
+        "allowed_tool_names": ["write_file"],
+        "allowed_tool_driver_classes": ["filesystem"],
+        "approval_required_above": 4,
+        "requires_evidence_for": []
+    })
+}
+
+fn temp_workspace(prefix: &str) -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "{prefix}-{}-{}",
+        std::process::id(),
+        new_id("case_")
+    ))
 }

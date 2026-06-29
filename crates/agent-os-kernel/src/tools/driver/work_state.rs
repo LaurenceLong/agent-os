@@ -1,27 +1,24 @@
-use super::{current_agent, current_task_id, optional_string};
+use super::{current_agent, current_task_id, optional_string, string_array};
 use crate::util::{parse_payload, required_string};
 use crate::*;
 use agent_os_sys::*;
 use serde_json::{json, Value};
 
-pub(super) fn run_set_objective(
+pub(super) fn run_set_goal(
     kernel: &Kernel,
     syscall: &SyscallEnvelope,
     descriptor: &ToolDescriptor,
     input: &Value,
 ) -> AgentOsResult<Value> {
-    let objective = required_string(input, "objective")?;
-    let task_id = current_task_id(input, syscall)?;
-    let task = kernel.update_task_with_cause(
-        UpdateTaskInput {
-            task_id: task_id.clone(),
-            status: None,
-            blocked_reason: None,
-            owner_agent_id: None,
-            title: optional_string(input, "title"),
-            description: Some(objective.clone()),
-            checklist: None,
-        },
+    let goal = required_string(input, "goal")?;
+    let acb = kernel.set_agent_goal_with_cause(
+        &syscall.agent_id,
+        optional_string(input, "target_thread_id"),
+        optional_string(input, "target_agent_id"),
+        goal,
+        optional_string(input, "title"),
+        optional_string_array(input, "success_criteria")?,
+        optional_string_array(input, "failure_criteria")?,
         Some(syscall.syscall_id.clone()),
     )?;
     Ok(json!({
@@ -29,8 +26,43 @@ pub(super) fn run_set_objective(
         "status": "ok",
         "input": input.clone(),
         "driver_class": descriptor.driver_class,
-        "task_id": task.task_id,
-        "objective": task.description,
+        "thread_id": acb.thread_id,
+        "agent_id": acb.agent_id,
+        "task_id": acb.task.task_id,
+        "goal": acb.task.goal,
+        "goal_status": acb.task.goal_status,
+        "goal_revision": acb.task.goal_revision,
+    }))
+}
+
+pub(super) fn run_accomplish_goal(
+    kernel: &Kernel,
+    syscall: &SyscallEnvelope,
+    descriptor: &ToolDescriptor,
+    input: &Value,
+) -> AgentOsResult<Value> {
+    let summary = required_string(input, "summary")?;
+    let completion = kernel.accomplish_agent_goal_with_cause(
+        &syscall.agent_id,
+        summary.clone(),
+        string_array(input, "evidence_refs")?,
+        string_array(input, "artifact_refs")?,
+        string_array(input, "known_risks")?,
+        Some(syscall.syscall_id.clone()),
+    )?;
+    Ok(json!({
+        "tool": descriptor.name.clone(),
+        "status": "ok",
+        "input": input.clone(),
+        "driver_class": descriptor.driver_class,
+        "thread_id": completion.thread.thread_id,
+        "agent_id": completion.thread.agent_id,
+        "task_id": completion.thread.task.task_id,
+        "goal": completion.thread.task.goal,
+        "goal_status": completion.thread.task.goal_status,
+        "goal_accomplished": true,
+        "summary": summary,
+        "hooks_completed": completion.hooks_completed,
     }))
 }
 
@@ -104,4 +136,11 @@ pub(super) fn run_record_evidence(
         "evidence_type": evidence.evidence_type,
         "claim": claim,
     }))
+}
+
+fn optional_string_array(value: &Value, field: &str) -> AgentOsResult<Option<Vec<String>>> {
+    if value.get(field).is_none() {
+        return Ok(None);
+    }
+    string_array(value, field).map(Some)
 }

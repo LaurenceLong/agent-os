@@ -1,4 +1,4 @@
-﻿use super::audit::truncate;
+use super::audit::truncate;
 use super::prompt::default_system_prompt;
 use crate::{ModelTurnRequest, ToolExecutionRecord};
 use serde_json::{json, Value};
@@ -46,7 +46,7 @@ pub(crate) fn build_anthropic_messages(
 fn format_user_task_message(request: &ModelTurnRequest, workspace_root: &str) -> String {
     format!(
         "Task: {}\n\n{}\n\nWorkspace: {}",
-        request.thread.task.local_goal,
+        request.thread.task.goal,
         if request.thread.task.success_criteria.is_empty() {
             String::new()
         } else {
@@ -137,7 +137,7 @@ fn inject_anthropic_tool_result_messages(messages: &mut Vec<Value>, result: &Too
     }));
 }
 
-fn reconstruct_call(result: &ToolExecutionRecord) -> (&'static str, Value) {
+fn reconstruct_call(result: &ToolExecutionRecord) -> (String, Value) {
     let input = result.input.clone().unwrap_or_else(|| {
         result
             .output
@@ -148,19 +148,24 @@ fn reconstruct_call(result: &ToolExecutionRecord) -> (&'static str, Value) {
     });
 
     match result.tool_name.as_str() {
-        "read_file" => ("read_file", strip_workspace_root(&input)),
-        "write_file" => ("write_file", strip_workspace_root(&input)),
-        "delete_file" => ("delete_file", strip_workspace_root(&input)),
-        "replace_text" => ("replace_text", strip_workspace_root(&input)),
-        "run_command" => ("run_command", strip_cwd(&input)),
-        "set_objective" => ("set_objective", input),
-        "update_checklist" => ("update_checklist", input),
-        "record_evidence" => ("record_evidence", input),
-        "report_supervisor" => ("report_supervisor", input),
-        "post_blackboard" => ("post_blackboard", input),
-        "ask_human" => ("ask_human", input),
-        "agent_control" => ("agent_control", input),
-        _ => ("unknown", input),
+        "read_file" => ("read_file".to_string(), strip_workspace_root(&input)),
+        "write_file" => ("write_file".to_string(), strip_workspace_root(&input)),
+        "delete_file" => ("delete_file".to_string(), strip_workspace_root(&input)),
+        "replace_text" => ("replace_text".to_string(), strip_workspace_root(&input)),
+        "run_command" => ("run_command".to_string(), strip_cwd(&input)),
+        known @ ("set_goal"
+        | "accomplish_goal"
+        | "update_checklist"
+        | "record_evidence"
+        | "report_supervisor"
+        | "post_blackboard"
+        | "ask_human"
+        | "request_permissions"
+        | "load_skill"
+        | "read_skill_resource"
+        | "agent_control") => (known.to_string(), input),
+        name if name.starts_with("mcp__") => (name.to_string(), input),
+        _ => (result.tool_name.clone(), input),
     }
 }
 

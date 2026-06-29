@@ -2,7 +2,7 @@
 
 Status: normative
 
-Last updated: 2026-06-27
+Last updated: 2026-06-29
 
 ## 1. Purpose
 
@@ -37,6 +37,7 @@ final answer contract
 storage driver behavior
 agent package manifest
 distribution manifest
+ecosystem import and replay
 ```
 
 ## 3. Kernel Conformance
@@ -59,6 +60,8 @@ Kernel conformance tests MUST verify:
 - event ordering is stable per aggregate
 - audit log is append-only
 - Memento Fragment lifecycle replays from events
+- ecosystem import events replay instructions, skills, commands, MCP servers,
+  MCP tools, and imported agent profiles into identical projections
 
 ## 4. Agent Thread Runtime Conformance
 
@@ -97,9 +100,33 @@ Tool driver tests MUST verify:
 - failure semantics
 - provider capability declaration for model-facing tools where applicable
 - Host OS tool surface contains exactly `read_file`, `write_file`, `replace_text`, `delete_file`, and `run_command`
-- Agent-OS control-plane tools are grouped by work state, communication, agent supervision, privileged administration, and session lifecycle
+- Agent-OS control-plane tools are grouped by work state, communication, permission request, agent supervision, privileged administration, and session lifecycle
 - `wait_agent` is absent from the core surface; child progress reporting is covered by `agent_control(action=set_hook)`
-- privileged `agent_control` actions are hidden from normal WorkerAgent tool views
+- model-visible tools are filtered by effective permission set and S-level; `agent_control` and `set_goal` are hidden from S2+ views
+- `load_skill` and `read_skill_resource` enforce skill scopes and skill-root
+  path containment
+- local stdio MCP fixtures cover `tools/list`, dynamic tool registration,
+  `tools/call`, schema validation, and permission denial
+
+## 5.2 Ecosystem Conformance
+
+Ecosystem conformance tests MUST verify:
+
+- nearest project `AGENTS.md`/`CLAUDE.md` rule import and precedence
+- global Agent-OS/OpenCode/Claude/Agents imports do not bypass kernel events
+- skill name/description extraction, Markdown fallback summaries, duplicate
+  same-content coalescing, and duplicate different-content rejection
+- command frontmatter import, `$1`/`$ARGUMENTS` expansion, and shell
+  interpolation rejection
+- imported agent Markdown to profile-seed projection
+- runtime prompt projection lists available skills but does not inline unloaded
+  skill bodies
+- local stdio MCP `tools/list` registration and `tools/call` execution through
+  the kernel tool broker
+- denied skill and MCP calls record kernel authorization failures rather than
+  executing drivers
+- OpenAI-compatible and Anthropic-compatible model tool views project core and
+  dynamic schemas from kernel `ToolDescriptor` records
 
 ### 5.1 Current v0.1 Tool Coverage
 
@@ -116,19 +143,19 @@ Current live goal-driven scenarios:
 ```text
 OpenAI-compatible workspace:
   cargo test -p agent-os-thread live_openai_compatible_llm_goal_driven_workspace_e2e -- --ignored --nocapture
-  expected coverage: read_file, write_file, replace_text, delete_file, run_command, submit_final
+  expected coverage: read_file, write_file, replace_text, delete_file, run_command, accomplish_goal, submit_final
 
 OpenAI-compatible control plane:
   cargo test -p agent-os-thread live_openai_compatible_llm_goal_driven_control_plane_e2e -- --ignored --nocapture
-  expected coverage: set_objective, update_checklist, record_evidence, report_supervisor, post_blackboard, ask_human, agent_control, read_file, submit_final
+  expected coverage: set_goal, accomplish_goal, update_checklist, record_evidence, report_supervisor, post_blackboard, ask_human, request_permissions, agent_control, read_file, submit_final
 
 Anthropic-compatible workspace:
   cargo test -p agent-os-thread live_anthropic_compatible_llm_goal_driven_workspace_e2e -- --ignored --nocapture
-  expected coverage: read_file, write_file, replace_text, delete_file, run_command, submit_final
+  expected coverage: read_file, write_file, replace_text, delete_file, run_command, accomplish_goal, submit_final
 
 Anthropic-compatible control plane:
   cargo test -p agent-os-thread live_anthropic_compatible_llm_goal_driven_control_plane_e2e -- --ignored --nocapture
-  expected coverage: set_objective, update_checklist, record_evidence, report_supervisor, post_blackboard, ask_human, agent_control, read_file, submit_final
+  expected coverage: set_goal, accomplish_goal, update_checklist, record_evidence, report_supervisor, post_blackboard, ask_human, request_permissions, agent_control, read_file, submit_final
 ```
 
 Audit logs are emitted to:

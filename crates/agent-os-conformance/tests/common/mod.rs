@@ -83,7 +83,7 @@ impl ModelClient for DeterministicModelClient {
         Ok(ModelTurnResponse {
             actions: vec![action],
             usage: ProviderUsage {
-                input_tokens: request.thread.task.local_goal.len() as u64,
+                input_tokens: request.thread.task.goal.len() as u64,
                 output_tokens: 1,
                 cost: 0.0,
             },
@@ -133,7 +133,7 @@ pub fn fixture_with_kernel(kernel: Kernel) -> Fixture {
             task_id: task.task_id.clone(),
             role_profile_id: "role_worker".to_string(),
             owner: "tester".to_string(),
-            local_goal: "write patch".to_string(),
+            goal: "write patch".to_string(),
             success_criteria: vec!["patch has diff evidence".to_string()],
             failure_criteria: Vec::new(),
             parent_thread_id: None,

@@ -117,6 +117,15 @@ impl Kernel {
         input: SpawnAgentInput,
         causation_id: Option<String>,
     ) -> AgentOsResult<AgentControlBlock> {
+        self.spawn_agent_with_permissions_with_cause(input, None, causation_id)
+    }
+
+    pub(crate) fn spawn_agent_with_permissions_with_cause(
+        &self,
+        input: SpawnAgentInput,
+        explicit_permissions: Option<PermissionSet>,
+        causation_id: Option<String>,
+    ) -> AgentOsResult<AgentControlBlock> {
         let task = self
             .read_state()?
             .tasks
@@ -174,10 +183,18 @@ impl Kernel {
             Some(parent) => format!("/{}/{}", parent.trim_start_matches("thread_"), role.name),
             None => "/".to_string(),
         };
-        let supervisor_level = supervisor_level_for_spawn(parent.as_ref(), &role)?;
+        let security_level = parent
+            .as_ref()
+            .map(|parent| parent.security_level.child())
+            .unwrap_or(SecurityLevel::ROOT_AGENT);
+        let effective_permissions_snapshot = self.child_permission_snapshot(
+            parent.as_ref(),
+            &permission.permission_set,
+            explicit_permissions,
+        )?;
         let relationship = invocation_relationship(parent.as_ref(), &role);
-        let assignment = input.local_goal.clone();
-        let caller_supervisor_level = parent.as_ref().and_then(|parent| parent.supervisor_level);
+        let goal_text = input.goal.clone();
+        let caller_security_level = parent.as_ref().map(|parent| parent.security_level);
         let provider_profile_id = role
             .default_provider_profile_id
             .clone()
@@ -201,7 +218,7 @@ impl Kernel {
             session_id: new_id("sess_"),
             root_thread_id,
             parent_thread_id,
-            supervisor_level,
+            security_level,
             agent_path,
             role: role.name.clone(),
             owner: input.owner.clone(),
@@ -210,7 +227,10 @@ impl Kernel {
             task: ThreadTaskBinding {
                 task_id: task.task_id.clone(),
                 goal_id: task.goal_id.clone(),
-                local_goal: input.local_goal,
+                goal: input.goal,
+                goal_status: AgentGoalStatus::Active,
+                goal_revision: 1,
+                accomplished_at: None,
                 success_criteria: input.success_criteria,
                 failure_criteria: input.failure_criteria,
             },
@@ -232,6 +252,7 @@ impl Kernel {
                 reasoning_profile: None,
                 effective_binding: binding,
             },
+            effective_permissions_snapshot,
             queues: ThreadQueues::default(),
             active_turn: ActiveTurn::default(),
             resources: ThreadResources::default(),
@@ -268,12 +289,12 @@ impl Kernel {
             task_id: task.task_id.clone(),
             caller_thread_id: parent.as_ref().map(|parent| parent.thread_id.clone()),
             caller_agent_id: parent.as_ref().map(|parent| parent.agent_id.clone()),
-            caller_supervisor_level,
+            caller_security_level,
             callee_thread_id: thread_id.clone(),
             callee_agent_id: agent_id.clone(),
-            callee_supervisor_level: acb.supervisor_level,
+            callee_security_level: acb.security_level,
             relationship,
-            assignment,
+            goal: goal_text,
             status: AgentInvocationStatus::Active,
             created_at: now.clone(),
             updated_at: now.clone(),
@@ -324,6 +345,266 @@ impl Kernel {
         self.transition_thread_with_cause(&acb.thread_id, next, reason, causation_id)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn set_agent_goal_with_cause(
+        &self,
+        requester_agent_id: &str,
+        target_thread_id: Option<String>,
+        target_agent_id: Option<String>,
+        goal: String,
+        title: Option<String>,
+        success_criteria: Option<Vec<String>>,
+        failure_criteria: Option<Vec<String>>,
+        causation_id: Option<String>,
+    ) -> AgentOsResult<AgentControlBlock> {
+        let state = self.read_state()?;
+        let requester = state
+            .threads
+            .values()
+            .find(|thread| thread.agent_id == requester_agent_id)
+            .cloned()
+            .ok_or_else(|| AgentOsError::NotFound(format!("agent {requester_agent_id}")))?;
+        self.require_control_plane_security_level(&requester, "set_goal")?;
+        if requester.role != "SupervisorAgent" {
+            return Err(AgentOsError::PermissionDenied(
+                "set_goal requires SupervisorAgent role".to_string(),
+            ));
+        }
+        let target = match (target_thread_id.as_deref(), target_agent_id.as_deref()) {
+            (Some(thread_id), Some(agent_id)) => {
+                let target = state
+                    .threads
+                    .get(thread_id)
+                    .cloned()
+                    .ok_or_else(|| AgentOsError::NotFound(format!("thread {thread_id}")))?;
+                if target.agent_id != agent_id {
+                    return Err(AgentOsError::Validation(
+                        "target_thread_id and target_agent_id identify different agents"
+                            .to_string(),
+                    ));
+                }
+                target
+            }
+            (Some(thread_id), None) => state
+                .threads
+                .get(thread_id)
+                .cloned()
+                .ok_or_else(|| AgentOsError::NotFound(format!("thread {thread_id}")))?,
+            (None, Some(agent_id)) => state
+                .threads
+                .values()
+                .find(|thread| thread.agent_id == agent_id)
+                .cloned()
+                .ok_or_else(|| AgentOsError::NotFound(format!("agent {agent_id}")))?,
+            (None, None) => requester.clone(),
+        };
+        if target.thread_id != requester.thread_id
+            && target.parent_thread_id.as_deref() != Some(&requester.thread_id)
+        {
+            return Err(AgentOsError::PermissionDenied(
+                "set_goal can only target the Supervisor thread or a direct child".to_string(),
+            ));
+        }
+        drop(state);
+
+        let now = now_rfc3339();
+        let mut acb = target;
+        acb.task.goal = goal.clone();
+        acb.task.goal_status = AgentGoalStatus::Active;
+        acb.task.goal_revision = acb.task.goal_revision.saturating_add(1);
+        acb.task.accomplished_at = None;
+        if let Some(criteria) = success_criteria {
+            acb.task.success_criteria = criteria;
+        }
+        if let Some(criteria) = failure_criteria {
+            acb.task.failure_criteria = criteria;
+        }
+        acb.audit.updated_at = now.clone();
+        self.emit(
+            "ThreadConfigured",
+            "thread",
+            &acb.thread_id,
+            Some(acb.agent_id.clone()),
+            Some(acb.task.task_id.clone()),
+            causation_id.clone(),
+            Some(acb.task.goal_id.clone()),
+            &acb,
+        )?;
+
+        if let Some(title) = title {
+            self.update_task_with_cause(
+                UpdateTaskInput {
+                    task_id: acb.task.task_id.clone(),
+                    status: None,
+                    blocked_reason: None,
+                    owner_agent_id: None,
+                    title: Some(title),
+                    description: None,
+                    checklist: None,
+                },
+                causation_id.clone(),
+            )?;
+        }
+
+        let invocation = self
+            .read_state()?
+            .agent_invocations
+            .get(&acb.invocation_id)
+            .cloned();
+        if let Some(mut invocation) = invocation {
+            invocation.goal = goal;
+            invocation.status = AgentInvocationStatus::Active;
+            invocation.updated_at = now;
+            self.emit(
+                "AgentInvocationRecorded",
+                "agent_invocation",
+                &invocation.invocation_id,
+                Some(invocation.callee_agent_id.clone()),
+                Some(invocation.task_id.clone()),
+                causation_id,
+                Some(invocation.goal_id.clone()),
+                &invocation,
+            )?;
+        }
+        Ok(acb)
+    }
+
+    pub(crate) fn accomplish_agent_goal_with_cause(
+        &self,
+        agent_id: &str,
+        summary: String,
+        evidence_refs: Vec<String>,
+        artifact_refs: Vec<String>,
+        known_risks: Vec<String>,
+        causation_id: Option<String>,
+    ) -> AgentOsResult<AgentGoalCompletion> {
+        let mut acb = self
+            .thread_by_agent(agent_id)?
+            .ok_or_else(|| AgentOsError::NotFound(format!("agent {agent_id}")))?;
+        let completed_at = now_rfc3339();
+        acb.task.goal_status = AgentGoalStatus::Accomplished;
+        acb.task.accomplished_at = Some(completed_at.clone());
+        acb.status = ThreadStatus::Completing;
+        acb.status_reason = Some(summary.clone());
+        acb.active_turn.status = Some(TurnStatus::InProgress);
+        acb.audit.updated_at = completed_at.clone();
+        acb.recovery.dirty = true;
+
+        let hooks_completed =
+            self.complete_active_hooks_for_thread_with_cause(&acb.thread_id, causation_id.clone())?;
+        self.complete_invocation_for_thread_with_cause(&acb.thread_id, causation_id.clone())?;
+        let completion = AgentGoalCompletion {
+            thread: acb.clone(),
+            summary,
+            evidence_refs,
+            artifact_refs,
+            known_risks,
+            hooks_completed,
+            completed_at,
+        };
+        self.emit(
+            "AgentGoalAccomplished",
+            "thread",
+            &acb.thread_id,
+            Some(acb.agent_id.clone()),
+            Some(acb.task.task_id.clone()),
+            causation_id,
+            Some(acb.task.goal_id.clone()),
+            &completion,
+        )?;
+        Ok(completion)
+    }
+
+    pub(crate) fn complete_active_hooks_for_thread_with_cause(
+        &self,
+        thread_id: &str,
+        causation_id: Option<String>,
+    ) -> AgentOsResult<usize> {
+        self.close_active_hooks_for_thread_with_cause(
+            thread_id,
+            AgentHookStatus::Completed,
+            causation_id,
+        )
+    }
+
+    pub(crate) fn close_active_hooks_for_thread_with_cause(
+        &self,
+        thread_id: &str,
+        status: AgentHookStatus,
+        causation_id: Option<String>,
+    ) -> AgentOsResult<usize> {
+        let hooks = self
+            .read_state()?
+            .agent_hooks
+            .values()
+            .filter(|hook| hook.thread_id == thread_id && hook.status == AgentHookStatus::Active)
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut completed = 0usize;
+        for mut hook in hooks {
+            hook.status = status;
+            hook.updated_at = now_rfc3339();
+            self.emit(
+                "AgentHookUpdated",
+                "agent_hook",
+                &hook.hook_id,
+                Some(hook.agent_id.clone()),
+                None,
+                causation_id.clone(),
+                None,
+                &hook,
+            )?;
+            completed += 1;
+        }
+        Ok(completed)
+    }
+
+    pub(crate) fn complete_invocation_for_thread_with_cause(
+        &self,
+        thread_id: &str,
+        causation_id: Option<String>,
+    ) -> AgentOsResult<Option<AgentInvocation>> {
+        self.close_invocation_for_thread_with_cause(
+            thread_id,
+            AgentInvocationStatus::Completed,
+            causation_id,
+        )
+    }
+
+    pub(crate) fn close_invocation_for_thread_with_cause(
+        &self,
+        thread_id: &str,
+        status: AgentInvocationStatus,
+        causation_id: Option<String>,
+    ) -> AgentOsResult<Option<AgentInvocation>> {
+        let Some(invocation) = self
+            .read_state()?
+            .agent_invocations
+            .values()
+            .find(|invocation| {
+                invocation.callee_thread_id == thread_id
+                    && invocation.status == AgentInvocationStatus::Active
+            })
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        let mut invocation = invocation;
+        invocation.status = status;
+        invocation.updated_at = now_rfc3339();
+        self.emit(
+            "AgentInvocationRecorded",
+            "agent_invocation",
+            &invocation.invocation_id,
+            Some(invocation.callee_agent_id.clone()),
+            Some(invocation.task_id.clone()),
+            causation_id,
+            Some(invocation.goal_id.clone()),
+            &invocation,
+        )?;
+        Ok(Some(invocation))
+    }
+
     pub(crate) fn transition_thread_with_cause(
         &self,
         thread_id: &str,
@@ -347,6 +628,10 @@ impl Kernel {
         acb.status = next;
         acb.status_reason = reason.clone();
         acb.audit.updated_at = now_rfc3339();
+        if next == ThreadStatus::Ready && acb.active_turn.turn_id.is_some() {
+            acb.active_turn.status = Some(TurnStatus::Completed);
+            acb.active_turn.active_step_id = None;
+        }
         if matches!(
             next,
             ThreadStatus::Completed | ThreadStatus::Failed | ThreadStatus::Terminated
@@ -453,26 +738,6 @@ fn valid_thread_transition(current: ThreadStatus, next: ThreadStatus) -> bool {
             matches!(next, ThreadStatus::Terminated | ThreadStatus::Failed)
         }
         ThreadStatus::Completed | ThreadStatus::Failed | ThreadStatus::Terminated => false,
-    }
-}
-
-fn supervisor_level_for_spawn(
-    parent: Option<&AgentControlBlock>,
-    role: &RoleProfile,
-) -> AgentOsResult<Option<u32>> {
-    if role.name != "SupervisorAgent" {
-        return Ok(None);
-    }
-    match parent {
-        None => Ok(Some(0)),
-        Some(parent) => parent
-            .supervisor_level
-            .map(|level| Some(level + 1))
-            .ok_or_else(|| {
-                AgentOsError::PermissionDenied(
-                    "only a SupervisorAgent can delegate another SupervisorAgent".to_string(),
-                )
-            }),
     }
 }
 

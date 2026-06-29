@@ -4,7 +4,7 @@ use thiserror::Error;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
-pub const ABI_VERSION: &str = "0.1";
+pub const ABI_VERSION: &str = "0.2.0";
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 

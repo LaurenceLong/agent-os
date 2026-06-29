@@ -45,8 +45,10 @@ state: AgentState
 priority: integer
 goal:
   global_goal: string
-  local_goal: string
-  current_subgoal: string | null
+  goal: string
+  status: Active | Accomplished | Cancelled
+  revision: integer
+  accomplished_at: string | null
   success_criteria: string[]
   failure_criteria: string[]
   deadline: string | null
@@ -138,7 +140,7 @@ Example transition rules:
 Agent Thread execution MUST follow a kernel-controlled outer loop:
 
 ```text
-1. receive assignment
+1. receive local goal
 2. read visible ACB
 3. request scoped context
 4. think with bounded context
@@ -170,11 +172,11 @@ Agent Threads MUST yield at these boundaries:
 
 Each yield SHOULD create or update a checkpoint.
 
-The kernel may suspend, resume, compact, replan, or terminate an Agent Thread only at yield boundaries in v0.1.
+The kernel may suspend, resume, compact, replan, delete session state, purge current projection state, or terminate an Agent Thread only at yield boundaries in v0.2.0.
 
 ## 6. Core Roles and Supervisor Levels
 
-Agent-OS v0.1 keeps the core role set small:
+Agent-OS v0.2.0 keeps the core role set small:
 
 ```text
 SupervisorAgent
@@ -221,7 +223,7 @@ Responsibilities:
 
 Restrictions:
 
-- MUST stay inside its assignment and capability scope
+- MUST stay inside its local goal and capability scope
 - MUST NOT be the sole reviewer or acceptor of its own artifact
 - MUST NOT widen its own role, permission, sandbox, communication, or Supervisor level
 

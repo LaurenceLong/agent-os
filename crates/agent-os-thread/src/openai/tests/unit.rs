@@ -1,6 +1,9 @@
 use super::support::*;
 use super::*;
-use crate::openai::tools::{anthropic_tool_definitions_for_thread, tool_definitions_for_thread};
+use crate::openai::tools::{
+    anthropic_tool_definitions_for_request, anthropic_tool_definitions_for_thread,
+    tool_definitions_for_request, tool_definitions_for_thread,
+};
 
 #[test]
 fn build_messages_includes_system_and_user() {
@@ -32,12 +35,14 @@ fn default_system_prompt_generates_tool_contract() {
     assert!(prompt.contains("replace_text(path, old, new)"));
     assert!(prompt.contains("delete_file(path)"));
     assert!(prompt.contains("run_command(program, args)"));
-    assert!(prompt.contains("set_objective(objective)"));
+    assert!(prompt.contains("set_goal(goal, target_thread_id, target_agent_id)"));
+    assert!(prompt.contains("accomplish_goal(summary)"));
     assert!(prompt.contains("update_checklist(items)"));
     assert!(prompt.contains("record_evidence(evidence_type, claim)"));
     assert!(prompt.contains("report_supervisor(message)"));
     assert!(prompt.contains("post_blackboard(channel_id, section, content)"));
     assert!(prompt.contains("ask_human(question)"));
+    assert!(prompt.contains("request_permissions(reason, scope, permissions)"));
     assert!(prompt.contains("agent_control(action, agent_id, thread_id, payload)"));
     assert!(prompt.contains("Host OS tools"));
     assert!(prompt.contains("Work State tools"));
@@ -47,6 +52,51 @@ fn default_system_prompt_generates_tool_contract() {
     assert!(prompt.contains("Paths are relative to the workspace root"));
     assert!(!prompt.contains("workspace.read_file"));
     assert!(!prompt.contains("process.run"));
+}
+
+#[test]
+fn default_system_prompt_projects_ecosystem_without_inlining_skill_body() {
+    let tmp = std::env::temp_dir().join(format!("aos-openai-ecosystem-{}", new_id("t_")));
+    let mut request = make_request(&tmp);
+    request
+        .context
+        .instruction_documents
+        .push(InstructionDocument {
+            instruction_id: "inst_1".to_string(),
+            source: EcosystemSource {
+                source_kind: EcosystemSourceKind::AgentOs,
+                source_scope: EcosystemSourceScope::Project,
+                source_path: "AGENTS.md".to_string(),
+            },
+            precedence_rank: 0,
+            content: "Project rule: load matching skills on demand.".to_string(),
+            content_hash: "hash_inst".to_string(),
+            created_at: now_rfc3339(),
+        });
+    request.context.skill_definitions.push(SkillDefinition {
+        skill_id: "skill_1".to_string(),
+        name: "review-skill".to_string(),
+        description: "Review code with local criteria.".to_string(),
+        root_path: ".agent-os/skills/review-skill".to_string(),
+        skill_file_path: ".agent-os/skills/review-skill/SKILL.md".to_string(),
+        source: EcosystemSource {
+            source_kind: EcosystemSourceKind::AgentOs,
+            source_scope: EcosystemSourceScope::Project,
+            source_path: ".agent-os/skills/review-skill/SKILL.md".to_string(),
+        },
+        content: "SECRET_SKILL_BODY".to_string(),
+        metadata: std::collections::BTreeMap::new(),
+        content_hash: "hash_skill".to_string(),
+        created_at: now_rfc3339(),
+    });
+
+    let prompt = default_system_prompt(&request, tmp.to_str().unwrap());
+    assert!(prompt.contains("## Imported Instructions"));
+    assert!(prompt.contains("Project rule: load matching skills on demand."));
+    assert!(prompt.contains("## Available Skills"));
+    assert!(prompt.contains("review-skill: Review code with local criteria."));
+    assert!(prompt.contains("Use load_skill(name) before following a skill"));
+    assert!(!prompt.contains("SECRET_SKILL_BODY"));
 }
 
 #[test]
@@ -326,18 +376,22 @@ fn tool_definitions_include_all_core_tools() {
                 .and_then(Value::as_str)
         })
         .collect();
-    assert_eq!(names.len(), 13);
+    assert_eq!(names.len(), 17);
     assert!(names.contains(&"read_file"));
     assert!(names.contains(&"write_file"));
     assert!(names.contains(&"replace_text"));
     assert!(names.contains(&"delete_file"));
     assert!(names.contains(&"run_command"));
-    assert!(names.contains(&"set_objective"));
+    assert!(names.contains(&"set_goal"));
+    assert!(names.contains(&"accomplish_goal"));
     assert!(names.contains(&"update_checklist"));
     assert!(names.contains(&"record_evidence"));
     assert!(names.contains(&"report_supervisor"));
     assert!(names.contains(&"post_blackboard"));
     assert!(names.contains(&"ask_human"));
+    assert!(names.contains(&"request_permissions"));
+    assert!(names.contains(&"load_skill"));
+    assert!(names.contains(&"read_skill_resource"));
     assert!(names.contains(&"agent_control"));
     assert!(names.contains(&"submit_final"));
 }
@@ -368,9 +422,17 @@ fn anthropic_tool_definitions_mirror_core_tools() {
 fn worker_tool_view_hides_privileged_agent_control_actions() {
     let tmp = std::env::temp_dir().join(format!("aos-openai-worker-tools-{}", new_id("t_")));
     let request = make_request(&tmp);
-    let actions = agent_control_actions(&tool_definitions_for_thread(&request.thread));
-    assert!(actions.contains(&"start".to_string()));
-    assert!(actions.contains(&"stop".to_string()));
+    let tools = tool_definitions_for_thread(&request.thread);
+    let names: Vec<&str> = tools
+        .iter()
+        .filter_map(|tool| tool.pointer("/function/name").and_then(Value::as_str))
+        .collect();
+    assert!(!names.contains(&"set_goal"));
+    assert!(names.contains(&"accomplish_goal"));
+    assert!(names.contains(&"request_permissions"));
+    assert!(!names.contains(&"agent_control"));
+    let actions = agent_control_actions(&tools);
+    assert!(actions.is_empty());
     assert!(!actions.contains(&"kill".to_string()));
     assert!(!actions.contains(&"delete_session".to_string()));
     assert!(!actions.contains(&"purge_state".to_string()));
@@ -385,7 +447,15 @@ fn supervisor_tool_view_includes_privileged_agent_control_actions() {
         "Supervise privileged action visibility",
         vec!["tool view is role scoped".to_string()],
     );
-    let actions = agent_control_actions(&tool_definitions_for_thread(&request.thread));
+    let tools = tool_definitions_for_thread(&request.thread);
+    let names: Vec<&str> = tools
+        .iter()
+        .filter_map(|tool| tool.pointer("/function/name").and_then(Value::as_str))
+        .collect();
+    assert!(names.contains(&"set_goal"));
+    let actions = agent_control_actions(&tools);
+    assert!(actions.contains(&"approve_permission".to_string()));
+    assert!(actions.contains(&"deny_permission".to_string()));
     assert!(actions.contains(&"kill".to_string()));
     assert!(actions.contains(&"delete_session".to_string()));
     assert!(actions.contains(&"purge_state".to_string()));
@@ -402,6 +472,90 @@ fn supervisor_tool_view_includes_privileged_agent_control_actions() {
     assert!(anthropic_actions
         .iter()
         .any(|action| action.as_str() == Some("kill")));
+}
+
+#[test]
+fn request_tool_view_includes_permitted_dynamic_mcp_tools() {
+    let tmp = std::env::temp_dir().join(format!("aos-openai-mcp-tools-{}", new_id("t_")));
+    let mut request = make_request(&tmp);
+    attach_mcp_echo_tool(&mut request);
+
+    let tools = tool_definitions_for_request(&request);
+    let names: Vec<&str> = tools
+        .iter()
+        .filter_map(|tool| tool.pointer("/function/name").and_then(Value::as_str))
+        .collect();
+    assert!(names.contains(&"mcp__echo__echo"));
+    let mcp_tool = tools
+        .iter()
+        .find(|tool| {
+            tool.pointer("/function/name").and_then(Value::as_str) == Some("mcp__echo__echo")
+        })
+        .unwrap();
+    assert_eq!(
+        mcp_tool.pointer("/function/parameters/required"),
+        Some(&json!(["text"]))
+    );
+
+    let anthropic_names: Vec<String> = anthropic_tool_definitions_for_request(&request)
+        .into_iter()
+        .filter_map(|tool| tool.get("name").and_then(Value::as_str).map(str::to_string))
+        .collect();
+    assert!(anthropic_names.contains(&"mcp__echo__echo".to_string()));
+}
+
+#[test]
+fn request_tool_view_projects_core_tools_from_kernel_descriptors() {
+    let tmp = std::env::temp_dir().join(format!("aos-openai-core-tools-{}", new_id("t_")));
+    let (kernel, mut request) = make_kernel_request(&tmp);
+    let mut read_descriptor = kernel
+        .state_snapshot()
+        .unwrap()
+        .tool_descriptors
+        .get("read_file")
+        .cloned()
+        .unwrap();
+    read_descriptor.description = "Kernel-owned read descriptor projection.".to_string();
+    read_descriptor.model_input_schema = Some(json!({
+        "type": "object",
+        "required": ["path", "read_mode"],
+        "properties": {
+            "path": {"type": "string"},
+            "read_mode": {"enum": ["exact"]}
+        },
+        "additionalProperties": false
+    }));
+    kernel.register_tool_descriptor(read_descriptor).unwrap();
+    refresh_tool_descriptors(&kernel, &mut request);
+
+    let tools = tool_definitions_for_request(&request);
+    let read_file = tools
+        .iter()
+        .find(|tool| tool.pointer("/function/name").and_then(Value::as_str) == Some("read_file"))
+        .unwrap();
+    assert_eq!(
+        read_file
+            .pointer("/function/description")
+            .and_then(Value::as_str),
+        Some("Kernel-owned read descriptor projection.")
+    );
+    assert_eq!(
+        read_file.pointer("/function/parameters/required"),
+        Some(&json!(["path", "read_mode"]))
+    );
+
+    let anthropic_read = anthropic_tool_definitions_for_request(&request)
+        .into_iter()
+        .find(|tool| tool.get("name").and_then(Value::as_str) == Some("read_file"))
+        .unwrap();
+    assert_eq!(
+        anthropic_read.get("description").and_then(Value::as_str),
+        Some("Kernel-owned read descriptor projection.")
+    );
+    assert_eq!(
+        anthropic_read.pointer("/input_schema/required"),
+        Some(&json!(["path", "read_mode"]))
+    );
 }
 
 fn agent_control_actions(tools: &[Value]) -> Vec<String> {
@@ -457,7 +611,7 @@ fn map_function_call_supports_agent_control_actions() {
         json!({
             "action": "start",
             "payload": {
-                "assignment": "inspect the demo",
+                "goal": "inspect the demo",
                 "hooks": [{
                     "interval_seconds": 60,
                     "prompt": "Report concise progress."
@@ -472,6 +626,24 @@ fn map_function_call_supports_agent_control_actions() {
 }
 
 #[test]
+fn map_function_call_supports_skill_and_mcp_tools() {
+    let tmp = std::env::temp_dir().join(format!("aos-openai-ecosystem-map-{}", new_id("t_")));
+    let mut request = make_request(&tmp);
+    attach_mcp_echo_tool(&mut request);
+    let (tool_name, input, risk) =
+        map_function_call("load_skill", json!({"name": "review-skill"}), &request);
+    assert_eq!(tool_name, "load_skill");
+    assert_eq!(input["name"], "review-skill");
+    assert_eq!(risk, 1);
+
+    let (tool_name, input, risk) =
+        map_function_call("mcp__echo__echo", json!({"text": "hello"}), &request);
+    assert_eq!(tool_name, "mcp__echo__echo");
+    assert_eq!(input["text"], "hello");
+    assert_eq!(risk, 3);
+}
+
+#[test]
 fn api_style_parses_explicit_and_base_url_values() {
     assert_eq!(
         LlmApiStyle::from_value("openai-compatible").unwrap(),
@@ -481,13 +653,64 @@ fn api_style_parses_explicit_and_base_url_values() {
         LlmApiStyle::from_value("anthropic").unwrap(),
         LlmApiStyle::AnthropicCompatible
     );
-    std::env::remove_var("LLM_API_STYLE");
     assert_eq!(
-        LlmApiStyle::from_env_or_base("http://model.mify.ai.srv/anthropic").unwrap(),
+        LlmApiStyle::from_base_url("https://provider.example/anthropic"),
         LlmApiStyle::AnthropicCompatible
     );
     assert_eq!(
-        LlmApiStyle::from_env_or_base("http://model.mify.ai.srv/v1").unwrap(),
+        LlmApiStyle::from_base_url("https://provider.example/v1"),
         LlmApiStyle::OpenAiCompatible
     );
+}
+
+fn mcp_echo_tool() -> McpToolDefinition {
+    let schema = json!({
+        "type": "object",
+        "required": ["text"],
+        "properties": {"text": {"type": "string"}},
+        "additionalProperties": false
+    });
+    McpToolDefinition {
+        mcp_tool_id: "mcptool_echo".to_string(),
+        server_name: "echo".to_string(),
+        tool_name: "echo".to_string(),
+        model_tool_name: "mcp__echo__echo".to_string(),
+        description: "Echo one text field.".to_string(),
+        input_schema: schema.clone(),
+        output_schema: json!({"type": "object"}),
+        source: EcosystemSource {
+            source_kind: EcosystemSourceKind::AgentOs,
+            source_scope: EcosystemSourceScope::Config,
+            source_path: "agent-os.json".to_string(),
+        },
+        tool_descriptor: ToolDescriptor {
+            tool_id: "tool_mcp__echo__echo".to_string(),
+            name: "mcp__echo__echo".to_string(),
+            description: "Echo one text field.".to_string(),
+            version: "0.2.0".to_string(),
+            driver_class: ToolDriverClass::Mcp,
+            risk_level: 3,
+            input_schema: schema.clone(),
+            model_input_schema: Some(schema),
+            output_schema: json!({"type": "object"}),
+            runtime_input_policy: ToolRuntimeInputPolicy {
+                required_resource_scopes: vec!["mcp:echo:echo".to_string()],
+                ..ToolRuntimeInputPolicy::default()
+            },
+            idempotency: IdempotencyMode::ToolNative,
+            evidence_type: Some(EvidenceType::ExternalReference),
+            created_at: now_rfc3339(),
+            ..ToolDescriptor::default()
+        },
+        created_at: now_rfc3339(),
+    }
+}
+
+fn attach_mcp_echo_tool(request: &mut ModelTurnRequest) {
+    let tool = mcp_echo_tool();
+    request
+        .context
+        .tool_descriptors
+        .push(tool.tool_descriptor.clone());
+    request.context.mcp_tools.push(tool);
 }

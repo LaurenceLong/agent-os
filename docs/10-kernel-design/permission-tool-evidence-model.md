@@ -2,7 +2,7 @@
 
 Status: normative
 
-Last updated: 2026-06-26
+Last updated: 2026-06-29
 
 ## 1. Purpose
 
@@ -113,6 +113,11 @@ All tool calls MUST go through Tool Broker.
 
 The v0.1 model-visible tool surface is typed by domain.
 
+Core and dynamically imported model-visible tools MUST project descriptions and
+model input schemas from registered kernel `ToolDescriptor` records. Provider
+adapters may convert the neutral descriptor into provider-specific syntax, but
+they MUST NOT redefine core tool schemas in adapter-local static JSON.
+
 Host OS substrate tools are exactly:
 
 ```text
@@ -126,12 +131,16 @@ run_command
 Agent-OS control-plane tools are:
 
 ```text
-set_objective
+set_goal
+accomplish_goal
 update_checklist
 record_evidence
+load_skill
+read_skill_resource
 report_supervisor
 post_blackboard
 ask_human
+request_permissions
 agent_control
 submit_final
 ```
@@ -158,16 +167,39 @@ delete_session
 purge_state
 ```
 
-`submit_final` is a model-visible lifecycle action, not a filesystem driver. Privileged `agent_control` actions require explicit Supervisor permission and MUST NOT appear in normal WorkerAgent tool views.
+Permission response `agent_control` actions are:
+
+```text
+approve_permission
+deny_permission
+```
+
+`load_skill` and `read_skill_resource` are ecosystem tools. `load_skill`
+returns the imported `SKILL.md` body for a named skill. `read_skill_resource`
+reads a skill-root-relative resource path and MUST reject absolute paths,
+parent-directory traversal, and canonical paths outside the skill root.
+
+Local stdio MCP tools are registered as dynamic model-visible tools named
+`mcp__server__tool`. Their `ToolDescriptor` comes from the kernel registry and
+uses driver class `mcp`. MCP authorization is controlled by driver class and
+resource scope, especially `mcp:<server>:<tool>`, because the exact model tool
+names are discovered at runtime.
+
+`set_goal` and `agent_control` require `security_level <= 1` and explicit tool authority. S2+ agents MUST NOT gain these tools through permission grants. `request_permissions` remains available to lower-level child agents when their permission set allows it; it records a durable parent-directed request and does not execute the requested operation. `accomplish_goal` is visible to execution agents and marks the caller's local goal accomplished before final submission. `submit_final` is a model-visible lifecycle action, not a filesystem driver, and MUST remain the last tool call in a session. Privileged `agent_control` actions require explicit Supervisor permission and MUST NOT appear in normal WorkerAgent tool views.
 
 `wait_agent` is not a core tool. Agent progress is handled through status reads, output windows, lifecycle events, and `agent_control(action=set_hook)`.
 
 Tool Broker responsibilities:
 
 - normalize tool metadata
+- project model tool schemas from registered `ToolDescriptor` records for core
+  and dynamically imported tools
 - validate input schema
 - check capability
-- check effective role and permission binding
+- check effective permission set, including tool name and driver class
+- check ecosystem resource scopes such as `instruction:*`, `skill:<name>`,
+  `skill_file:<name>:*`, and `mcp:<server>:<tool>`
+- enforce S-level hard gates for `agent_control` and `set_goal`
 - check resource scope
 - check risk level
 - check environment attachment and writable lease state where applicable
@@ -183,12 +215,12 @@ Agent Threads MUST NOT call tools directly.
 
 ## 6.1 Agent Supervision Tool Semantics
 
-`agent_control(action=start)` MUST create durable agent state and an invocation edge before launching provider work. The `start` action MAY set multiple control-plane properties atomically, including timeout policy, output policy, and initial hooks.
+`agent_control(action=start)` MUST create durable agent state and an invocation edge before launching provider work. The `start` action MUST include `payload.goal` as the child local goal and MAY set multiple control-plane properties atomically, including timeout policy, output policy, success/failure criteria, and initial hooks.
 
 The `agent_control` input shape is action-specific, but all actions share this envelope:
 
 ```yaml
-action: start | status | output | set_hook | send | resume | stop | set_timeout | export_trace | kill | delete_session | purge_state
+action: start | status | output | set_hook | send | resume | stop | set_timeout | export_trace | kill | delete_session | purge_state | approve_permission | deny_permission
 agent_id: string | null
 thread_id: string | null
 idempotency_key: string
@@ -201,7 +233,7 @@ A started agent record includes:
 agent_id: string
 thread_id: string
 invocation_id: string
-supervisor_level: integer | null
+security_level: integer
 status: string
 workdir: string
 timeout_seconds: integer
@@ -213,7 +245,7 @@ Example `start` payload:
 
 ```yaml
 role_profile_id: role_worker
-assignment: "Inspect storage replay gaps and report findings."
+goal: "Inspect storage replay gaps and report findings."
 workdir: "/repo"
 model_hint: "coding-primary"
 timeout_seconds: 1200
@@ -245,6 +277,29 @@ on_missed_reports: report | escalate | stop
 The progress hook periodically injects the prompt into the child agent and routes the bounded response to Supervisor. Hook responses are status events, not evidence and not accepted blackboard facts unless separately recorded.
 
 `agent_control(action=send)` is a live follow-up on an active child session. `agent_control(action=resume)` starts a new provider process against a persisted session id. `agent_control(action=stop)` requests graceful stop and preserves resumability. `agent_control(action=kill)` is privileged and may break resumability.
+
+## 6.2 Parent Permission Requests
+
+Agent-OS follows the same subset-grant pattern as Codex `request_permissions`: a child asks for a concrete permission profile, the parent may grant only a subset, omitted fields are denied, and the grant is scoped to the current turn or session.
+
+`request_permissions` input:
+
+```yaml
+reason: string
+scope: turn | session
+permissions:
+  max_risk_level: integer
+  allowed_syscalls: string[]
+  resource_scopes: string[]
+  allowed_tool_names: string[]
+  allowed_tool_driver_classes: string[]
+  approval_required_above: integer
+  requires_evidence_for: string[]
+```
+
+The kernel records `PermissionRequested` with requester, direct parent approver, requested permissions, session id, optional turn id, reason, and pending status. The parent responds with `agent_control(action=approve_permission)` or `agent_control(action=deny_permission)`. Approved permissions are intersected with both the original request and the parent effective permission set before the kernel records `PermissionGranted`.
+
+Session grants apply to later tool invocations in the same child session. Turn grants apply only while the recorded turn is still active. Grants never override S-level hard gates.
 
 ## 7. Tool Driver Classes
 

@@ -119,8 +119,8 @@ provider_profiles:
       - text-only
     credential_ref:
       credential_ref_id: cred_default_llm
-      source: environment
-      name: AGENT_OS_LLM_API_KEY
+      source: local_config
+      name: default
     retry_policy:
       max_attempts: 2
       backoff_ms: 0
@@ -160,7 +160,11 @@ model_aliases:
 
 The active `model_aliases` map is the current Model Catalog contract. A provider route resolves through the thread's provider profile, routing policy, allowed alias list, and active alias record; missing, inactive, or capability-incompatible aliases are rejected before a stream session opens. Threads bind to profile IDs, credential references, retry policy, transform policy, and routing policies, not to ad hoc provider SDK calls.
 
-Minimal environment-based distributions may map `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY`, and optional `LLM_API_STYLE` into provider profiles. `LLM_*` is the canonical environment surface. Other provider-specific environment names are outside the core contract.
+Local development distributions resolve runtime provider credentials and endpoint
+metadata from the user-level Agent-OS provider config. Repository-local `.env`
+files are reserved for build and test harness settings; they are not the runtime
+provider source of truth. This keeps provider configuration independent from
+repository upgrades and checkout replacement.
 
 ## 6. Thread Integration
 

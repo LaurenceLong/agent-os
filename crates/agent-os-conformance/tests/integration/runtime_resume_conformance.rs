@@ -44,7 +44,7 @@ fn agent_thread_resumes_after_process_restart_with_persisted_tool_state() {
             task_id: task.task_id.clone(),
             role_profile_id: "role_worker".to_string(),
             owner: "conformance".to_string(),
-            local_goal: "write result".to_string(),
+            goal: "write result".to_string(),
             success_criteria: vec!["result is written".to_string()],
             failure_criteria: Vec::new(),
             parent_thread_id: None,

@@ -3,6 +3,7 @@ mod provider;
 mod roles;
 mod sandboxes;
 mod scheduler;
+mod tool_schemas;
 mod tools;
 
 use crate::*;

@@ -57,7 +57,7 @@ Implemented kernel surfaces include:
 
 ## Core Surface
 
-Agent-OS v0.1 separates three surfaces that must not be conflated:
+Agent-OS v0.2.0 separates three surfaces that must not be conflated:
 
 ```text
 Host OS tools:
@@ -68,9 +68,9 @@ Host OS tools:
   run_command
 
 Agent-OS control-plane tools:
-  set_objective, update_checklist, record_evidence
-  report_supervisor, post_blackboard, ask_human
-  agent_control(action=start|status|output|set_hook|send|resume|stop|set_timeout|export_trace)
+  set_goal, accomplish_goal, update_checklist, record_evidence
+  report_supervisor, post_blackboard, ask_human, request_permissions
+  agent_control(action=start|status|output|set_hook|send|resume|stop|set_timeout|export_trace|approve_permission|deny_permission)
   submit_final
 
 privileged agent_control actions:
@@ -82,27 +82,43 @@ distribution workflow:
 
 The core roles are `SupervisorAgent`, `WorkerAgent`, and `ReviewerAgent`. Testing is a worker responsibility that produces command evidence. Verification is primarily a kernel gate over final submissions and evidence maps; a distribution may add a verifier-style worker, but the kernel does not require one.
 
-Supervisor levels are part of the control plane. `S0` owns the top-level goal. If a Supervisor delegates a sub-organization to another Supervisor, the child runs at `S1`; further delegation increments the level. The kernel records each delegation as an invocation edge with caller, callee, supervisor level, assignment, task/goal scope, and capability/profile snapshots.
+Security levels are part of the control plane. Human authority is implicit `S0`; every persisted root agent starts at `S1`, and each nested child increments the parent level. The kernel records each delegation as an invocation edge with caller, callee, security level, child goal, task/goal scope, and capability/profile snapshots. `agent_control` and `set_goal` require `security_level <= 1` plus matching tool permission.
 
-Child agents are supervised, not fire-and-forget. `agent_control(action=start)` creates durable agent state and an invocation edge; the same call can set timeout, output policy, and initial hooks. `agent_control(action=set_hook)` can register periodic progress-report prompt injection so a child reports concise progress back to Supervisor without relying on done markers or a blocking wait tool.
+Child agents are supervised, not fire-and-forget. `agent_control(action=start)` creates durable agent state and an invocation edge with `payload.goal`; the same call can set timeout, output policy, success/failure criteria, initial hooks, and a child permission subset. `request_permissions` lets a child ask its direct parent for a turn- or session-scoped permission grant. `set_goal` is Supervisor-only retargeting for an existing Supervisor thread or direct child. Execution agents call `accomplish_goal` before `submit_final`; `submit_final` remains the last tool call in the session. `agent_control(action=set_hook)` can register periodic progress-report prompt injection so a child reports concise progress back to Supervisor without relying on done markers or a blocking wait tool.
 
-## Live LLM Configuration
+## Provider Configuration
 
-The interactive `chat` entrypoint supports both OpenAI-compatible and Anthropic-compatible calling while keeping Agent-OS tool execution provider-neutral.
+The interactive `chat` entrypoint reads provider configuration from the user's
+global Agent-OS config, not from repository-local environment files. This keeps
+runtime provider settings stable across checkout replacement and Agent-OS
+upgrades.
 
-```sh
-LLM_BASE_URL=http://model.mify.ai.srv/v1
-LLM_MODEL=tongyi/qwen3.6-plus
-LLM_API_KEY=...
+Global provider config path:
+
+```text
+Windows: %APPDATA%\agent-os\providers.json
+Unix:    $XDG_CONFIG_HOME/agent-os/providers.json
 ```
 
-```sh
-LLM_BASE_URL=http://model.mify.ai.srv/anthropic
-LLM_MODEL=tongyi/qwen3.6-plus
-LLM_API_KEY=...
+Config shape:
+
+```json
+{
+  "default_provider": "default",
+  "providers": {
+    "default": {
+      "api_key": "replace-with-your-api-key",
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-4o",
+      "api_style": "openai-compatible"
+    }
+  }
+}
 ```
 
-`LLM_API_STYLE=openai-compatible|anthropic-compatible` may be set explicitly. If omitted, `/anthropic` base URLs use Anthropic-compatible Messages calling and other base URLs default to OpenAI-compatible Chat Completions calling. Existing `OPENAI_API_KEY`, `OPENAI_API_BASE`, and `AGENT_OS_MODEL` environment variables remain supported.
+`api_style` is required and supports `openai-compatible` and
+`anthropic-compatible`. Use `agent-os chat --provider <name>` to select a
+non-default provider from the global config.
 
 Run the current conformance suite with:
 
@@ -113,20 +129,20 @@ cargo test --workspace
 Run the live goal-driven LLM coverage suite with real provider responses:
 
 ```sh
-LLM_BASE_URL=http://model.mify.ai.srv/v1 \
-LLM_MODEL=tongyi/qwen3.6-plus \
-LLM_API_KEY=... \
+AGENT_OS_LIVE_OPENAI_API_KEY=... \
+AGENT_OS_LIVE_OPENAI_BASE_URL=https://api.openai.com/v1 \
+AGENT_OS_LIVE_OPENAI_MODEL=gpt-4o \
 cargo test -p agent-os-thread live_openai_compatible_llm_goal_driven -- --ignored --nocapture
 ```
 
 ```sh
-LLM_BASE_URL=http://model.mify.ai.srv/anthropic \
-LLM_MODEL=tongyi/qwen3.6-plus \
-LLM_API_KEY=... \
+AGENT_OS_LIVE_ANTHROPIC_API_KEY=... \
+AGENT_OS_LIVE_ANTHROPIC_BASE_URL=https://api.anthropic.com \
+AGENT_OS_LIVE_ANTHROPIC_MODEL=claude-sonnet-4-20250514 \
 cargo test -p agent-os-thread live_anthropic_compatible_llm_goal_driven -- --ignored --nocapture
 ```
 
-These ignored tests use the normal system prompt and normal Agent Thread Runtime loop. They do not mock model responses and do not inject per-tool forcing prompts. The workspace scenario covers `read_file`, `write_file`, `replace_text`, `delete_file`, `run_command`, and `submit_final`. The control-plane scenario covers `set_objective`, `update_checklist`, `record_evidence`, `report_supervisor`, `post_blackboard`, `ask_human`, `agent_control`, `read_file`, and `submit_final`.
+These ignored tests use the normal system prompt and normal Agent Thread Runtime loop. They do not mock model responses and do not inject per-tool forcing prompts. The workspace scenario covers `read_file`, `write_file`, `replace_text`, `delete_file`, `run_command`, `accomplish_goal`, and `submit_final`. The control-plane scenario covers `set_goal`, `accomplish_goal`, `update_checklist`, `record_evidence`, `report_supervisor`, `post_blackboard`, `ask_human`, `agent_control`, `read_file`, and `submit_final`.
 
 Inspectable interaction logs are written under `target/agent-os-audit/`:
 

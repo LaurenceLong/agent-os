@@ -13,4 +13,5 @@ agent-os-kernel.workspace = true
 agent-os-store-sqlite.workspace = true
 agent-os-thread.workspace = true
 agent-os-sys.workspace = true
+serde.workspace = true
 serde_json.workspace = true

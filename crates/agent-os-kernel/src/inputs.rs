@@ -59,7 +59,7 @@ pub struct SpawnAgentInput {
     pub task_id: String,
     pub role_profile_id: String,
     pub owner: String,
-    pub local_goal: String,
+    pub goal: String,
     #[serde(default)]
     pub success_criteria: Vec<String>,
     #[serde(default)]

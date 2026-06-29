@@ -343,7 +343,7 @@ impl SoftwareEngineeringPipeline {
             task_id: task.task_id.clone(),
             role_profile_id: spawn.role_profile_id.to_string(),
             owner: "agent-os-software-pipeline".to_string(),
-            local_goal: spawn.description.to_string(),
+            goal: spawn.description.to_string(),
             success_criteria: Vec::new(),
             failure_criteria: Vec::new(),
             parent_thread_id: spawn.parent_thread_id.map(str::to_string),

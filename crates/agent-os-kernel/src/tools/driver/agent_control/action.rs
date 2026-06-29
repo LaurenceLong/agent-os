@@ -18,7 +18,9 @@ pub(super) fn require_agent_control_action_risk(
         | AgentControlAction::Send
         | AgentControlAction::Resume
         | AgentControlAction::Stop
-        | AgentControlAction::SetTimeout => 4,
+        | AgentControlAction::SetTimeout
+        | AgentControlAction::ApprovePermission
+        | AgentControlAction::DenyPermission => 4,
         AgentControlAction::Status
         | AgentControlAction::Output
         | AgentControlAction::ExportTrace => 1,
@@ -45,6 +47,8 @@ pub(super) fn parse_agent_control_action(value: &str) -> AgentOsResult<AgentCont
         "kill" => Ok(AgentControlAction::Kill),
         "delete_session" => Ok(AgentControlAction::DeleteSession),
         "purge_state" => Ok(AgentControlAction::PurgeState),
+        "approve_permission" => Ok(AgentControlAction::ApprovePermission),
+        "deny_permission" => Ok(AgentControlAction::DenyPermission),
         _ => Err(AgentOsError::Validation(format!(
             "unknown agent_control action {value}"
         ))),

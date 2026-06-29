@@ -41,14 +41,14 @@ Memento Fragments are not:
 - hidden mutable scratchpads
 - permission grants
 
-Child-facing instructions belong in the child assignment payload. Durable knowledge belongs in MemoryRecord. Shared state belongs in Typed Blackboard. Proof belongs in Evidence.
+Child-facing instructions belong in the child goal payload. Durable knowledge belongs in MemoryRecord. Shared state belongs in Typed Blackboard. Proof belongs in Evidence.
 
 ## 4. Core Invariants
 
 1. A Memento Fragment is written by exactly one owner Agent Thread.
 2. The committed content is immutable.
 3. A child Agent Thread cannot mutate a parent's Memento Fragment.
-4. A child Agent Thread cannot read a parent's Memento Fragment. If the owner wants to tell the child something, it must create a separate child-visible assignment or context object.
+4. A child Agent Thread cannot read a parent's Memento Fragment. If the owner wants to tell the child something, it must create a separate child-visible goal or context object.
 5. A child Agent Thread can only produce events that satisfy or trigger a Memento Fragment's anchor.
 6. The owner cannot edit a committed Memento Fragment; it can only supersede it with a new fragment.
 7. A Memento Fragment cannot grant capabilities or override policy.
@@ -64,7 +64,7 @@ Before spawning a child Agent Thread, the parent creates a Memento Fragment for 
 Spawn a WorkerAgent for the storage layer. When it completes, compare its findings against ADR-0002 before deciding PostgreSQL placement.
 ```
 
-The child receives its own assignment, not the Memento Fragment. When the child completes, the kernel triggers the parent's Memento Fragment.
+The child receives its own goal, not the Memento Fragment. When the child completes, the kernel triggers the parent's Memento Fragment.
 
 ### 5.2 Resume Reminder
 
@@ -203,7 +203,7 @@ Example:
 ```yaml
 spawn_child:
   role: WorkerAgent
-  assignment: "Inspect state-storage design and report missing replay invariants."
+  goal: "Inspect state-storage design and report missing replay invariants."
   owner_mementos:
     - title: "After explorer returns"
       body: "Compare returned gaps against agent-thread-core-module.md and update conformance tests before continuing."
@@ -212,7 +212,7 @@ spawn_child:
         anchor_ref: "$child_thread_id"
 ```
 
-The `assignment` is child-visible. `owner_mementos` are not child-visible.
+The child `goal` is child-visible. `owner_mementos` are not child-visible.
 
 ## 10. Projection Rules
 
@@ -238,7 +238,7 @@ Projection MUST include:
 
 | Object | Difference |
 |---|---|
-| Child assignment | Child-visible work request; Memento Fragment is owner-visible self-reminder |
+| Child goal | Child-visible work request; Memento Fragment is owner-visible self-reminder |
 | ContextSnapshot | Snapshot of loaded context; Memento Fragment is future continuation intent |
 | MemoryRecord | Durable memory; Memento Fragment is task-scoped and short-lived |
 | BlackboardEntry | Shared state; Memento Fragment is owner-scoped |

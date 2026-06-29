@@ -32,8 +32,8 @@ pub(super) fn default_provider_profile(now: &str) -> ProviderProfile {
         ],
         credential_ref: CredentialRef {
             credential_ref_id: "cred_default_llm".to_string(),
-            source: CredentialSource::Environment,
-            name: "AGENT_OS_LLM_API_KEY".to_string(),
+            source: CredentialSource::LocalConfig,
+            name: "default".to_string(),
         },
         retry_policy: Some(json!({
             "max_attempts": 2,
@@ -63,8 +63,8 @@ pub(super) fn strict_text_provider_profile(now: &str) -> ProviderProfile {
         allowed_model_aliases: vec!["text-only".to_string()],
         credential_ref: CredentialRef {
             credential_ref_id: "cred_strict_text_llm".to_string(),
-            source: CredentialSource::Environment,
-            name: "AGENT_OS_LLM_API_KEY".to_string(),
+            source: CredentialSource::LocalConfig,
+            name: "default".to_string(),
         },
         retry_policy: Some(json!({
             "max_attempts": 1,

@@ -112,9 +112,20 @@ impl Kernel {
                     .context_compactions
                     .insert(compaction.compaction_id.clone(), compaction);
             }
-            "ThreadConfigured" | "ThreadStatusChanged" | "TurnStarted" | "CheckpointCommitted" => {
+            "ThreadConfigured"
+            | "ThreadStatusChanged"
+            | "AgentStatePurged"
+            | "ThreadGoalAccomplished"
+            | "TurnStarted"
+            | "CheckpointCommitted" => {
                 let acb: AgentControlBlock = parse_payload(&event.payload)?;
                 state.threads.insert(acb.thread_id.clone(), acb);
+            }
+            "AgentGoalAccomplished" => {
+                let completion: AgentGoalCompletion = parse_payload(&event.payload)?;
+                state
+                    .threads
+                    .insert(completion.thread.thread_id.clone(), completion.thread);
             }
             "AgentInvocationRecorded" => {
                 let invocation: AgentInvocation = parse_payload(&event.payload)?;
@@ -122,7 +133,7 @@ impl Kernel {
                     .agent_invocations
                     .insert(invocation.invocation_id.clone(), invocation);
             }
-            "AgentHookConfigured" => {
+            "AgentHookConfigured" | "AgentHookUpdated" => {
                 let hook: AgentHook = parse_payload(&event.payload)?;
                 state.agent_hooks.insert(hook.hook_id.clone(), hook);
             }
@@ -131,6 +142,18 @@ impl Kernel {
                 state
                     .agent_control_commands
                     .insert(command.command_id.clone(), command);
+            }
+            "PermissionRequested" | "PermissionRequestResolved" => {
+                let request: PermissionRequest = parse_payload(&event.payload)?;
+                state
+                    .permission_requests
+                    .insert(request.permission_request_id.clone(), request);
+            }
+            "PermissionGranted" => {
+                let grant: PermissionGrant = parse_payload(&event.payload)?;
+                state
+                    .permission_grants
+                    .insert(grant.permission_grant_id.clone(), grant);
             }
             "CommunicationProfileAssigned" => {
                 let profile: CommunicationProfile = parse_payload(&event.payload)?;
@@ -257,6 +280,36 @@ impl Kernel {
                 state
                     .memory_records
                     .insert(memory.memory_id.clone(), memory);
+            }
+            "InstructionDocumentImported" => {
+                let document: InstructionDocument = parse_payload(&event.payload)?;
+                state
+                    .instruction_documents
+                    .insert(document.instruction_id.clone(), document);
+            }
+            "SkillDefinitionImported" => {
+                let skill: SkillDefinition = parse_payload(&event.payload)?;
+                state.skill_definitions.insert(skill.name.clone(), skill);
+            }
+            "CommandDefinitionImported" => {
+                let command: CommandDefinition = parse_payload(&event.payload)?;
+                state
+                    .command_definitions
+                    .insert(command.name.clone(), command);
+            }
+            "McpServerRegistered" => {
+                let server: McpServerSpec = parse_payload(&event.payload)?;
+                state.mcp_servers.insert(server.name.clone(), server);
+            }
+            "McpToolRegistered" => {
+                let tool: McpToolDefinition = parse_payload(&event.payload)?;
+                state.mcp_tools.insert(tool.model_tool_name.clone(), tool);
+            }
+            "ImportedAgentProfileRegistered" => {
+                let profile: ImportedAgentProfile = parse_payload(&event.payload)?;
+                state
+                    .imported_agent_profiles
+                    .insert(profile.name.clone(), profile);
             }
             "FinalSubmitted" => {
                 let final_submission: FinalSubmission = parse_payload(&event.payload)?;

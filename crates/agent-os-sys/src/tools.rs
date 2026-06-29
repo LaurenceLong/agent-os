@@ -1,6 +1,7 @@
 use crate::EvidenceType;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -56,14 +57,51 @@ pub struct CapabilityToken {
 pub struct ToolDescriptor {
     pub tool_id: String,
     pub name: String,
+    #[serde(default)]
+    pub description: String,
     pub version: String,
     pub driver_class: ToolDriverClass,
     pub risk_level: u8,
     pub input_schema: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_input_schema: Option<Value>,
     pub output_schema: Value,
+    #[serde(default)]
+    pub runtime_input_policy: ToolRuntimeInputPolicy,
+    #[serde(default = "crate::empty_object")]
+    pub driver_config: Value,
     pub idempotency: IdempotencyMode,
     pub evidence_type: Option<EvidenceType>,
     pub created_at: String,
+}
+
+impl Default for ToolDescriptor {
+    fn default() -> Self {
+        Self {
+            tool_id: String::new(),
+            name: String::new(),
+            description: String::new(),
+            version: String::new(),
+            driver_class: ToolDriverClass::KernelBuiltin,
+            risk_level: 0,
+            input_schema: crate::empty_object(),
+            model_input_schema: None,
+            output_schema: crate::empty_object(),
+            runtime_input_policy: ToolRuntimeInputPolicy::default(),
+            driver_config: crate::empty_object(),
+            idempotency: IdempotencyMode::None,
+            evidence_type: None,
+            created_at: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ToolRuntimeInputPolicy {
+    #[serde(default)]
+    pub injected_fields: BTreeMap<String, String>,
+    #[serde(default)]
+    pub required_resource_scopes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

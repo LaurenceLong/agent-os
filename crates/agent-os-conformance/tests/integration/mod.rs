@@ -1,6 +1,7 @@
 mod artifact_conformance;
 mod communication_conformance;
 mod context_conformance;
+mod ecosystem_conformance;
 mod lifecycle_conformance;
 mod openai_adapter_conformance;
 mod resource_provider_storage_conformance;

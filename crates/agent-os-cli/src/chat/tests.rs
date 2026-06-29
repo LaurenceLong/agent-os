@@ -11,33 +11,20 @@ fn chat_session_reports_summary() {
     ));
     fs::create_dir_all(&workspace).unwrap();
     let kernel = Kernel::new();
-    let mut session = ChatSession::new(kernel, workspace.clone(), "test-model".to_string());
+    let mut session = ChatSession::new(
+        kernel,
+        workspace.clone(),
+        "test-provider".to_string(),
+        "test-model".to_string(),
+    );
     session.task_count = 3;
     session.total_events = 42;
     let summary = session.summary();
     assert_eq!(summary["tasks"], 3);
     assert_eq!(summary["total_events"], 42);
+    assert_eq!(summary["provider"], "test-provider");
     assert_eq!(summary["model"], "test-model");
     let _ = fs::remove_dir_all(workspace);
-}
-
-#[test]
-fn resolve_api_key_requires_key() {
-    std::env::remove_var("LLM_API_KEY");
-    let options = ChatOptions {
-        workspace: std::path::PathBuf::from("."),
-        task: None,
-        api_key: None,
-        api_base: None,
-        model: None,
-        max_steps: 16,
-        max_tokens: None,
-        temperature: None,
-        state_db: None,
-        bundle_output: None,
-    };
-    let result = resolve_api_key(&options);
-    assert!(result.is_err());
 }
 
 #[test]

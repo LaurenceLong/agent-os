@@ -17,14 +17,14 @@ pub(super) fn make_kernel_request(workspace: &std::path::Path) -> (Kernel, Model
 pub(super) fn make_kernel_request_for_role(
     workspace: &std::path::Path,
     role_profile_id: &str,
-    local_goal: &str,
+    goal_text: &str,
     success_criteria: Vec<String>,
 ) -> (Kernel, ModelTurnRequest) {
     make_kernel_request_for_role_on_kernel(
         Kernel::new(),
         workspace,
         role_profile_id,
-        local_goal,
+        goal_text,
         success_criteria,
     )
 }
@@ -32,7 +32,7 @@ pub(super) fn make_kernel_request_for_role(
 pub(super) fn make_kernel_request_for_role_with_blob_store_and_requirements(
     workspace: &std::path::Path,
     role_profile_id: &str,
-    local_goal: &str,
+    goal_text: &str,
     success_criteria: Vec<String>,
     required_artifact_types: Vec<ArtifactType>,
     required_evidence_types: Vec<EvidenceType>,
@@ -45,7 +45,7 @@ pub(super) fn make_kernel_request_for_role_with_blob_store_and_requirements(
         Kernel::new().with_blob_stores(artifact_blobs, evidence_blobs),
         workspace,
         role_profile_id,
-        local_goal,
+        goal_text,
         success_criteria,
         required_artifact_types,
         required_evidence_types,
@@ -56,14 +56,14 @@ pub(super) fn make_kernel_request_for_role_on_kernel(
     kernel: Kernel,
     workspace: &std::path::Path,
     role_profile_id: &str,
-    local_goal: &str,
+    goal_text: &str,
     success_criteria: Vec<String>,
 ) -> (Kernel, ModelTurnRequest) {
     make_kernel_request_for_role_on_kernel_with_requirements(
         kernel,
         workspace,
         role_profile_id,
-        local_goal,
+        goal_text,
         success_criteria,
         vec![ArtifactType::Patch],
         vec![EvidenceType::DiffRef],
@@ -74,7 +74,7 @@ pub(super) fn make_kernel_request_for_role_on_kernel_with_requirements(
     kernel: Kernel,
     workspace: &std::path::Path,
     role_profile_id: &str,
-    local_goal: &str,
+    goal_text: &str,
     success_criteria: Vec<String>,
     required_artifact_types: Vec<ArtifactType>,
     required_evidence_types: Vec<EvidenceType>,
@@ -109,20 +109,33 @@ pub(super) fn make_kernel_request_for_role_on_kernel_with_requirements(
             task_id: task.task_id,
             role_profile_id: role_profile_id.to_string(),
             owner: "test".to_string(),
-            local_goal: local_goal.to_string(),
+            goal: goal_text.to_string(),
             success_criteria,
             failure_criteria: Vec::new(),
             parent_thread_id: None,
             workspace_roots: vec![workspace.to_string_lossy().to_string()],
         })
         .unwrap();
-    let request = ModelTurnRequest {
+    let mut request = ModelTurnRequest {
         thread: agent,
         workspace_root: workspace.to_path_buf(),
         step_index: 0,
         context: ModelContextProjection::default(),
     };
+    refresh_tool_descriptors(&kernel, &mut request);
     (kernel, request)
+}
+
+pub(super) fn refresh_tool_descriptors(kernel: &Kernel, request: &mut ModelTurnRequest) {
+    let mut descriptors: Vec<_> = kernel
+        .state_snapshot()
+        .unwrap()
+        .tool_descriptors
+        .values()
+        .cloned()
+        .collect();
+    descriptors.sort_by(|left, right| left.name.cmp(&right.name));
+    request.context.tool_descriptors = descriptors;
 }
 
 pub(super) fn attach_workspace_and_grant(
@@ -220,7 +233,8 @@ pub(super) fn assert_core_tool_mock_effects(
         "replace_text",
         "delete_file",
         "run_command",
-        "set_objective",
+        "set_goal",
+        "accomplish_goal",
         "update_checklist",
         "record_evidence",
         "report_supervisor",
@@ -241,9 +255,10 @@ pub(super) fn assert_core_tool_mock_effects(
             .unwrap_or_else(|| panic!("missing output for {tool_name}"))
     };
     assert_eq!(
-        output_for("set_objective")["objective"],
+        output_for("set_goal")["goal"],
         "complete provider-neutral all-tool mock adapter coverage"
     );
+    assert_eq!(output_for("accomplish_goal")["goal_accomplished"], true);
     assert_eq!(
         output_for("update_checklist")["items"][0]["status"],
         "completed"

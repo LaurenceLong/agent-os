@@ -1,4 +1,4 @@
-use crate::QueueClass;
+use crate::{QueueClass, ToolDriverClass};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -95,15 +95,38 @@ pub struct PermissionProfile {
     pub permission_profile_id: String,
     pub status: ProfileStatus,
     pub name: String,
-    pub max_risk_level: u8,
-    pub allowed_syscalls: Vec<String>,
-    pub resource_scopes: Vec<String>,
-    pub denied_tool_classes: Vec<String>,
-    pub approval_required_above: u8,
-    pub requires_evidence_for: Vec<String>,
+    pub permission_set: PermissionSet,
     pub created_at: String,
     pub updated_at: String,
     pub superseded_by: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SecurityLevel(pub u32);
+
+impl SecurityLevel {
+    pub const HUMAN_ROOT: Self = Self(0);
+    pub const ROOT_AGENT: Self = Self(1);
+
+    pub fn child(self) -> Self {
+        Self(self.0.saturating_add(1))
+    }
+
+    pub fn allows_control_plane(self) -> bool {
+        self.0 <= 1
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PermissionSet {
+    pub max_risk_level: u8,
+    pub allowed_syscalls: Vec<String>,
+    pub resource_scopes: Vec<String>,
+    pub allowed_tool_names: Vec<String>,
+    pub allowed_tool_driver_classes: Vec<ToolDriverClass>,
+    pub approval_required_above: u8,
+    pub requires_evidence_for: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

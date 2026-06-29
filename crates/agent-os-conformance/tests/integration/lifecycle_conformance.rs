@@ -83,7 +83,7 @@ fn supervisor_hierarchy_and_invocation_edges_replay() {
             task_id: fx.task.task_id.clone(),
             role_profile_id: "role_supervisor".to_string(),
             owner: "tester".to_string(),
-            local_goal: "root supervision".to_string(),
+            goal: "root supervision".to_string(),
             success_criteria: Vec::new(),
             failure_criteria: Vec::new(),
             parent_thread_id: None,
@@ -96,7 +96,7 @@ fn supervisor_hierarchy_and_invocation_edges_replay() {
             task_id: fx.task.task_id.clone(),
             role_profile_id: "role_supervisor".to_string(),
             owner: "tester".to_string(),
-            local_goal: "delegated supervision".to_string(),
+            goal: "delegated supervision".to_string(),
             success_criteria: Vec::new(),
             failure_criteria: Vec::new(),
             parent_thread_id: Some(s0.thread_id.clone()),
@@ -109,7 +109,7 @@ fn supervisor_hierarchy_and_invocation_edges_replay() {
             task_id: fx.task.task_id.clone(),
             role_profile_id: "role_worker".to_string(),
             owner: "tester".to_string(),
-            local_goal: "assigned work".to_string(),
+            goal: "assigned work".to_string(),
             success_criteria: Vec::new(),
             failure_criteria: Vec::new(),
             parent_thread_id: Some(s1.thread_id.clone()),
@@ -117,9 +117,9 @@ fn supervisor_hierarchy_and_invocation_edges_replay() {
         })
         .unwrap();
 
-    assert_eq!(s0.supervisor_level, Some(0));
-    assert_eq!(s1.supervisor_level, Some(1));
-    assert_eq!(worker.supervisor_level, None);
+    assert_eq!(s0.security_level, SecurityLevel::ROOT_AGENT);
+    assert_eq!(s1.security_level, SecurityLevel(2));
+    assert_eq!(worker.security_level, SecurityLevel(3));
 
     let state = fx.kernel.state_snapshot().unwrap();
     let root_invocation = state.agent_invocations.get(&s0.invocation_id).unwrap();
@@ -129,15 +129,21 @@ fn supervisor_hierarchy_and_invocation_edges_replay() {
     );
     let delegated_invocation = state.agent_invocations.get(&s1.invocation_id).unwrap();
     assert_eq!(delegated_invocation.caller_thread_id, Some(s0.thread_id));
-    assert_eq!(delegated_invocation.caller_supervisor_level, Some(0));
-    assert_eq!(delegated_invocation.callee_supervisor_level, Some(1));
+    assert_eq!(
+        delegated_invocation.caller_security_level,
+        Some(SecurityLevel::ROOT_AGENT)
+    );
+    assert_eq!(delegated_invocation.callee_security_level, SecurityLevel(2));
     assert_eq!(
         delegated_invocation.relationship,
         AgentInvocationRelationship::SupervisorDelegation
     );
     let worker_invocation = state.agent_invocations.get(&worker.invocation_id).unwrap();
     assert_eq!(worker_invocation.caller_thread_id, Some(s1.thread_id));
-    assert_eq!(worker_invocation.caller_supervisor_level, Some(1));
+    assert_eq!(
+        worker_invocation.caller_security_level,
+        Some(SecurityLevel(2))
+    );
     assert_eq!(
         worker_invocation.relationship,
         AgentInvocationRelationship::WorkerAssignment
@@ -167,7 +173,7 @@ fn agent_control_starts_child_and_records_hook_state() {
             task_id: fx.task.task_id.clone(),
             role_profile_id: "role_supervisor".to_string(),
             owner: "tester".to_string(),
-            local_goal: "supervise demo".to_string(),
+            goal: "supervise demo".to_string(),
             success_criteria: Vec::new(),
             failure_criteria: Vec::new(),
             parent_thread_id: None,
@@ -199,7 +205,7 @@ fn agent_control_starts_child_and_records_hook_state() {
                 input: json!({
                     "action": "start",
                     "payload": {
-                        "assignment": "complete the demo task",
+                        "goal": "complete the demo task",
                         "success_criteria": ["demo task is complete"],
                         "hooks": [{
                             "interval_seconds": 60,
@@ -244,6 +250,7 @@ fn agent_control_starts_child_and_records_hook_state() {
     let state = fx.kernel.state_snapshot().unwrap();
     let child = state.threads.get(&child_thread_id).unwrap();
     assert_eq!(child.parent_thread_id, Some(supervisor.thread_id.clone()));
+    assert_eq!(child.task.goal, "complete the demo task");
     let invocation = state.agent_invocations.get(&child.invocation_id).unwrap();
     assert_eq!(
         invocation.relationship,
@@ -253,6 +260,7 @@ fn agent_control_starts_child_and_records_hook_state() {
         invocation.caller_thread_id,
         Some(supervisor.thread_id.clone())
     );
+    assert_eq!(invocation.goal, child.task.goal);
     assert_eq!(state.agent_hooks.len(), 1);
     let hook = state.agent_hooks.values().next().unwrap();
     assert_eq!(hook.agent_id, child.agent_id);
@@ -278,6 +286,222 @@ fn agent_control_starts_child_and_records_hook_state() {
 }
 
 #[test]
+fn supervisor_set_goal_retargets_direct_child_and_worker_is_denied() {
+    let fx = fixture();
+    let supervisor = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_supervisor".to_string(),
+            owner: "tester".to_string(),
+            goal: "supervise retargeting".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: vec![".".to_string()],
+        })
+        .unwrap();
+    let child = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_worker".to_string(),
+            owner: supervisor.agent_id.clone(),
+            goal: "initial child goal".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: Some(supervisor.thread_id.clone()),
+            workspace_roots: vec![".".to_string()],
+        })
+        .unwrap();
+    let supervisor_cap = fx
+        .kernel
+        .grant_capability(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            2,
+            None,
+        )
+        .unwrap();
+    let worker_cap = fx
+        .kernel
+        .grant_capability(
+            &fx.worker.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            2,
+            None,
+        )
+        .unwrap();
+
+    fx.kernel
+        .invoke_tool(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            &supervisor.session_id,
+            supervisor_cap.capability_id,
+            2,
+            ToolInvokeInput {
+                tool_name: "set_goal".to_string(),
+                input: json!({
+                    "target_thread_id": child.thread_id.clone(),
+                    "goal": "retargeted child goal",
+                    "success_criteria": ["retarget is durable"]
+                }),
+                evidence_claim: None,
+            },
+        )
+        .unwrap();
+
+    let denied = fx
+        .kernel
+        .invoke_tool(
+            &fx.worker.agent_id,
+            &fx.task.task_id,
+            &fx.worker.session_id,
+            worker_cap.capability_id,
+            2,
+            ToolInvokeInput {
+                tool_name: "set_goal".to_string(),
+                input: json!({"target_agent_id": child.agent_id.clone(), "goal": "illegal worker retarget"}),
+                evidence_claim: None,
+            },
+        )
+        .unwrap_err();
+    assert!(matches!(denied, AgentOsError::PermissionDenied(_)));
+
+    let state = fx.kernel.state_snapshot().unwrap();
+    let retargeted = state.threads.get(&child.thread_id).unwrap();
+    assert_eq!(retargeted.task.goal, "retargeted child goal");
+    assert_eq!(retargeted.task.goal_revision, 2);
+    assert_eq!(
+        state
+            .agent_invocations
+            .get(&retargeted.invocation_id)
+            .unwrap()
+            .goal,
+        "retargeted child goal"
+    );
+}
+
+#[test]
+fn accomplish_goal_completes_local_goal_hooks_and_invocation_before_final_submission() {
+    let fx = fixture();
+    let supervisor = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_supervisor".to_string(),
+            owner: "tester".to_string(),
+            goal: "supervise child completion".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: vec![".".to_string()],
+        })
+        .unwrap();
+    let supervisor_cap = fx
+        .kernel
+        .grant_capability(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            4,
+            None,
+        )
+        .unwrap();
+    let start = fx
+        .kernel
+        .invoke_tool(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            &supervisor.session_id,
+            supervisor_cap.capability_id,
+            4,
+            ToolInvokeInput {
+                tool_name: "agent_control".to_string(),
+                input: json!({
+                    "action": "start",
+                    "payload": {
+                        "goal": "finish local child goal",
+                        "hooks": [{
+                            "interval_seconds": 30,
+                            "prompt": "Report progress."
+                        }]
+                    }
+                }),
+                evidence_claim: None,
+            },
+        )
+        .unwrap();
+    let child_thread_id = start.output.as_ref().unwrap()["thread_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let child = fx
+        .kernel
+        .state_snapshot()
+        .unwrap()
+        .threads
+        .get(&child_thread_id)
+        .cloned()
+        .unwrap();
+    let child_cap = fx
+        .kernel
+        .grant_capability(
+            &child.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            2,
+            None,
+        )
+        .unwrap();
+    fx.kernel
+        .invoke_tool(
+            &child.agent_id,
+            &fx.task.task_id,
+            &child.session_id,
+            child_cap.capability_id,
+            2,
+            ToolInvokeInput {
+                tool_name: "accomplish_goal".to_string(),
+                input: json!({"summary": "child local goal complete"}),
+                evidence_claim: None,
+            },
+        )
+        .unwrap();
+
+    let state = fx.kernel.state_snapshot().unwrap();
+    let child = state.threads.get(&child_thread_id).unwrap();
+    assert_eq!(child.status, ThreadStatus::Completing);
+    assert_eq!(child.task.goal_status, AgentGoalStatus::Accomplished);
+    assert_eq!(
+        state
+            .agent_invocations
+            .get(&child.invocation_id)
+            .unwrap()
+            .status,
+        AgentInvocationStatus::Completed
+    );
+    assert!(
+        state
+            .agent_hooks
+            .values()
+            .any(|hook| hook.thread_id == child_thread_id
+                && hook.status == AgentHookStatus::Completed)
+    );
+    assert_ne!(
+        state.tasks.get(&fx.task.task_id).unwrap().status,
+        TaskStatus::Completed
+    );
+}
+
+#[test]
 fn agent_control_lifecycle_actions_update_state_and_trace() {
     let fx = fixture();
     let supervisor = fx
@@ -286,7 +510,7 @@ fn agent_control_lifecycle_actions_update_state_and_trace() {
             task_id: fx.task.task_id.clone(),
             role_profile_id: "role_supervisor".to_string(),
             owner: "tester".to_string(),
-            local_goal: "supervise lifecycle".to_string(),
+            goal: "supervise lifecycle".to_string(),
             success_criteria: Vec::new(),
             failure_criteria: Vec::new(),
             parent_thread_id: None,
@@ -318,7 +542,7 @@ fn agent_control_lifecycle_actions_update_state_and_trace() {
                 input: json!({
                     "action": "start",
                     "payload": {
-                        "assignment": "child lifecycle target"
+                        "goal": "child lifecycle target"
                     }
                 }),
                 evidence_claim: None,
@@ -458,7 +682,7 @@ fn privileged_agent_control_actions_require_privileged_risk() {
             task_id: fx.task.task_id.clone(),
             role_profile_id: "role_supervisor".to_string(),
             owner: "tester".to_string(),
-            local_goal: "supervise privileged lifecycle".to_string(),
+            goal: "supervise privileged lifecycle".to_string(),
             success_criteria: Vec::new(),
             failure_criteria: Vec::new(),
             parent_thread_id: None,
@@ -471,7 +695,7 @@ fn privileged_agent_control_actions_require_privileged_risk() {
             task_id: fx.task.task_id.clone(),
             role_profile_id: "role_worker".to_string(),
             owner: supervisor.agent_id.clone(),
-            local_goal: "target".to_string(),
+            goal: "target".to_string(),
             success_criteria: Vec::new(),
             failure_criteria: Vec::new(),
             parent_thread_id: Some(supervisor.thread_id.clone()),

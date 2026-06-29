@@ -34,7 +34,7 @@ fn fixture() -> (Kernel, Goal, Task, AgentControlBlock, CapabilityToken) {
             task_id: task.task_id.clone(),
             role_profile_id: "role_worker".to_string(),
             owner: "user".to_string(),
-            local_goal: "patch".to_string(),
+            goal: "patch".to_string(),
             success_criteria: Vec::new(),
             failure_criteria: Vec::new(),
             parent_thread_id: None,

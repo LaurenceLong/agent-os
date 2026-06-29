@@ -1,5 +1,7 @@
 mod agent_control;
 mod communication;
+mod ecosystem;
+mod permission;
 mod session;
 mod work_state;
 mod workspace;
@@ -14,13 +16,17 @@ pub(super) fn run_tool_driver(
     descriptor: &ToolDescriptor,
     input: &Value,
 ) -> AgentOsResult<Value> {
+    if descriptor.driver_class == ToolDriverClass::Mcp {
+        return ecosystem::run_mcp_tool(descriptor, input);
+    }
     match descriptor.name.as_str() {
         "write_file" => workspace::run_workspace_write_file(kernel, syscall, descriptor, input),
         "read_file" => workspace::run_workspace_read_file(kernel, syscall, descriptor, input),
         "delete_file" => workspace::run_workspace_delete_file(kernel, syscall, descriptor, input),
         "replace_text" => workspace::run_workspace_replace_text(kernel, syscall, descriptor, input),
         "run_command" => workspace::run_process(kernel, syscall, descriptor, input),
-        "set_objective" => work_state::run_set_objective(kernel, syscall, descriptor, input),
+        "set_goal" => work_state::run_set_goal(kernel, syscall, descriptor, input),
+        "accomplish_goal" => work_state::run_accomplish_goal(kernel, syscall, descriptor, input),
         "update_checklist" => work_state::run_update_checklist(kernel, syscall, descriptor, input),
         "record_evidence" => work_state::run_record_evidence(kernel, syscall, descriptor, input),
         "report_supervisor" => {
@@ -28,6 +34,11 @@ pub(super) fn run_tool_driver(
         }
         "post_blackboard" => communication::run_post_blackboard(kernel, syscall, descriptor, input),
         "ask_human" => communication::run_ask_human(kernel, syscall, descriptor, input),
+        "request_permissions" => {
+            permission::run_request_permissions(kernel, syscall, descriptor, input)
+        }
+        "load_skill" => ecosystem::run_load_skill(kernel, descriptor, input),
+        "read_skill_resource" => ecosystem::run_read_skill_resource(kernel, descriptor, input),
         "agent_control" => agent_control::run_agent_control(kernel, syscall, descriptor, input),
         "submit_final" => session::run_submit_final(kernel, syscall, descriptor, input),
         _ => Ok(json!({

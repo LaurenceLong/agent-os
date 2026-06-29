@@ -2,7 +2,7 @@
 
 Status: normative
 
-Last updated: 2026-06-26
+Last updated: 2026-06-29
 
 ## 1. Purpose
 
@@ -49,6 +49,14 @@ MemoryRecord
 
 Event
   -> all aggregates
+
+EcosystemSource
+  -> InstructionDocument
+  -> SkillDefinition
+  -> CommandDefinition
+  -> McpServerSpec
+      -> McpToolDefinition
+  -> ImportedAgentProfile
 ```
 
 Every entity MUST be addressable by stable id.
@@ -94,8 +102,103 @@ Recommended id prefixes:
 | Lock | `lock_` |
 | Event | `evt_` |
 | Syscall | `sys_` |
+| InstructionDocument | `inst_` |
+| SkillDefinition | `skill_` |
+| CommandDefinition | `cmd_` |
+| McpServerSpec | `mcp_` |
+| McpToolDefinition | `mcptool_` |
+| ImportedAgentProfile | `agent_` |
 
 IDs SHOULD be globally unique within a kernel namespace.
+
+## 3.1 Ecosystem Imports
+
+Ecosystem imports are first-class kernel projections, not prompt-only text.
+The runtime MAY discover them from `agent-os.json`, project-local ecosystem
+directories, and global Agent-OS/OpenCode/Claude/Agents roots, but every
+accepted record MUST enter the event stream before it becomes model-visible.
+
+Shared ecosystem records:
+
+```yaml
+EcosystemSource:
+  source_kind: agent_os | open_code | claude | agents
+  source_scope: project | global | config
+  source_path: string
+
+InstructionDocument:
+  instruction_id: string
+  source: EcosystemSource
+  precedence_rank: integer
+  content: string
+  content_hash: string
+
+SkillDefinition:
+  skill_id: string
+  name: string
+  description: string
+  root_path: string
+  skill_file_path: string
+  source: EcosystemSource
+  content: string
+  content_hash: string
+
+CommandDefinition:
+  command_id: string
+  name: string
+  description: string | null
+  agent: string | null
+  model: string | null
+  template: string
+  argument_hints: string[]
+  source: EcosystemSource
+
+McpServerSpec:
+  server_id: string
+  name: string
+  transport: local_stdio
+  command: string[]
+  environment: object
+  enabled: boolean
+  timeout_ms: integer
+
+McpToolDefinition:
+  mcp_tool_id: string
+  server_name: string
+  tool_name: string
+  model_tool_name: string
+  input_schema: object
+  output_schema: object
+  tool_descriptor: ToolDescriptor
+
+ImportedAgentProfile:
+  imported_agent_profile_id: string
+  name: string
+  mode: primary | subagent | all
+  prompt: string
+  model: string | null
+  role_profile_id: string | null
+  permission_profile_id: string | null
+```
+
+Rules:
+
+- `InstructionDocumentImported`, `SkillDefinitionImported`,
+  `CommandDefinitionImported`, `McpServerRegistered`, `McpToolRegistered`, and
+  `ImportedAgentProfileRegistered` MUST replay into the same kernel state.
+- `AGENTS.md` is the project-rule default. `CLAUDE.md` is imported as an
+  explicit Claude source when it is the nearest matching rule file.
+- Skills MUST become typed `SkillDefinition` records with a name and
+  description. Native frontmatter is preferred; existing Markdown skills MAY
+  derive the name from the skill directory and the description from the first
+  Markdown summary when frontmatter is absent.
+- Duplicate skill names with different content are rejected. Duplicate names
+  with identical content are treated as synchronized copies of the same skill,
+  and the first projection remains canonical.
+- Commands are Markdown templates. `$1` through `$9` and `$ARGUMENTS` are
+  argument placeholders; shell interpolation is rejected.
+- The first MCP transport is local stdio only. Remote MCP, OAuth, plugin tools,
+  and custom JavaScript tools require a later ADR.
 
 ## 4. Goal
 
@@ -160,7 +263,7 @@ Storage projections SHOULD index:
 - `root_thread_id`
 - `parent_thread_id`
 - `invocation_id`
-- `supervisor_level`
+- `security_level`
 - `task.task_id`
 - `task.goal_id`
 - `role`
@@ -178,9 +281,11 @@ Rules:
 - The kernel is the only writer of ATCB state.
 - Agent Threads may propose state changes through syscalls.
 - ATCB updates MUST emit events.
-- The top-level Supervisor for a goal has `supervisor_level = 0`.
-- Delegated Supervisors increment their caller Supervisor level by one.
-- Worker and Reviewer threads have `supervisor_level = null`.
+- Human is the implicit S0 root and is not persisted as a normal agent.
+- Every persisted agent has `security_level >= 1`.
+- Root agent threads created by human authority have `security_level = 1`.
+- Child agent threads increment parent security level by one.
+- `agent_control` and `set_goal` require `security_level <= 1`.
 - Threads created by delegation, worker assignment, review request, or human escalation MUST reference an AgentInvocation.
 
 ## 6.1 AgentInvocation
@@ -193,13 +298,13 @@ goal_id: string
 task_id: string
 caller_thread_id: string | null
 caller_agent_id: string | null
-caller_supervisor_level: integer | null
+caller_security_level: integer | null
 callee_thread_id: string
 callee_agent_id: string
 callee_role_profile_id: string
-callee_supervisor_level: integer | null
+callee_security_level: integer
 relationship: supervisor_delegation | worker_assignment | review_request | human_escalation | root_supervisor
-assignment: string
+goal: string
 capability_snapshot_id: string | null
 profile_snapshot_id: string
 status: Active | Superseded | Cancelled
@@ -210,8 +315,8 @@ superseded_by: string | null
 Rules:
 
 - Invocation edges are append-only.
-- A root goal MUST have exactly one active `root_supervisor` edge to its `S0` Supervisor.
-- A Supervisor delegated by `S<N>` MUST be recorded as `S<N+1>`.
+- A root goal MUST have exactly one active root edge to an S1 root agent.
+- A child created by `S<N>` MUST be recorded as `S<N+1>`.
 - A caller cannot create a callee with a broader permission, sandbox, or communication profile than the kernel grants.
 - Cancellation and replay traverse the invocation graph, not chat history.
 
@@ -291,12 +396,14 @@ Rules:
 permission_profile_id: string
 status: Active | Superseded | Revoked
 name: string
-max_risk_level: integer
-allowed_syscalls: string[]
-resource_scopes: string[]
-denied_tool_classes: string[]
-approval_required_above: integer
-requires_evidence_for: string[]
+permission_set:
+  max_risk_level: integer
+  allowed_syscalls: string[]
+  resource_scopes: string[]
+  allowed_tool_names: string[]
+  allowed_tool_driver_classes: string[]
+  approval_required_above: integer
+  requires_evidence_for: string[]
 created_at: string
 updated_at: string
 superseded_by: string | null
@@ -305,7 +412,54 @@ superseded_by: string | null
 Rules:
 
 - Permission ceilings MUST be enforced before capability grant or approval reuse.
-- Capability tokens MUST NOT exceed the bound Permission Profile.
+- Capability tokens MUST NOT exceed the caller's current effective permission set.
+- Tool Broker MUST check tool name and driver class against the current effective permission set before driver execution.
+
+## 10.1 PermissionRequest and PermissionGrant
+
+```yaml
+permission_request_id: string
+requester_agent_id: string
+requester_thread_id: string
+approver_agent_id: string | null
+approver_thread_id: string | null
+task_id: string
+goal_id: string
+session_id: string
+turn_id: string | null
+requested_permissions: PermissionSet
+granted_permissions: PermissionSet | null
+scope: turn | session
+reason: string
+status: Pending | Approved | Denied | Cancelled
+decision_reason: string | null
+created_at: string
+updated_at: string
+```
+
+```yaml
+permission_grant_id: string
+permission_request_id: string
+agent_id: string
+thread_id: string
+task_id: string
+goal_id: string
+granted_by_agent_id: string
+granted_by_thread_id: string
+permissions: PermissionSet
+scope: turn | session
+session_id: string | null
+turn_id: string | null
+created_at: string
+```
+
+Rules:
+
+- Permission requests and grants are append-only kernel events.
+- A parent can approve only a subset of the original request and its own current effective permissions.
+- Turn grants are active only while the recorded turn remains active.
+- Session grants are active only for the recorded child session.
+- Grants never override hard S-level gates.
 
 ## 11. SandboxProfile
 

@@ -1,213 +1,111 @@
+use super::tool_schemas::{apply_core_model_metadata, permission_set_schema};
 use agent_os_sys::*;
 use serde_json::json;
 
+mod filesystem;
+
 pub(super) fn core_tool_descriptors(now: &str) -> Vec<ToolDescriptor> {
-    vec![
+    let mut descriptors = filesystem::descriptors(now);
+    descriptors.extend(vec![
         ToolDescriptor {
-            tool_id: "tool_write_file".to_string(),
-            name: "write_file".to_string(),
-            version: "0.1.0".to_string(),
-            driver_class: ToolDriverClass::Filesystem,
-            risk_level: 4,
-            input_schema: json!({
-                "type": "object",
-                "required": ["workspace_root", "path", "content"],
-                "properties": {
-                    "workspace_root": {"type": "string"},
-                    "path": {"type": "string"},
-                    "content": {"type": "string"}
-                },
-                "additionalProperties": false
-            }),
-            output_schema: json!({
-                "type": "object",
-                "required": ["tool", "status", "input", "driver_class", "written_path", "bytes_written"],
-                "properties": {
-                    "tool": {"type": "string"},
-                    "status": {"enum": ["ok"]},
-                    "input": {"type": "object"},
-                    "driver_class": {"type": "string"},
-                    "written_path": {"type": "string"},
-                    "bytes_written": {"type": "integer"}
-                },
-                "additionalProperties": false
-            }),
-            idempotency: IdempotencyMode::KernelDeduplicated,
-            evidence_type: Some(EvidenceType::DiffRef),
-            created_at: now.to_string(),
-        },
-        ToolDescriptor {
-            tool_id: "tool_read_file".to_string(),
-            name: "read_file".to_string(),
-            version: "0.1.0".to_string(),
-            driver_class: ToolDriverClass::Filesystem,
-            risk_level: 1,
-            input_schema: json!({
-                "type": "object",
-                "required": ["workspace_root", "path"],
-                "properties": {
-                    "workspace_root": {"type": "string"},
-                    "path": {"type": "string"}
-                },
-                "additionalProperties": false
-            }),
-            output_schema: json!({
-                "type": "object",
-                "required": ["tool", "status", "input", "driver_class", "path", "content", "bytes_read"],
-                "properties": {
-                    "tool": {"type": "string"},
-                    "status": {"enum": ["ok"]},
-                    "input": {"type": "object"},
-                    "driver_class": {"type": "string"},
-                    "path": {"type": "string"},
-                    "content": {"type": "string"},
-                    "bytes_read": {"type": "integer"}
-                },
-                "additionalProperties": false
-            }),
-            idempotency: IdempotencyMode::KernelDeduplicated,
-            evidence_type: Some(EvidenceType::SourceRef),
-            created_at: now.to_string(),
-        },
-        ToolDescriptor {
-            tool_id: "tool_delete_file".to_string(),
-            name: "delete_file".to_string(),
-            version: "0.1.0".to_string(),
-            driver_class: ToolDriverClass::Filesystem,
-            risk_level: 4,
-            input_schema: json!({
-                "type": "object",
-                "required": ["workspace_root", "path"],
-                "properties": {
-                    "workspace_root": {"type": "string"},
-                    "path": {"type": "string"}
-                },
-                "additionalProperties": false
-            }),
-            output_schema: json!({
-                "type": "object",
-                "required": ["tool", "status", "input", "driver_class", "deleted_path", "deleted_bytes"],
-                "properties": {
-                    "tool": {"type": "string"},
-                    "status": {"enum": ["ok"]},
-                    "input": {"type": "object"},
-                    "driver_class": {"type": "string"},
-                    "deleted_path": {"type": "string"},
-                    "deleted_bytes": {"type": "integer"}
-                },
-                "additionalProperties": false
-            }),
-            idempotency: IdempotencyMode::KernelDeduplicated,
-            evidence_type: Some(EvidenceType::DiffRef),
-            created_at: now.to_string(),
-        },
-        ToolDescriptor {
-            tool_id: "tool_replace_text".to_string(),
-            name: "replace_text".to_string(),
-            version: "0.1.0".to_string(),
-            driver_class: ToolDriverClass::Filesystem,
-            risk_level: 4,
-            input_schema: json!({
-                "type": "object",
-                "required": ["workspace_root", "path", "old", "new"],
-                "properties": {
-                    "workspace_root": {"type": "string"},
-                    "path": {"type": "string"},
-                    "old": {"type": "string"},
-                    "new": {"type": "string"}
-                },
-                "additionalProperties": false
-            }),
-            output_schema: json!({
-                "type": "object",
-                "required": ["tool", "status", "input", "driver_class", "changed_path", "replacements", "before", "after"],
-                "properties": {
-                    "tool": {"type": "string"},
-                    "status": {"enum": ["ok"]},
-                    "input": {"type": "object"},
-                    "driver_class": {"type": "string"},
-                    "changed_path": {"type": "string"},
-                    "replacements": {"type": "integer"},
-                    "before": {"type": "string"},
-                    "after": {"type": "string"}
-                },
-                "additionalProperties": false
-            }),
-            idempotency: IdempotencyMode::KernelDeduplicated,
-            evidence_type: Some(EvidenceType::DiffRef),
-            created_at: now.to_string(),
-        },
-        ToolDescriptor {
-            tool_id: "tool_run_command".to_string(),
-            name: "run_command".to_string(),
-            version: "0.1.0".to_string(),
-            driver_class: ToolDriverClass::Shell,
-            risk_level: 4,
-            input_schema: json!({
-                "type": "object",
-                "required": ["program", "args", "cwd"],
-                "properties": {
-                    "program": {"type": "string"},
-                    "args": {"type": "array", "items": {"type": "string"}},
-                    "cwd": {"type": "string"}
-                },
-                "additionalProperties": false
-            }),
-            output_schema: json!({
-                "type": "object",
-                "required": ["tool", "status", "input", "driver_class", "exit_code", "stdout", "stderr"],
-                "properties": {
-                    "tool": {"type": "string"},
-                    "status": {"enum": ["ok"]},
-                    "input": {"type": "object"},
-                    "driver_class": {"type": "string"},
-                    "exit_code": {"type": "integer"},
-                    "stdout": {"type": "string"},
-                    "stderr": {"type": "string"}
-                },
-                "additionalProperties": false
-            }),
-            idempotency: IdempotencyMode::KernelDeduplicated,
-            evidence_type: Some(EvidenceType::CommandLog),
-            created_at: now.to_string(),
-        },
-        ToolDescriptor {
-            tool_id: "tool_set_objective".to_string(),
-            name: "set_objective".to_string(),
-            version: "0.1.0".to_string(),
+            tool_id: "tool_set_goal".to_string(),
+            name: "set_goal".to_string(),
+            version: "0.2.0".to_string(),
             driver_class: ToolDriverClass::KernelBuiltin,
             risk_level: 2,
             input_schema: json!({
                 "type": "object",
-                "required": ["objective"],
+                "required": ["goal"],
                 "properties": {
-                    "objective": {"type": "string"},
+                    "goal": {"type": "string"},
+                    "target_thread_id": {"type": "string"},
+                    "target_agent_id": {"type": "string"},
                     "title": {"type": "string"},
-                    "task_id": {"type": "string"}
+                    "success_criteria": {"type": "array", "items": {"type": "string"}},
+                    "failure_criteria": {"type": "array", "items": {"type": "string"}}
                 },
                 "additionalProperties": false
             }),
             output_schema: json!({
                 "type": "object",
-                "required": ["tool", "status", "input", "driver_class", "task_id", "objective"],
+                "required": ["tool", "status", "input", "driver_class", "thread_id", "agent_id", "task_id", "goal", "goal_status", "goal_revision"],
                 "properties": {
                     "tool": {"type": "string"},
                     "status": {"enum": ["ok"]},
                     "input": {"type": "object"},
                     "driver_class": {"type": "string"},
+                    "thread_id": {"type": "string"},
+                    "agent_id": {"type": "string"},
                     "task_id": {"type": "string"},
-                    "objective": {"type": "string"}
+                    "goal": {"type": "string"},
+                    "goal_status": {"type": "string"},
+                    "goal_revision": {"type": "integer"}
                 },
                 "additionalProperties": false
             }),
             idempotency: IdempotencyMode::KernelDeduplicated,
             evidence_type: None,
             created_at: now.to_string(),
+            ..ToolDescriptor::default()
+        },
+        ToolDescriptor {
+            tool_id: "tool_accomplish_goal".to_string(),
+            name: "accomplish_goal".to_string(),
+            version: "0.2.0".to_string(),
+            driver_class: ToolDriverClass::KernelBuiltin,
+            risk_level: 2,
+            input_schema: json!({
+                "type": "object",
+                "required": ["summary"],
+                "properties": {
+                    "summary": {"type": "string"},
+                    "evidence_refs": {"type": "array", "items": {"type": "string"}},
+                    "artifact_refs": {"type": "array", "items": {"type": "string"}},
+                    "known_risks": {"type": "array", "items": {"type": "string"}}
+                },
+                "additionalProperties": false
+            }),
+            output_schema: json!({
+                "type": "object",
+                "required": [
+                    "tool",
+                    "status",
+                    "input",
+                    "driver_class",
+                    "thread_id",
+                    "agent_id",
+                    "task_id",
+                    "goal",
+                    "goal_status",
+                    "goal_accomplished",
+                    "summary",
+                    "hooks_completed"
+                ],
+                "properties": {
+                    "tool": {"type": "string"},
+                    "status": {"enum": ["ok"]},
+                    "input": {"type": "object"},
+                    "driver_class": {"type": "string"},
+                    "thread_id": {"type": "string"},
+                    "agent_id": {"type": "string"},
+                    "task_id": {"type": "string"},
+                    "goal": {"type": "string"},
+                    "goal_status": {"type": "string"},
+                    "goal_accomplished": {"type": "boolean"},
+                    "summary": {"type": "string"},
+                    "hooks_completed": {"type": "integer"}
+                },
+                "additionalProperties": false
+            }),
+            idempotency: IdempotencyMode::KernelDeduplicated,
+            evidence_type: None,
+            created_at: now.to_string(),
+            ..ToolDescriptor::default()
         },
         ToolDescriptor {
             tool_id: "tool_update_checklist".to_string(),
             name: "update_checklist".to_string(),
-            version: "0.1.0".to_string(),
+            version: "0.2.0".to_string(),
             driver_class: ToolDriverClass::KernelBuiltin,
             risk_level: 2,
             input_schema: json!({
@@ -246,11 +144,12 @@ pub(super) fn core_tool_descriptors(now: &str) -> Vec<ToolDescriptor> {
             idempotency: IdempotencyMode::KernelDeduplicated,
             evidence_type: None,
             created_at: now.to_string(),
+            ..ToolDescriptor::default()
         },
         ToolDescriptor {
             tool_id: "tool_record_evidence".to_string(),
             name: "record_evidence".to_string(),
-            version: "0.1.0".to_string(),
+            version: "0.2.0".to_string(),
             driver_class: ToolDriverClass::KernelBuiltin,
             risk_level: 2,
             input_schema: json!({
@@ -298,11 +197,12 @@ pub(super) fn core_tool_descriptors(now: &str) -> Vec<ToolDescriptor> {
             idempotency: IdempotencyMode::KernelDeduplicated,
             evidence_type: None,
             created_at: now.to_string(),
+            ..ToolDescriptor::default()
         },
         ToolDescriptor {
             tool_id: "tool_report_supervisor".to_string(),
             name: "report_supervisor".to_string(),
-            version: "0.1.0".to_string(),
+            version: "0.2.0".to_string(),
             driver_class: ToolDriverClass::KernelBuiltin,
             risk_level: 1,
             input_schema: json!({
@@ -332,11 +232,12 @@ pub(super) fn core_tool_descriptors(now: &str) -> Vec<ToolDescriptor> {
             idempotency: IdempotencyMode::KernelDeduplicated,
             evidence_type: None,
             created_at: now.to_string(),
+            ..ToolDescriptor::default()
         },
         ToolDescriptor {
             tool_id: "tool_post_blackboard".to_string(),
             name: "post_blackboard".to_string(),
-            version: "0.1.0".to_string(),
+            version: "0.2.0".to_string(),
             driver_class: ToolDriverClass::KernelBuiltin,
             risk_level: 2,
             input_schema: json!({
@@ -378,11 +279,12 @@ pub(super) fn core_tool_descriptors(now: &str) -> Vec<ToolDescriptor> {
             idempotency: IdempotencyMode::KernelDeduplicated,
             evidence_type: None,
             created_at: now.to_string(),
+            ..ToolDescriptor::default()
         },
         ToolDescriptor {
             tool_id: "tool_ask_human".to_string(),
             name: "ask_human".to_string(),
-            version: "0.1.0".to_string(),
+            version: "0.2.0".to_string(),
             driver_class: ToolDriverClass::KernelBuiltin,
             risk_level: 3,
             input_schema: json!({
@@ -413,11 +315,150 @@ pub(super) fn core_tool_descriptors(now: &str) -> Vec<ToolDescriptor> {
             idempotency: IdempotencyMode::KernelDeduplicated,
             evidence_type: None,
             created_at: now.to_string(),
+            ..ToolDescriptor::default()
+        },
+        ToolDescriptor {
+            tool_id: "tool_request_permissions".to_string(),
+            name: "request_permissions".to_string(),
+            version: "0.2.0".to_string(),
+            driver_class: ToolDriverClass::KernelBuiltin,
+            risk_level: 1,
+            input_schema: json!({
+                "type": "object",
+                "required": ["reason", "permissions", "scope"],
+                "properties": {
+                    "reason": {"type": "string"},
+                    "scope": {"enum": ["turn", "session"]},
+                    "permissions": permission_set_schema()
+                },
+                "additionalProperties": false
+            }),
+            output_schema: json!({
+                "type": "object",
+                "required": ["tool", "status", "input", "driver_class", "permission_request_id", "request_status", "scope"],
+                "properties": {
+                    "tool": {"type": "string"},
+                    "status": {"enum": ["pending"]},
+                    "input": {"type": "object"},
+                    "driver_class": {"type": "string"},
+                    "permission_request_id": {"type": "string"},
+                    "request_status": {"enum": ["Pending", "Approved", "Denied", "Cancelled"]},
+                    "scope": {"type": "string"},
+                    "approver_agent_id": {"type": ["string", "null"]},
+                    "approver_thread_id": {"type": ["string", "null"]}
+                },
+                "additionalProperties": false
+            }),
+            idempotency: IdempotencyMode::KernelDeduplicated,
+            evidence_type: None,
+            created_at: now.to_string(),
+            ..ToolDescriptor::default()
+        },
+        ToolDescriptor {
+            tool_id: "tool_load_skill".to_string(),
+            name: "load_skill".to_string(),
+            description: "Load the full SKILL.md content for one imported skill by name."
+                .to_string(),
+            version: "0.2.0".to_string(),
+            driver_class: ToolDriverClass::KernelBuiltin,
+            risk_level: 1,
+            input_schema: json!({
+                "type": "object",
+                "required": ["name"],
+                "properties": {
+                    "name": {"type": "string"}
+                },
+                "additionalProperties": false
+            }),
+            model_input_schema: Some(json!({
+                "type": "object",
+                "required": ["name"],
+                "properties": {
+                    "name": {"type": "string", "description": "Imported skill name."}
+                },
+                "additionalProperties": false
+            })),
+            output_schema: json!({
+                "type": "object",
+                "required": ["tool", "status", "input", "driver_class", "skill_id", "name", "description", "content"],
+                "properties": {
+                    "tool": {"type": "string"},
+                    "status": {"enum": ["ok"]},
+                    "input": {"type": "object"},
+                    "driver_class": {"type": "string"},
+                    "skill_id": {"type": "string"},
+                    "name": {"type": "string"},
+                    "description": {"type": "string"},
+                    "content": {"type": "string"},
+                    "root_path": {"type": "string"},
+                    "skill_file_path": {"type": "string"}
+                },
+                "additionalProperties": false
+            }),
+            runtime_input_policy: ToolRuntimeInputPolicy {
+                required_resource_scopes: vec!["skill:*".to_string()],
+                ..ToolRuntimeInputPolicy::default()
+            },
+            idempotency: IdempotencyMode::KernelDeduplicated,
+            evidence_type: Some(EvidenceType::SourceRef),
+            created_at: now.to_string(),
+            ..ToolDescriptor::default()
+        },
+        ToolDescriptor {
+            tool_id: "tool_read_skill_resource".to_string(),
+            name: "read_skill_resource".to_string(),
+            description: "Read a file under one imported skill root without allowing path escape."
+                .to_string(),
+            version: "0.2.0".to_string(),
+            driver_class: ToolDriverClass::KernelBuiltin,
+            risk_level: 1,
+            input_schema: json!({
+                "type": "object",
+                "required": ["name", "path"],
+                "properties": {
+                    "name": {"type": "string"},
+                    "path": {"type": "string"}
+                },
+                "additionalProperties": false
+            }),
+            model_input_schema: Some(json!({
+                "type": "object",
+                "required": ["name", "path"],
+                "properties": {
+                    "name": {"type": "string", "description": "Imported skill name."},
+                    "path": {"type": "string", "description": "Skill-root-relative resource path."}
+                },
+                "additionalProperties": false
+            })),
+            output_schema: json!({
+                "type": "object",
+                "required": ["tool", "status", "input", "driver_class", "skill_id", "name", "path", "content", "bytes_read"],
+                "properties": {
+                    "tool": {"type": "string"},
+                    "status": {"enum": ["ok"]},
+                    "input": {"type": "object"},
+                    "driver_class": {"type": "string"},
+                    "skill_id": {"type": "string"},
+                    "name": {"type": "string"},
+                    "path": {"type": "string"},
+                    "content": {"type": "string"},
+                    "bytes_read": {"type": "integer"}
+                },
+                "additionalProperties": false
+            }),
+            runtime_input_policy: ToolRuntimeInputPolicy {
+                required_resource_scopes: vec!["skill:*".to_string(), "skill_file:*".to_string()],
+                ..ToolRuntimeInputPolicy::default()
+            },
+            idempotency: IdempotencyMode::KernelDeduplicated,
+            evidence_type: Some(EvidenceType::SourceRef),
+            created_at: now.to_string(),
+            ..ToolDescriptor::default()
         },
         ToolDescriptor {
             tool_id: "tool_submit_final".to_string(),
             name: "submit_final".to_string(),
-            version: "0.1.0".to_string(),
+            version: "0.2.0".to_string(),
             driver_class: ToolDriverClass::KernelBuiltin,
             risk_level: 2,
             input_schema: json!({
@@ -473,11 +514,12 @@ pub(super) fn core_tool_descriptors(now: &str) -> Vec<ToolDescriptor> {
             idempotency: IdempotencyMode::KernelDeduplicated,
             evidence_type: None,
             created_at: now.to_string(),
+            ..ToolDescriptor::default()
         },
         ToolDescriptor {
             tool_id: "tool_agent_control".to_string(),
             name: "agent_control".to_string(),
-            version: "0.1.0".to_string(),
+            version: "0.2.0".to_string(),
             driver_class: ToolDriverClass::KernelBuiltin,
             risk_level: 6,
             input_schema: json!({
@@ -497,7 +539,9 @@ pub(super) fn core_tool_descriptors(now: &str) -> Vec<ToolDescriptor> {
                             "export_trace",
                             "kill",
                             "delete_session",
-                            "purge_state"
+                            "purge_state",
+                            "approve_permission",
+                            "deny_permission"
                         ]
                     },
                     "agent_id": {"type": "string"},
@@ -521,6 +565,9 @@ pub(super) fn core_tool_descriptors(now: &str) -> Vec<ToolDescriptor> {
             idempotency: IdempotencyMode::KernelDeduplicated,
             evidence_type: None,
             created_at: now.to_string(),
+            ..ToolDescriptor::default()
         },
-    ]
+    ]);
+    apply_core_model_metadata(&mut descriptors);
+    descriptors
 }

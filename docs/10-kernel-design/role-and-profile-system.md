@@ -95,7 +95,7 @@ effective_binding:
   scheduler_policy_id: string | null
 reasoning_profile: string | null
 communication_profile_id: string
-supervisor_level: integer | null
+security_level: integer
 invocation_id: string | null
 resolved_at: string
 revision: integer
@@ -108,8 +108,9 @@ Rules:
 - a sandbox escalation MUST be treated as a new kernel decision
 - a profile update MUST create a new binding revision
 - active turns continue with the binding snapshot they started with
-- `supervisor_level` MUST be set for SupervisorAgent threads
-- delegated Supervisors increment the caller Supervisor level by one
+- human is implicit S0; persisted agent threads start at S1
+- every child thread increments parent `security_level` by one
+- `agent_control` and `set_goal` require `security_level <= 1` plus matching tool permission
 - every binding created by delegation MUST reference an invocation edge
 
 ## 6. Delegation and Child Thread Creation
@@ -120,7 +121,7 @@ Inputs:
 
 - invoking Supervisor role profile
 - requested child role
-- caller Supervisor level when the caller is a Supervisor
+- caller security level
 - task risk level
 - scheduler policy
 - distribution policy pack
@@ -131,11 +132,11 @@ Checks:
 - whether the requested role is legal in the current distribution
 - whether review independence would be broken
 - whether the requested sandbox and permission envelope is allowed
-- whether a delegated Supervisor would have the correct next level
+- whether the child has exactly `parent.security_level + 1`
 
 The Supervisor MAY propose a child role. The kernel decides whether it is admissible.
 
-The kernel MUST persist an invocation edge for every accepted delegation or assignment:
+The kernel MUST persist an invocation edge for every accepted delegation or child goal:
 
 ```yaml
 invocation_id: string
@@ -143,13 +144,13 @@ goal_id: string
 task_id: string
 caller_thread_id: string | null
 caller_agent_id: string | null
-caller_supervisor_level: integer | null
+caller_security_level: integer | null
 callee_thread_id: string
 callee_agent_id: string
 callee_role_profile_id: string
-callee_supervisor_level: integer | null
+callee_security_level: integer
 relationship: supervisor_delegation | worker_assignment | review_request | human_escalation
-assignment: string
+goal: string
 capability_snapshot_id: string | null
 profile_snapshot_id: string
 created_at: string
@@ -157,9 +158,9 @@ created_at: string
 
 Rules:
 
-- The top-level Supervisor is `S0`.
-- A delegated Supervisor created by `S<N>` is `S<N+1>`.
-- WorkerAgent and ReviewerAgent threads have `supervisor_level: null` but still reference the invocation edge that assigned them.
+- Human is implicit `S0` and is not stored as a normal AgentControlBlock.
+- Any root agent created by human authority is `S1`.
+- Any child agent created by `S<N>` is `S<N+1>`, regardless of role.
 - Invocation edges are append-only. Corrections create new edges or supersession events.
 - The invocation graph is used for replay, audit, cancellation, and responsibility tracing.
 
@@ -192,12 +193,14 @@ superseded_by: string | null
 permission_profile_id: string
 status: Active | Superseded | Revoked
 name: string
-max_risk_level: integer
-allowed_syscalls: string[]
-resource_scopes: string[]
-denied_tool_classes: string[]
-approval_required_above: integer
-requires_evidence_for: string[]
+permission_set:
+  max_risk_level: integer
+  allowed_syscalls: string[]
+  resource_scopes: string[]
+  allowed_tool_names: string[]
+  allowed_tool_driver_classes: string[]
+  approval_required_above: integer
+  requires_evidence_for: string[]
 created_at: string
 updated_at: string
 superseded_by: string | null
@@ -229,7 +232,7 @@ The Role and Profile System MUST enforce:
 3. review independence is expressed in role policy, not only in prompts
 4. distribution-defined roles remain mapped to core conformance families
 5. profile supersession never deletes historical bindings
-6. Supervisor levels and invocation edges are kernel state, not prompt text
+6. security levels and invocation edges are kernel state, not prompt text
 
 ## 9. Relationship to Other Subsystems
 
@@ -237,7 +240,7 @@ The Role and Profile System MUST enforce:
 - Communication Kernel enforces the Communication Profile assigned at creation time.
 - Execution Environment System provisions environments that satisfy the Sandbox Profile.
 - Scheduler and Resource Arbitration uses Scheduler Policy and role family when ranking work.
-- Permission Kernel intersects capability tokens with the effective Permission Profile.
+- Permission Kernel intersects capability tokens with the effective PermissionSet.
 
 ## 10. First Implementation Target
 

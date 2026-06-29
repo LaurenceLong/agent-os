@@ -9,7 +9,7 @@ fn context_load_creates_immutable_snapshots_and_replays_staleness() {
             task_id: fx.task.task_id.clone(),
             role_profile_id: "role_worker".to_string(),
             owner: "tester".to_string(),
-            local_goal: "inspect scoped context".to_string(),
+            goal: "inspect scoped context".to_string(),
             success_criteria: Vec::new(),
             failure_criteria: Vec::new(),
             parent_thread_id: None,

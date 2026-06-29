@@ -10,6 +10,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
+#[path = "runtime/ecosystem_projection.rs"]
+mod ecosystem_projection;
+#[path = "runtime/tool_policy.rs"]
+mod tool_policy;
+
 const MAX_PROJECTED_TOOL_RESULTS: usize = 8;
 const MAX_PROJECTED_ARTIFACTS: usize = 8;
 
@@ -80,6 +85,7 @@ impl<C: ModelClient> ThreadRuntime<C> {
         config: RuntimeConfig,
         overrides: RuntimeRunOverrides,
     ) -> AgentOsResult<RuntimeRunReport> {
+        crate::ecosystem::import_workspace_ecosystem(&self.kernel, &config.workspace_root)?;
         let mut acb = self.acb()?;
         self.kernel.update_task(UpdateTaskInput {
             task_id: acb.task.task_id.clone(),
@@ -111,7 +117,13 @@ impl<C: ModelClient> ThreadRuntime<C> {
             &acb.agent_id,
             &acb.task.task_id,
             vec!["tool.invoke".to_string()],
-            vec!["tool:*".to_string()],
+            vec![
+                "tool:*".to_string(),
+                "instruction:*".to_string(),
+                "skill:*".to_string(),
+                "skill_file:*".to_string(),
+                "mcp:*".to_string(),
+            ],
             config.tool_risk_ceiling,
             overrides.tool_approval_id.clone(),
         )?;
@@ -186,6 +198,7 @@ impl<C: ModelClient> ThreadRuntime<C> {
                     .cmp(&right.created_at)
                     .then_with(|| left.compaction_id.cmp(&right.compaction_id))
             });
+            let ecosystem_projection = ecosystem_projection::from_state(&state);
             let provider_profile = state
                 .provider_profiles
                 .get(&acb.config_snapshot.provider_profile_id)
@@ -218,6 +231,12 @@ impl<C: ModelClient> ThreadRuntime<C> {
                     context_snapshots,
                     memory_records,
                     context_compactions,
+                    tool_descriptors: ecosystem_projection.tool_descriptors,
+                    instruction_documents: ecosystem_projection.instruction_documents,
+                    skill_definitions: ecosystem_projection.skill_definitions,
+                    command_definitions: ecosystem_projection.command_definitions,
+                    mcp_tools: ecosystem_projection.mcp_tools,
+                    imported_agent_profiles: ecosystem_projection.imported_agent_profiles,
                 },
             };
             let mut attempt = 1;
@@ -277,7 +296,7 @@ impl<C: ModelClient> ThreadRuntime<C> {
                                 )?;
                             }
                         }
-                        enforce_tool_policy(&record, &config)?;
+                        tool_policy::enforce(&record, &config)?;
                         tool_results.push(record);
                         // Yield boundary: after tool result.
                         self.kernel.record_checkpoint(
@@ -581,25 +600,6 @@ impl<C: ModelClient> ThreadRuntime<C> {
             })
             .collect())
     }
-}
-
-fn enforce_tool_policy(record: &ToolExecutionRecord, config: &RuntimeConfig) -> AgentOsResult<()> {
-    if config.fail_on_process_nonzero && record.tool_name == "run_command" {
-        let exit_code = record
-            .output
-            .as_ref()
-            .and_then(|output| output.get("exit_code"))
-            .and_then(Value::as_i64)
-            .ok_or_else(|| {
-                AgentOsError::Validation("run_command output omitted exit_code".to_string())
-            })?;
-        if exit_code != 0 {
-            return Err(AgentOsError::Validation(format!(
-                "run_command failed with exit code {exit_code}"
-            )));
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]

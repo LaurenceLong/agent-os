@@ -22,6 +22,12 @@ pub struct ModelContextProjection {
     pub context_snapshots: Vec<ContextSnapshot>,
     pub memory_records: Vec<MemoryRecord>,
     pub context_compactions: Vec<ContextCompaction>,
+    pub tool_descriptors: Vec<ToolDescriptor>,
+    pub instruction_documents: Vec<InstructionDocument>,
+    pub skill_definitions: Vec<SkillDefinition>,
+    pub command_definitions: Vec<CommandDefinition>,
+    pub mcp_tools: Vec<McpToolDefinition>,
+    pub imported_agent_profiles: Vec<ImportedAgentProfile>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -13,6 +13,8 @@ pub struct KernelState {
     pub agent_invocations: HashMap<String, AgentInvocation>,
     pub agent_hooks: HashMap<String, AgentHook>,
     pub agent_control_commands: HashMap<String, AgentControlCommand>,
+    pub permission_requests: HashMap<String, PermissionRequest>,
+    pub permission_grants: HashMap<String, PermissionGrant>,
     pub blackboard_entries: HashMap<String, BlackboardEntry>,
     pub blackboard_channels: HashMap<String, BlackboardChannel>,
     pub context_snapshots: HashMap<String, ContextSnapshot>,
@@ -44,6 +46,12 @@ pub struct KernelState {
     pub audit_events: HashMap<String, AuditEvent>,
     pub locks: HashMap<String, Lock>,
     pub memory_records: HashMap<String, MemoryRecord>,
+    pub instruction_documents: HashMap<String, InstructionDocument>,
+    pub skill_definitions: HashMap<String, SkillDefinition>,
+    pub command_definitions: HashMap<String, CommandDefinition>,
+    pub mcp_servers: HashMap<String, McpServerSpec>,
+    pub mcp_tools: HashMap<String, McpToolDefinition>,
+    pub imported_agent_profiles: HashMap<String, ImportedAgentProfile>,
     pub final_submissions: HashMap<String, FinalSubmission>,
     pub reconciliation_reports: HashMap<String, crate::recovery::ReconciliationReport>,
     pub context_compactions: HashMap<String, ContextCompaction>,
@@ -151,6 +159,8 @@ fn clear_event_projection(state: &mut KernelState) {
     state.agent_invocations.clear();
     state.agent_hooks.clear();
     state.agent_control_commands.clear();
+    state.permission_requests.clear();
+    state.permission_grants.clear();
     state.blackboard_entries.clear();
     state.blackboard_channels.clear();
     state.context_snapshots.clear();
@@ -174,6 +184,12 @@ fn clear_event_projection(state: &mut KernelState) {
     state.audit_events.clear();
     state.locks.clear();
     state.memory_records.clear();
+    state.instruction_documents.clear();
+    state.skill_definitions.clear();
+    state.command_definitions.clear();
+    state.mcp_servers.clear();
+    state.mcp_tools.clear();
+    state.imported_agent_profiles.clear();
     state.final_submissions.clear();
     state.reconciliation_reports.clear();
     state.context_compactions.clear();

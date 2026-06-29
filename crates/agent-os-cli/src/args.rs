@@ -47,9 +47,7 @@ pub(crate) struct ResumeOptions {
 pub(crate) struct ChatOptions {
     pub(crate) workspace: PathBuf,
     pub(crate) task: Option<String>,
-    pub(crate) api_key: Option<String>,
-    pub(crate) api_base: Option<String>,
-    pub(crate) model: Option<String>,
+    pub(crate) provider: Option<String>,
     pub(crate) max_steps: u32,
     pub(crate) max_tokens: Option<u64>,
     pub(crate) temperature: Option<f64>,
@@ -75,7 +73,9 @@ impl RunOptions {
                 }
                 "--task" => {
                     index += 1;
-                    task = Some(required_arg(args, index, "--task")?.to_string());
+                    let (value, consumed_index) = collect_task_arg(args, index, "--task")?;
+                    task = Some(value);
+                    index = consumed_index;
                 }
                 "--output" => {
                     index += 1;
@@ -144,7 +144,9 @@ impl CodeOptions {
                 }
                 "--task" => {
                     index += 1;
-                    task = Some(required_arg(args, index, "--task")?.to_string());
+                    let (value, consumed_index) = collect_task_arg(args, index, "--task")?;
+                    task = Some(value);
+                    index = consumed_index;
                 }
                 "--file" => {
                     index += 1;
@@ -332,13 +334,30 @@ fn required_arg<'a>(args: &'a [String], index: usize, flag: &str) -> AgentOsResu
         .ok_or_else(|| AgentOsError::Validation(format!("{flag} requires a value")))
 }
 
+fn collect_task_arg(
+    args: &[String],
+    start_index: usize,
+    flag: &str,
+) -> AgentOsResult<(String, usize)> {
+    let first = required_arg(args, start_index, flag)?;
+    if first.starts_with('-') {
+        return Err(AgentOsError::Validation(format!(
+            "{flag} requires a task value"
+        )));
+    }
+
+    let mut end_index = start_index;
+    while end_index + 1 < args.len() && !args[end_index + 1].starts_with('-') {
+        end_index += 1;
+    }
+    Ok((args[start_index..=end_index].join(" "), end_index))
+}
+
 impl ChatOptions {
     pub(crate) fn parse(args: &[String]) -> AgentOsResult<Self> {
         let mut workspace = PathBuf::from(".");
         let mut task = None;
-        let mut api_key = None;
-        let mut api_base = None;
-        let mut model = None;
+        let mut provider = None;
         let mut max_steps = 32u32;
         let mut max_tokens = None;
         let mut temperature = None;
@@ -353,19 +372,13 @@ impl ChatOptions {
                 }
                 "--task" | "-t" => {
                     index += 1;
-                    task = Some(required_arg(args, index, "--task")?.to_string());
+                    let (value, consumed_index) = collect_task_arg(args, index, "--task")?;
+                    task = Some(value);
+                    index = consumed_index;
                 }
-                "--api-key" => {
+                "--provider" | "-p" => {
                     index += 1;
-                    api_key = Some(required_arg(args, index, "--api-key")?.to_string());
-                }
-                "--api-base" => {
-                    index += 1;
-                    api_base = Some(required_arg(args, index, "--api-base")?.to_string());
-                }
-                "--model" | "-m" => {
-                    index += 1;
-                    model = Some(required_arg(args, index, "--model")?.to_string());
+                    provider = Some(required_arg(args, index, "--provider")?.to_string());
                 }
                 "--max-steps" => {
                     index += 1;
@@ -408,8 +421,10 @@ impl ChatOptions {
                         serde_json::to_string(&usage_json()).unwrap_or_default(),
                     ));
                 }
-                other if !other.starts_with("--") && task.is_none() => {
-                    task = Some(other.to_string());
+                other if !other.starts_with('-') && task.is_none() => {
+                    let (value, consumed_index) = collect_task_arg(args, index, "<task>")?;
+                    task = Some(value);
+                    index = consumed_index;
                 }
                 other => {
                     return Err(AgentOsError::Validation(format!(
@@ -422,9 +437,7 @@ impl ChatOptions {
         Ok(Self {
             workspace,
             task,
-            api_key,
-            api_base,
-            model,
+            provider,
             max_steps,
             max_tokens,
             temperature,
@@ -447,9 +460,7 @@ pub(crate) fn usage_json() -> Value {
         "chat_options": {
             "--workspace, -w": "Workspace directory. Default: .",
             "--task, -t": "Initial task to run before entering interactive mode.",
-            "--api-key": "LLM API key. Can also be set via LLM_API_KEY.",
-            "--api-base": "API base URL (default: https://api.openai.com/v1). Can also be LLM_BASE_URL. /anthropic bases use Anthropic-compatible calling.",
-            "--model, -m": "Model name (default: gpt-4o). Can also be LLM_MODEL.",
+            "--provider, -p": "Provider name from the global Agent-OS provider config. Defaults to default_provider.",
             "--max-steps": "Maximum agent steps per task. Default: 32",
             "--max-tokens": "Maximum output tokens per model call.",
             "--temperature": "Model temperature (0.0 = deterministic). Default: 0.0",
@@ -490,4 +501,74 @@ pub(crate) fn usage_json() -> Value {
             "--model-arg": "One argument for the external model action process. Repeatable."
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn argv(parts: &[&str]) -> Vec<String> {
+        parts.iter().map(|part| part.to_string()).collect()
+    }
+
+    #[test]
+    fn chat_task_flag_collects_adjacent_words_until_next_option() {
+        let options = ChatOptions::parse(&argv(&[
+            "--task",
+            "Frontend",
+            "smoke",
+            "task",
+            "--max-steps",
+            "8",
+        ]))
+        .unwrap();
+
+        assert_eq!(options.task.as_deref(), Some("Frontend smoke task"));
+        assert_eq!(options.max_steps, 8);
+    }
+
+    #[test]
+    fn chat_positional_task_collects_adjacent_words_until_next_option() {
+        let options =
+            ChatOptions::parse(&argv(&["Backend", "smoke", "task", "--provider", "mify"])).unwrap();
+
+        assert_eq!(options.task.as_deref(), Some("Backend smoke task"));
+        assert_eq!(options.provider.as_deref(), Some("mify"));
+    }
+
+    #[test]
+    fn run_task_flag_collects_adjacent_words_until_next_option() {
+        let options = RunOptions::parse(&argv(&[
+            "--task",
+            "Write",
+            "task",
+            "report",
+            "--output",
+            "result.md",
+        ]))
+        .unwrap();
+
+        assert_eq!(options.task, "Write task report");
+        assert_eq!(options.output, PathBuf::from("result.md"));
+    }
+
+    #[test]
+    fn code_task_flag_collects_adjacent_words_until_next_option() {
+        let options = CodeOptions::parse(&argv(&[
+            "--task",
+            "Change",
+            "one",
+            "snippet",
+            "--file",
+            "README.md",
+            "--old",
+            "old",
+            "--new",
+            "new",
+        ]))
+        .unwrap();
+
+        assert_eq!(options.task, "Change one snippet");
+        assert_eq!(options.file, Some(PathBuf::from("README.md")));
+    }
 }

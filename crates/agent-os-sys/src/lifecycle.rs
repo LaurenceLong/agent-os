@@ -1,4 +1,4 @@
-use crate::{ArtifactType, EvidenceType, MessageRoute};
+use crate::{ArtifactType, EvidenceType, MessageRoute, PermissionSet, SecurityLevel};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -134,9 +134,20 @@ pub struct EffectiveBindingSnapshot {
 pub struct ThreadTaskBinding {
     pub task_id: String,
     pub goal_id: String,
-    pub local_goal: String,
+    pub goal: String,
+    pub goal_status: AgentGoalStatus,
+    pub goal_revision: u64,
+    pub accomplished_at: Option<String>,
     pub success_criteria: Vec<String>,
     pub failure_criteria: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum AgentGoalStatus {
+    Active,
+    Accomplished,
+    Cancelled,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
@@ -181,12 +192,12 @@ pub struct AgentInvocation {
     pub task_id: String,
     pub caller_thread_id: Option<String>,
     pub caller_agent_id: Option<String>,
-    pub caller_supervisor_level: Option<u32>,
+    pub caller_security_level: Option<SecurityLevel>,
     pub callee_thread_id: String,
     pub callee_agent_id: String,
-    pub callee_supervisor_level: Option<u32>,
+    pub callee_security_level: SecurityLevel,
     pub relationship: AgentInvocationRelationship,
-    pub assignment: String,
+    pub goal: String,
     pub status: AgentInvocationStatus,
     pub created_at: String,
     pub updated_at: String,
@@ -207,6 +218,62 @@ pub enum AgentControlAction {
     Kill,
     DeleteSession,
     PurgeState,
+    ApprovePermission,
+    DenyPermission,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionGrantScope {
+    Turn,
+    Session,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum PermissionRequestStatus {
+    Pending,
+    Approved,
+    Denied,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionRequest {
+    pub permission_request_id: String,
+    pub requester_agent_id: String,
+    pub requester_thread_id: String,
+    pub approver_agent_id: Option<String>,
+    pub approver_thread_id: Option<String>,
+    pub task_id: String,
+    pub goal_id: String,
+    pub session_id: String,
+    pub turn_id: Option<String>,
+    pub requested_permissions: PermissionSet,
+    pub granted_permissions: Option<PermissionSet>,
+    pub scope: PermissionGrantScope,
+    pub reason: String,
+    pub status: PermissionRequestStatus,
+    pub decision_reason: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionGrant {
+    pub permission_grant_id: String,
+    pub permission_request_id: String,
+    pub agent_id: String,
+    pub thread_id: String,
+    pub task_id: String,
+    pub goal_id: String,
+    pub granted_by_agent_id: String,
+    pub granted_by_thread_id: String,
+    pub permissions: PermissionSet,
+    pub scope: PermissionGrantScope,
+    pub session_id: Option<String>,
+    pub turn_id: Option<String>,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -220,6 +287,7 @@ pub enum AgentControlCommandStatus {
 #[serde(rename_all = "PascalCase")]
 pub enum AgentHookStatus {
     Active,
+    Completed,
     Cancelled,
 }
 
@@ -238,6 +306,17 @@ pub struct AgentHook {
     pub status: AgentHookStatus,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentGoalCompletion {
+    pub thread: AgentControlBlock,
+    pub summary: String,
+    pub evidence_refs: Vec<String>,
+    pub artifact_refs: Vec<String>,
+    pub known_risks: Vec<String>,
+    pub hooks_completed: usize,
+    pub completed_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -334,7 +413,7 @@ pub struct AgentControlBlock {
     pub session_id: String,
     pub root_thread_id: String,
     pub parent_thread_id: Option<String>,
-    pub supervisor_level: Option<u32>,
+    pub security_level: SecurityLevel,
     pub agent_path: String,
     pub role: String,
     pub owner: String,
@@ -342,6 +421,7 @@ pub struct AgentControlBlock {
     pub status_reason: Option<String>,
     pub task: ThreadTaskBinding,
     pub config_snapshot: ThreadConfigSnapshot,
+    pub effective_permissions_snapshot: PermissionSet,
     pub queues: ThreadQueues,
     pub active_turn: ActiveTurn,
     pub resources: ThreadResources,

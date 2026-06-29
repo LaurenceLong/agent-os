@@ -203,10 +203,68 @@ fn submit_final_lifecycle_tool_records_final_submission() {
         .kernel
         .attach_evidence(evidence_input(&fx, EvidenceType::SourceRef))
         .unwrap();
+    let supervisor = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_supervisor".to_string(),
+            owner: "tester".to_string(),
+            goal: "configure worker hook".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: vec![".".to_string()],
+        })
+        .unwrap();
+    let worker = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_worker".to_string(),
+            owner: supervisor.agent_id.clone(),
+            goal: "submit final with hook cleanup".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: Some(supervisor.thread_id.clone()),
+            workspace_roots: vec![".".to_string()],
+        })
+        .unwrap();
+    let supervisor_cap = fx
+        .kernel
+        .grant_capability(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            4,
+            None,
+        )
+        .unwrap();
+    fx.kernel
+        .invoke_tool(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            &supervisor.session_id,
+            supervisor_cap.capability_id,
+            4,
+            ToolInvokeInput {
+                tool_name: "agent_control".to_string(),
+                input: json!({
+                    "action": "set_hook",
+                    "thread_id": worker.thread_id.clone(),
+                    "payload": {
+                        "interval_seconds": 30,
+                        "prompt": "Report progress."
+                    }
+                }),
+                evidence_claim: None,
+            },
+        )
+        .unwrap();
     let cap = fx
         .kernel
         .grant_capability(
-            &fx.worker.agent_id,
+            &worker.agent_id,
             &fx.task.task_id,
             vec!["tool.invoke".to_string()],
             vec!["tool:*".to_string()],
@@ -217,9 +275,9 @@ fn submit_final_lifecycle_tool_records_final_submission() {
     let invocation = fx
         .kernel
         .invoke_tool(
-            &fx.worker.agent_id,
+            &worker.agent_id,
             &fx.task.task_id,
-            &fx.worker.session_id,
+            &worker.session_id,
             cap.capability_id,
             2,
             ToolInvokeInput {
@@ -251,6 +309,15 @@ fn submit_final_lifecycle_tool_records_final_submission() {
         .unwrap()
         .final_submissions
         .contains_key(&fx.task.task_id));
+    assert!(fx
+        .kernel
+        .state_snapshot()
+        .unwrap()
+        .agent_hooks
+        .values()
+        .any(
+            |hook| hook.thread_id == worker.thread_id && hook.status == AgentHookStatus::Completed
+        ));
 }
 
 #[test]
@@ -543,12 +610,16 @@ fn default_tool_registry_is_minimal() {
             "replace_text",
             "delete_file",
             "run_command",
-            "set_objective",
+            "set_goal",
+            "accomplish_goal",
             "update_checklist",
             "record_evidence",
             "report_supervisor",
             "post_blackboard",
             "ask_human",
+            "request_permissions",
+            "load_skill",
+            "read_skill_resource",
             "agent_control",
             "submit_final",
         ])
@@ -623,12 +694,26 @@ fn tool_invocation_records_failure_when_output_schema_is_violated() {
             idempotency: IdempotencyMode::KernelDeduplicated,
             evidence_type: Some(EvidenceType::CommandLog),
             created_at: now_rfc3339(),
+            ..ToolDescriptor::default()
+        })
+        .unwrap();
+    let supervisor = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_supervisor".to_string(),
+            owner: "tester".to_string(),
+            goal: "exercise custom tool schema failure".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: Vec::new(),
         })
         .unwrap();
     let cap = fx
         .kernel
         .grant_capability(
-            &fx.worker.agent_id,
+            &supervisor.agent_id,
             &fx.task.task_id,
             vec!["tool.invoke".to_string()],
             vec!["tool:*".to_string()],
@@ -638,9 +723,9 @@ fn tool_invocation_records_failure_when_output_schema_is_violated() {
         .unwrap();
     let syscall = SyscallEnvelope::new(
         "tool.invoke",
-        fx.worker.agent_id.clone(),
+        supervisor.agent_id.clone(),
         fx.task.task_id.clone(),
-        fx.worker.session_id.clone(),
+        supervisor.session_id.clone(),
         Some(cap.capability_id),
         1,
         json!({

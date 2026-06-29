@@ -25,23 +25,23 @@ impl Kernel {
                 "capability task does not match agent task".to_string(),
             ));
         }
-        let permission = self.active_permission(&acb.config_snapshot.permission_profile_id)?;
+        let permission = self.effective_permission_set(&acb)?;
         if risk_ceiling > permission.max_risk_level {
             return Err(AgentOsError::PermissionDenied(
-                "capability exceeds bound permission profile risk ceiling".to_string(),
+                "capability exceeds effective permission risk ceiling".to_string(),
             ));
         }
         for syscall in &syscalls {
             if !wildcard_allows(&permission.allowed_syscalls, syscall) {
                 return Err(AgentOsError::PermissionDenied(format!(
-                    "permission profile does not allow syscall {syscall}"
+                    "effective permissions do not allow syscall {syscall}"
                 )));
             }
         }
         for scope in &resource_scopes {
             if !scope_list_allows(&permission.resource_scopes, scope) {
                 return Err(AgentOsError::PermissionDenied(format!(
-                    "permission profile does not allow resource scope {scope}"
+                    "effective permissions do not allow resource scope {scope}"
                 )));
             }
         }
@@ -128,24 +128,16 @@ impl Kernel {
             .values()
             .find(|thread| thread.agent_id == syscall.agent_id)
             .ok_or_else(|| AgentOsError::NotFound(format!("agent {}", syscall.agent_id)))?;
-        let permission = state
-            .permission_profiles
-            .get(&acb.config_snapshot.permission_profile_id)
-            .ok_or_else(|| {
-                AgentOsError::NotFound(format!(
-                    "permission profile {}",
-                    acb.config_snapshot.permission_profile_id
-                ))
-            })?;
+        let permission = crate::permissions::effective_permission_set_for_thread(&state, acb);
         if !wildcard_allows(&permission.allowed_syscalls, &syscall.syscall_type) {
             return Err(AgentOsError::PermissionDenied(format!(
-                "permission profile does not allow syscall {}",
+                "effective permissions do not allow syscall {}",
                 syscall.syscall_type
             )));
         }
         if syscall.risk_level > permission.max_risk_level {
             return Err(AgentOsError::PermissionDenied(
-                "syscall risk exceeds permission profile ceiling".to_string(),
+                "syscall risk exceeds effective permission ceiling".to_string(),
             ));
         }
         for scope in requested_resource_scopes(&syscall.resource_scope)? {
@@ -156,7 +148,7 @@ impl Kernel {
             }
             if !scope_list_allows(&permission.resource_scopes, &scope) {
                 return Err(AgentOsError::PermissionDenied(format!(
-                    "permission profile does not allow resource scope {scope}"
+                    "effective permissions do not allow resource scope {scope}"
                 )));
             }
         }

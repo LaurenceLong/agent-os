@@ -1,4 +1,4 @@
-﻿use crate::{ModelAction, ModelTurnRequest, ModelTurnResponse, ToolAction};
+use crate::{ModelAction, ModelTurnRequest, ModelTurnResponse, ToolAction};
 use agent_os_sys::*;
 use serde_json::{json, Value};
 
@@ -161,47 +161,31 @@ pub(crate) fn map_function_call(
     mut arguments: Value,
     request: &ModelTurnRequest,
 ) -> (String, Value, u8) {
-    let workspace_root = request.workspace_root.to_string_lossy().to_string();
-    match name {
-        "read_file" => {
-            inject_field(&mut arguments, "workspace_root", &workspace_root);
-            ("read_file".to_string(), arguments, 1)
-        }
-        "write_file" => {
-            inject_field(&mut arguments, "workspace_root", &workspace_root);
-            ("write_file".to_string(), arguments, 4)
-        }
-        "delete_file" => {
-            inject_field(&mut arguments, "workspace_root", &workspace_root);
-            ("delete_file".to_string(), arguments, 4)
-        }
-        "replace_text" => {
-            inject_field(&mut arguments, "workspace_root", &workspace_root);
-            ("replace_text".to_string(), arguments, 4)
-        }
-        "run_command" => {
-            inject_field(&mut arguments, "cwd", &workspace_root);
-            ("run_command".to_string(), arguments, 4)
-        }
-        "set_objective" => ("set_objective".to_string(), arguments, 2),
-        "update_checklist" => ("update_checklist".to_string(), arguments, 2),
-        "record_evidence" => ("record_evidence".to_string(), arguments, 2),
-        "report_supervisor" => ("report_supervisor".to_string(), arguments, 1),
-        "post_blackboard" => ("post_blackboard".to_string(), arguments, 2),
-        "ask_human" => ("ask_human".to_string(), arguments, 3),
-        "agent_control" => {
-            let risk = agent_control_risk(&arguments);
-            ("agent_control".to_string(), arguments, risk)
-        }
-        _ => (name.to_string(), arguments, 1),
+    if let Some(descriptor) = request
+        .context
+        .tool_descriptors
+        .iter()
+        .find(|descriptor| descriptor.name == name)
+    {
+        inject_runtime_fields(&mut arguments, request, descriptor);
+        let risk = if name == "agent_control" {
+            agent_control_risk(&arguments)
+        } else {
+            descriptor.risk_level
+        };
+        return (name.to_string(), arguments, risk);
     }
+    (name.to_string(), arguments, 1)
 }
 
 fn agent_control_risk(arguments: &Value) -> u8 {
     match arguments.get("action").and_then(Value::as_str) {
         Some("status" | "output" | "export_trace") => 1,
         Some("kill" | "delete_session" | "purge_state") => 6,
-        Some("start" | "set_hook" | "send" | "resume" | "stop" | "set_timeout") => 4,
+        Some(
+            "start" | "set_hook" | "send" | "resume" | "stop" | "set_timeout"
+            | "approve_permission" | "deny_permission",
+        ) => 4,
         _ => 4,
     }
 }
@@ -212,6 +196,19 @@ fn inject_field(arguments: &mut Value, key: &str, value: &str) {
     }
 }
 
+fn inject_runtime_fields(
+    arguments: &mut Value,
+    request: &ModelTurnRequest,
+    descriptor: &agent_os_sys::ToolDescriptor,
+) {
+    for (field, source) in &descriptor.runtime_input_policy.injected_fields {
+        if source.as_str() == "workspace_root" {
+            let workspace_root = request.workspace_root.to_string_lossy().to_string();
+            inject_field(arguments, field, &workspace_root);
+        }
+    }
+}
+
 fn evidence_claim_for_tool(tool_name: &str) -> String {
     match tool_name {
         "read_file" => "file contents were read from the workspace".to_string(),
@@ -219,13 +216,20 @@ fn evidence_claim_for_tool(tool_name: &str) -> String {
         "delete_file" => "file was deleted from the workspace".to_string(),
         "replace_text" => "exact text replacement was applied to a workspace file".to_string(),
         "run_command" => "command was executed and output captured".to_string(),
-        "set_objective" => "task objective was updated in Agent-OS work state".to_string(),
+        "set_goal" => "agent goal was updated in Agent-OS work state".to_string(),
+        "accomplish_goal" => "agent local goal was marked accomplished".to_string(),
         "update_checklist" => "task checklist was updated in Agent-OS work state".to_string(),
         "record_evidence" => "evidence was recorded in Agent-OS".to_string(),
         "report_supervisor" => "status report was sent to the Supervisor route".to_string(),
         "post_blackboard" => "blackboard entry was published with scoped provenance".to_string(),
         "ask_human" => "human question was routed through Agent-OS".to_string(),
+        "request_permissions" => "permission request was routed to the parent agent".to_string(),
+        "load_skill" => "imported skill instructions were loaded through the kernel".to_string(),
+        "read_skill_resource" => "imported skill resource was read through the kernel".to_string(),
         "agent_control" => "agent supervision action was recorded".to_string(),
+        name if name.starts_with("mcp__") => {
+            "local MCP tool was executed through the kernel tool broker".to_string()
+        }
         _ => "tool was executed through the kernel tool broker".to_string(),
     }
 }

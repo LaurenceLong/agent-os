@@ -122,7 +122,7 @@ impl Kernel {
                 let acb = self.transition_thread_by_agent(
                     &syscall.agent_id,
                     ThreadStatus::Completed,
-                    Some("assignment completed".to_string()),
+                    Some("goal completed".to_string()),
                     Some(syscall_id.clone()),
                 )?;
                 self.trigger_child_completion_mementos(&acb.thread_id, Some(syscall_id.clone()))?;

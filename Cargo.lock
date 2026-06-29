@@ -10,18 +10,19 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "agent-os-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "agent-os-kernel",
  "agent-os-store-sqlite",
  "agent-os-sys",
  "agent-os-thread",
+ "serde",
  "serde_json",
 ]
 
 [[package]]
 name = "agent-os-conformance"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "agent-os-kernel",
  "agent-os-store",
@@ -33,7 +34,7 @@ dependencies = [
 
 [[package]]
 name = "agent-os-kernel"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "agent-os-store",
  "agent-os-sys",
@@ -45,7 +46,7 @@ dependencies = [
 
 [[package]]
 name = "agent-os-store"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "agent-os-sys",
  "serde",
@@ -55,7 +56,7 @@ dependencies = [
 
 [[package]]
 name = "agent-os-store-sqlite"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "agent-os-store",
  "agent-os-sys",
@@ -65,7 +66,7 @@ dependencies = [
 
 [[package]]
 name = "agent-os-sys"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -75,13 +76,14 @@ dependencies = [
 
 [[package]]
 name = "agent-os-thread"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "agent-os-kernel",
  "agent-os-store",
  "agent-os-sys",
  "serde",
  "serde_json",
+ "sha2",
  "ureq",
 ]
 

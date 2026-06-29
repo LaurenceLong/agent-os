@@ -119,13 +119,13 @@ goal_id: string
 task_id: string
 caller_thread_id: string | null
 caller_agent_id: string | null
-caller_supervisor_level: integer | null
+caller_security_level: integer | null
 callee_thread_id: string
 callee_agent_id: string
 callee_role_profile_id: string
-callee_supervisor_level: integer | null
+callee_security_level: integer
 relationship: supervisor_delegation | worker_assignment | review_request | human_escalation | root_supervisor
-assignment: string
+goal: string
 profile_snapshot_id: string
 created_at: string
 ```
@@ -151,7 +151,7 @@ created_at: string
 | `agent.suspend` | Request suspension | yes |
 | `agent.resume` | Request resume | yes |
 | `agent.fail` | Report failure with reason and evidence | yes |
-| `agent.complete` | Complete agent assignment | yes |
+| `agent.complete` | Complete agent local goal | yes |
 
 `agent.spawn` result metadata SHOULD include:
 

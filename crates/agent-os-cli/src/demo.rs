@@ -29,7 +29,7 @@ pub(crate) fn run_demo() -> AgentOsResult<Value> {
         task_id: task.task_id.clone(),
         role_profile_id: "role_worker".to_string(),
         owner: "agent-os-cli".to_string(),
-        local_goal: "inspect docs".to_string(),
+        goal: "inspect docs".to_string(),
         success_criteria: Vec::new(),
         failure_criteria: Vec::new(),
         parent_thread_id: None,

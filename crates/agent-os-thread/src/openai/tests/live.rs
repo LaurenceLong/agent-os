@@ -2,135 +2,149 @@ use super::support::*;
 use super::*;
 
 #[test]
-#[ignore = "requires LLM_API_KEY and live OpenAI-compatible endpoint"]
+#[ignore = "requires AGENT_OS_LIVE_OPENAI_API_KEY and a live OpenAI-compatible endpoint"]
 fn live_openai_compatible_llm_e2e_writes_file_and_logs_interaction() {
     run_live_llm_e2e(
         "openai-compatible",
         LlmApiStyle::OpenAiCompatible,
-        "LLM_OPENAI_BASE_URL",
-        "http://model.mify.ai.srv/v1",
+        "AGENT_OS_LIVE_OPENAI_API_KEY",
+        "AGENT_OS_LIVE_OPENAI_MODEL",
+        "AGENT_OS_LIVE_OPENAI_BASE_URL",
         "live-openai-compatible-e2e-interaction.jsonl",
     );
 }
 
 #[test]
-#[ignore = "requires LLM_API_KEY and live Anthropic-compatible endpoint"]
+#[ignore = "requires AGENT_OS_LIVE_ANTHROPIC_API_KEY and a live Anthropic-compatible endpoint"]
 fn live_anthropic_compatible_llm_e2e_writes_file_and_logs_interaction() {
     run_live_llm_e2e(
         "anthropic-compatible",
         LlmApiStyle::AnthropicCompatible,
-        "LLM_ANTHROPIC_BASE_URL",
-        "http://model.mify.ai.srv/anthropic",
+        "AGENT_OS_LIVE_ANTHROPIC_API_KEY",
+        "AGENT_OS_LIVE_ANTHROPIC_MODEL",
+        "AGENT_OS_LIVE_ANTHROPIC_BASE_URL",
         "live-anthropic-compatible-e2e-interaction.jsonl",
     );
 }
 
 #[test]
-#[ignore = "requires LLM_API_KEY and live OpenAI-compatible endpoint"]
+#[ignore = "requires AGENT_OS_LIVE_OPENAI_API_KEY and a live OpenAI-compatible endpoint"]
 fn live_openai_compatible_llm_goal_driven_workspace_e2e() {
     run_live_llm_goal_driven_workspace_e2e(
         "openai-compatible",
         LlmApiStyle::OpenAiCompatible,
-        "LLM_OPENAI_BASE_URL",
-        "http://model.mify.ai.srv/v1",
+        "AGENT_OS_LIVE_OPENAI_API_KEY",
+        "AGENT_OS_LIVE_OPENAI_MODEL",
+        "AGENT_OS_LIVE_OPENAI_BASE_URL",
         "live-openai-compatible-goal-workspace.jsonl",
     );
 }
 
 #[test]
-#[ignore = "requires LLM_API_KEY and live Anthropic-compatible endpoint"]
+#[ignore = "requires AGENT_OS_LIVE_ANTHROPIC_API_KEY and a live Anthropic-compatible endpoint"]
 fn live_anthropic_compatible_llm_goal_driven_workspace_e2e() {
     run_live_llm_goal_driven_workspace_e2e(
         "anthropic-compatible",
         LlmApiStyle::AnthropicCompatible,
-        "LLM_ANTHROPIC_BASE_URL",
-        "http://model.mify.ai.srv/anthropic",
+        "AGENT_OS_LIVE_ANTHROPIC_API_KEY",
+        "AGENT_OS_LIVE_ANTHROPIC_MODEL",
+        "AGENT_OS_LIVE_ANTHROPIC_BASE_URL",
         "live-anthropic-compatible-goal-workspace.jsonl",
     );
 }
 
 #[test]
-#[ignore = "requires LLM_API_KEY and live OpenAI-compatible endpoint"]
+#[ignore = "requires AGENT_OS_LIVE_OPENAI_API_KEY and a live OpenAI-compatible endpoint"]
 fn live_openai_compatible_llm_goal_driven_control_plane_e2e() {
     run_live_llm_goal_driven_control_plane_e2e(
         "openai-compatible",
         LlmApiStyle::OpenAiCompatible,
-        "LLM_OPENAI_BASE_URL",
-        "http://model.mify.ai.srv/v1",
+        "AGENT_OS_LIVE_OPENAI_API_KEY",
+        "AGENT_OS_LIVE_OPENAI_MODEL",
+        "AGENT_OS_LIVE_OPENAI_BASE_URL",
         "live-openai-compatible-goal-control-plane.jsonl",
     );
 }
 
 #[test]
-#[ignore = "requires LLM_API_KEY and live Anthropic-compatible endpoint"]
+#[ignore = "requires AGENT_OS_LIVE_ANTHROPIC_API_KEY and a live Anthropic-compatible endpoint"]
 fn live_anthropic_compatible_llm_goal_driven_control_plane_e2e() {
     run_live_llm_goal_driven_control_plane_e2e(
         "anthropic-compatible",
         LlmApiStyle::AnthropicCompatible,
-        "LLM_ANTHROPIC_BASE_URL",
-        "http://model.mify.ai.srv/anthropic",
+        "AGENT_OS_LIVE_ANTHROPIC_API_KEY",
+        "AGENT_OS_LIVE_ANTHROPIC_MODEL",
+        "AGENT_OS_LIVE_ANTHROPIC_BASE_URL",
         "live-anthropic-compatible-goal-control-plane.jsonl",
     );
 }
 
 #[test]
-#[ignore = "requires LLM_API_KEY and live OpenAI-compatible endpoint"]
+#[ignore = "requires AGENT_OS_LIVE_OPENAI_API_KEY and a live OpenAI-compatible endpoint"]
 fn live_openai_compatible_llm_goal_driven_full_tool_surface_e2e() {
     run_live_llm_goal_driven_full_tool_surface_e2e(
         "openai-compatible",
         LlmApiStyle::OpenAiCompatible,
-        "LLM_OPENAI_BASE_URL",
-        "http://model.mify.ai.srv/v1",
+        "AGENT_OS_LIVE_OPENAI_API_KEY",
+        "AGENT_OS_LIVE_OPENAI_MODEL",
+        "AGENT_OS_LIVE_OPENAI_BASE_URL",
         "live-openai-compatible-goal-full-tool-surface.jsonl",
     );
 }
 
 #[test]
-#[ignore = "requires LLM_API_KEY and live Anthropic-compatible endpoint"]
+#[ignore = "requires AGENT_OS_LIVE_ANTHROPIC_API_KEY and a live Anthropic-compatible endpoint"]
 fn live_anthropic_compatible_llm_goal_driven_full_tool_surface_e2e() {
     run_live_llm_goal_driven_full_tool_surface_e2e(
         "anthropic-compatible",
         LlmApiStyle::AnthropicCompatible,
-        "LLM_ANTHROPIC_BASE_URL",
-        "http://model.mify.ai.srv/anthropic",
+        "AGENT_OS_LIVE_ANTHROPIC_API_KEY",
+        "AGENT_OS_LIVE_ANTHROPIC_MODEL",
+        "AGENT_OS_LIVE_ANTHROPIC_BASE_URL",
         "live-anthropic-compatible-goal-full-tool-surface.jsonl",
     );
 }
 
 #[test]
-#[ignore = "requires LLM_API_KEY and live OpenAI-compatible endpoint"]
-fn live_openai_compatible_llm_goal_driven_agent_control_rejection_e2e() {
-    run_live_llm_goal_driven_agent_control_rejection_e2e(
+#[ignore = "requires AGENT_OS_LIVE_OPENAI_API_KEY and a live OpenAI-compatible endpoint"]
+fn live_openai_compatible_llm_goal_driven_agent_control_lifecycle_success_e2e() {
+    run_live_llm_goal_driven_agent_control_lifecycle_success_e2e(
         "openai-compatible",
         LlmApiStyle::OpenAiCompatible,
-        "LLM_OPENAI_BASE_URL",
-        "http://model.mify.ai.srv/v1",
-        "live-openai-compatible-goal-agent-control-rejection.jsonl",
+        "AGENT_OS_LIVE_OPENAI_API_KEY",
+        "AGENT_OS_LIVE_OPENAI_MODEL",
+        "AGENT_OS_LIVE_OPENAI_BASE_URL",
+        "live-openai-compatible-goal-agent-control-lifecycle-success.jsonl",
     );
 }
 
 #[test]
-#[ignore = "requires LLM_API_KEY and live Anthropic-compatible endpoint"]
-fn live_anthropic_compatible_llm_goal_driven_agent_control_rejection_e2e() {
-    run_live_llm_goal_driven_agent_control_rejection_e2e(
+#[ignore = "requires AGENT_OS_LIVE_ANTHROPIC_API_KEY and a live Anthropic-compatible endpoint"]
+fn live_anthropic_compatible_llm_goal_driven_agent_control_lifecycle_success_e2e() {
+    run_live_llm_goal_driven_agent_control_lifecycle_success_e2e(
         "anthropic-compatible",
         LlmApiStyle::AnthropicCompatible,
-        "LLM_ANTHROPIC_BASE_URL",
-        "http://model.mify.ai.srv/anthropic",
-        "live-anthropic-compatible-goal-agent-control-rejection.jsonl",
+        "AGENT_OS_LIVE_ANTHROPIC_API_KEY",
+        "AGENT_OS_LIVE_ANTHROPIC_MODEL",
+        "AGENT_OS_LIVE_ANTHROPIC_BASE_URL",
+        "live-anthropic-compatible-goal-agent-control-lifecycle-success.jsonl",
     );
 }
 
 fn run_live_llm_e2e(
     provider: &str,
     api_style: LlmApiStyle,
+    api_key_env: &str,
+    model_env: &str,
     base_env: &str,
-    default_base: &str,
     log_file_name: &str,
 ) {
-    let api_key = std::env::var("LLM_API_KEY").expect("LLM_API_KEY is required for live LLM e2e");
-    let model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "tongyi/qwen3.6-plus".to_string());
-    let api_base = std::env::var(base_env).unwrap_or_else(|_| default_base.to_string());
+    let api_key = std::env::var(api_key_env)
+        .unwrap_or_else(|_| panic!("{api_key_env} is required for live LLM e2e"));
+    let model = std::env::var(model_env)
+        .unwrap_or_else(|_| panic!("{model_env} is required for live LLM e2e"));
+    let api_base = std::env::var(base_env)
+        .unwrap_or_else(|_| panic!("{base_env} is required for live LLM e2e"));
     let tmp = std::env::temp_dir().join(format!(
         "aos-live-{}-{}",
         provider.replace('-', "_"),
@@ -191,13 +205,17 @@ fn run_live_llm_e2e(
 fn run_live_llm_goal_driven_workspace_e2e(
     provider: &str,
     api_style: LlmApiStyle,
+    api_key_env: &str,
+    model_env: &str,
     base_env: &str,
-    default_base: &str,
     log_file_name: &str,
 ) {
-    let api_key = std::env::var("LLM_API_KEY").expect("LLM_API_KEY is required for live LLM e2e");
-    let model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "tongyi/qwen3.6-plus".to_string());
-    let api_base = std::env::var(base_env).unwrap_or_else(|_| default_base.to_string());
+    let api_key = std::env::var(api_key_env)
+        .unwrap_or_else(|_| panic!("{api_key_env} is required for live LLM e2e"));
+    let model = std::env::var(model_env)
+        .unwrap_or_else(|_| panic!("{model_env} is required for live LLM e2e"));
+    let api_base = std::env::var(base_env)
+        .unwrap_or_else(|_| panic!("{base_env} is required for live LLM e2e"));
     let tmp = std::env::temp_dir().join(format!(
         "aos-live-goal-workspace-{}-{}",
         provider.replace('-', "_"),
@@ -255,7 +273,7 @@ fn run_live_llm_goal_driven_workspace_e2e(
             "api_base": api_base,
             "model": model,
             "workspace": tmp,
-            "task_goal": request.thread.task.local_goal,
+            "task_goal": request.thread.task.goal,
         }),
     )
     .unwrap();
@@ -297,13 +315,17 @@ fn run_live_llm_goal_driven_workspace_e2e(
 fn run_live_llm_goal_driven_control_plane_e2e(
     provider: &str,
     api_style: LlmApiStyle,
+    api_key_env: &str,
+    model_env: &str,
     base_env: &str,
-    default_base: &str,
     log_file_name: &str,
 ) {
-    let api_key = std::env::var("LLM_API_KEY").expect("LLM_API_KEY is required for live LLM e2e");
-    let model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "tongyi/qwen3.6-plus".to_string());
-    let api_base = std::env::var(base_env).unwrap_or_else(|_| default_base.to_string());
+    let api_key = std::env::var(api_key_env)
+        .unwrap_or_else(|_| panic!("{api_key_env} is required for live LLM e2e"));
+    let model = std::env::var(model_env)
+        .unwrap_or_else(|_| panic!("{model_env} is required for live LLM e2e"));
+    let api_base = std::env::var(base_env)
+        .unwrap_or_else(|_| panic!("{base_env} is required for live LLM e2e"));
     let tmp = std::env::temp_dir().join(format!(
         "aos-live-goal-control-{}-{}",
         provider.replace('-', "_"),
@@ -323,7 +345,7 @@ fn run_live_llm_goal_driven_control_plane_e2e(
     let (kernel, request) = make_kernel_request_for_role_with_blob_store_and_requirements(
             &tmp,
             "role_supervisor",
-            "Complete this live control-plane checklist as a supervisor. 1. read_file coordination_seed.md. 2. set_objective to say the live control-plane goal is achieved. 3. update_checklist with one completed item. 4. record_evidence for the coordination seed. 5. report_supervisor with a concise progress message. 6. post_blackboard one task-scoped risk note on the risks channel. 7. ask_human exactly once to confirm there is no extra scope, then continue after delivery. 8. agent_control start a child worker with role_profile_id role_worker and a one-sentence assignment. 9. submit_final with summary exactly Control-plane coordination complete., tests_run containing read_file coordination_seed.md, and known_risks as an empty array. Do not skip report_supervisor.",
+            "Complete this live control-plane checklist as a supervisor. 1. read_file coordination_seed.md. 2. set_goal with goal saying the live control-plane goal is achieved. 3. update_checklist with one completed item. 4. record_evidence for the coordination seed. 5. report_supervisor with a concise progress message. 6. post_blackboard one task-scoped risk note on the risks channel. 7. ask_human exactly once to confirm there is no extra scope, then continue after delivery. 8. agent_control start a child worker with role_profile_id role_worker and a one-sentence goal in payload.goal. 9. accomplish_goal with a concise summary. 10. submit_final with summary exactly Control-plane coordination complete., tests_run containing read_file coordination_seed.md, and known_risks as an empty array. submit_final must be the last tool call. Do not skip report_supervisor.",
             Vec::new(),
             Vec::new(),
             vec![EvidenceType::SourceRef],
@@ -341,7 +363,7 @@ fn run_live_llm_goal_driven_control_plane_e2e(
             "api_base": api_base,
             "model": model,
             "workspace": tmp,
-            "task_goal": request.thread.task.local_goal,
+            "task_goal": request.thread.task.goal,
         }),
     )
     .unwrap();
@@ -359,13 +381,14 @@ fn run_live_llm_goal_driven_control_plane_e2e(
         &report,
         &[
             "read_file",
-            "set_objective",
+            "set_goal",
             "update_checklist",
             "record_evidence",
             "report_supervisor",
             "post_blackboard",
             "ask_human",
             "agent_control",
+            "accomplish_goal",
             "submit_final",
         ],
     );
@@ -376,13 +399,17 @@ fn run_live_llm_goal_driven_control_plane_e2e(
 fn run_live_llm_goal_driven_full_tool_surface_e2e(
     provider: &str,
     api_style: LlmApiStyle,
+    api_key_env: &str,
+    model_env: &str,
     base_env: &str,
-    default_base: &str,
     log_file_name: &str,
 ) {
-    let api_key = std::env::var("LLM_API_KEY").expect("LLM_API_KEY is required for live LLM e2e");
-    let model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "tongyi/qwen3.6-plus".to_string());
-    let api_base = std::env::var(base_env).unwrap_or_else(|_| default_base.to_string());
+    let api_key = std::env::var(api_key_env)
+        .unwrap_or_else(|_| panic!("{api_key_env} is required for live LLM e2e"));
+    let model = std::env::var(model_env)
+        .unwrap_or_else(|_| panic!("{model_env} is required for live LLM e2e"));
+    let api_base = std::env::var(base_env)
+        .unwrap_or_else(|_| panic!("{base_env} is required for live LLM e2e"));
     let tmp = std::env::temp_dir().join(format!(
         "aos-live-goal-full-surface-{}-{}",
         provider.replace('-', "_"),
@@ -416,7 +443,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
             &tmp,
             "role_worker",
             &format!(
-                "Complete this focused workspace validation. Read read.txt, write created.txt with exactly FULL_TOOL_SURFACE_OK followed by one newline, replace status=old with status=new in edit.txt, delete obsolete.tmp, run {verifier_command}, then submit_final with summary exactly Workspace surface complete., tests_run containing cmd /C verify_full_surface.cmd, and known_risks as an empty array."
+                "Complete this focused workspace validation. Read read.txt, write created.txt with exactly FULL_TOOL_SURFACE_OK followed by one newline, replace status=old with status=new in edit.txt, delete obsolete.tmp, run {verifier_command}, then call accomplish_goal with a concise summary, then submit_final with summary exactly Workspace surface complete., tests_run containing cmd /C verify_full_surface.cmd, and known_risks as an empty array. submit_final must be the last tool call."
             ),
             Vec::new(),
             vec![ArtifactType::Patch],
@@ -459,6 +486,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
             "replace_text",
             "delete_file",
             "run_command",
+            "accomplish_goal",
             "submit_final",
         ],
     );
@@ -472,7 +500,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
         make_kernel_request_for_role_with_blob_store_and_requirements(
             &tmp,
             "role_supervisor",
-            "Complete this focused control-plane validation. Read coordination_seed.md, set_objective to say the live full-surface control-plane segment is achieved, update_checklist with one completed item, record_evidence for coordination_seed.md as source_ref, report_supervisor with a short progress message, post_blackboard on channel test-results with scope task and section test_result, ask_human exactly once whether there is extra scope and continue after delivery, start one child worker with role_profile_id role_worker, then submit_final with summary exactly Control-plane surface complete., tests_run containing read_file coordination_seed.md, and known_risks as an empty array.",
+            "Complete this focused control-plane validation. Read coordination_seed.md, set_goal with goal saying the live full-surface control-plane segment is achieved, update_checklist with one completed item, record_evidence for coordination_seed.md as source_ref, report_supervisor with a short progress message, post_blackboard on channel test-results with scope task and section test_result, ask_human exactly once whether there is extra scope and continue after delivery, start one child worker with role_profile_id role_worker and payload.goal, then call accomplish_goal with a concise summary, then submit_final with summary exactly Control-plane surface complete., tests_run containing read_file coordination_seed.md, and known_risks as an empty array. submit_final must be the last tool call.",
             Vec::new(),
             Vec::new(),
             vec![EvidenceType::SourceRef],
@@ -499,13 +527,14 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
         &control_report,
         &[
             "read_file",
-            "set_objective",
+            "set_goal",
             "update_checklist",
             "record_evidence",
             "report_supervisor",
             "post_blackboard",
             "ask_human",
             "agent_control",
+            "accomplish_goal",
             "submit_final",
         ],
     );
@@ -593,7 +622,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
             task_id: lifecycle_target_task.task_id.clone(),
             role_profile_id: "role_supervisor".to_string(),
             owner: "agent-os-thread-live-test".to_string(),
-            local_goal: "prepare focused live agent_control targets".to_string(),
+            goal: "prepare focused live agent_control targets".to_string(),
             success_criteria: Vec::new(),
             failure_criteria: Vec::new(),
             parent_thread_id: None,
@@ -636,7 +665,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
             task_id: status_task.task_id.clone(),
             role_profile_id: "role_supervisor".to_string(),
             owner: "agent-os-thread-live-test".to_string(),
-            local_goal: format!(
+            goal: format!(
                 "Complete this focused agent_control read-only validation. Read agent_control_seed.md, then for thread_id {} call agent_control status, output, and export_trace exactly once each. Then submit_final with summary exactly Agent control read surface complete. and known_risks as an empty array.",
                 resume_target.thread_id
             ),
@@ -681,7 +710,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
             task_id: mutation_task.task_id.clone(),
             role_profile_id: "role_supervisor".to_string(),
             owner: "agent-os-thread-live-test".to_string(),
-            local_goal: format!(
+            goal: format!(
                 "Complete this focused agent_control mutation validation. Read agent_control_seed.md, then for thread_id {} call agent_control set_hook, send, set_timeout, and resume exactly once each. Then submit_final with summary exactly Agent control mutation surface complete. and known_risks as an empty array.",
                 resume_target.thread_id
             ),
@@ -726,7 +755,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
             task_id: terminal_task.task_id.clone(),
             role_profile_id: "role_supervisor".to_string(),
             owner: "agent-os-thread-live-test".to_string(),
-            local_goal: format!(
+            goal: format!(
                 "Complete this focused agent_control terminal validation. Read agent_control_seed.md, then call agent_control stop exactly once on thread_id {} and agent_control kill exactly once on thread_id {}. Then submit_final with summary exactly Agent control terminal surface complete. and known_risks as an empty array.",
                 stop_target.thread_id, kill_target.thread_id
             ),
@@ -783,38 +812,44 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
     let _ = std::fs::remove_dir_all(tmp);
 }
 
-fn run_live_llm_goal_driven_agent_control_rejection_e2e(
+fn run_live_llm_goal_driven_agent_control_lifecycle_success_e2e(
     provider: &str,
     api_style: LlmApiStyle,
+    api_key_env: &str,
+    model_env: &str,
     base_env: &str,
-    default_base: &str,
     log_file_name: &str,
 ) {
     for action in ["delete_session", "purge_state"] {
-        run_live_llm_goal_driven_single_rejection_agent_control_e2e(
+        run_live_llm_goal_driven_single_lifecycle_success_agent_control_e2e(
             provider,
             api_style,
+            api_key_env,
+            model_env,
             base_env,
-            default_base,
             log_file_name,
             action,
         );
     }
 }
 
-fn run_live_llm_goal_driven_single_rejection_agent_control_e2e(
+fn run_live_llm_goal_driven_single_lifecycle_success_agent_control_e2e(
     provider: &str,
     api_style: LlmApiStyle,
+    api_key_env: &str,
+    model_env: &str,
     base_env: &str,
-    default_base: &str,
     log_file_name: &str,
     action: &str,
 ) {
-    let api_key = std::env::var("LLM_API_KEY").expect("LLM_API_KEY is required for live LLM e2e");
-    let model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "tongyi/qwen3.6-plus".to_string());
-    let api_base = std::env::var(base_env).unwrap_or_else(|_| default_base.to_string());
+    let api_key = std::env::var(api_key_env)
+        .unwrap_or_else(|_| panic!("{api_key_env} is required for live LLM e2e"));
+    let model = std::env::var(model_env)
+        .unwrap_or_else(|_| panic!("{model_env} is required for live LLM e2e"));
+    let api_base = std::env::var(base_env)
+        .unwrap_or_else(|_| panic!("{base_env} is required for live LLM e2e"));
     let tmp = std::env::temp_dir().join(format!(
-        "aos-live-agent-control-rejection-{}-{}-{}",
+        "aos-live-agent-control-lifecycle-success-{}-{}-{}",
         action,
         provider.replace('-', "_"),
         new_id("t_")
@@ -829,10 +864,10 @@ fn run_live_llm_goal_driven_single_rejection_agent_control_e2e(
         .register_goal(RegisterGoalInput {
             namespace: "live-e2e".to_string(),
             created_by: "agent-os-thread-live-test".to_string(),
-            title: format!("Live agent_control rejection {action}"),
-            description: "Exercise append-only-store agent_control rejection through a live LLM"
+            title: format!("Live agent_control lifecycle success {action}"),
+            description: "Exercise successful agent_control lifecycle handling through a live LLM"
                 .to_string(),
-            acceptance_criteria: vec![format!("agent_control {action} is rejected")],
+            acceptance_criteria: vec![format!("agent_control {action} is applied")],
             constraints: Vec::new(),
             risk_level: 6,
             deadline: None,
@@ -856,7 +891,7 @@ fn run_live_llm_goal_driven_single_rejection_agent_control_e2e(
             task_id: task.task_id.clone(),
             role_profile_id: "role_supervisor".to_string(),
             owner: "agent-os-thread-live-test".to_string(),
-            local_goal: "prepare append-only-store rejection target".to_string(),
+            goal: "prepare lifecycle success target".to_string(),
             success_criteria: Vec::new(),
             failure_criteria: Vec::new(),
             parent_thread_id: None,
@@ -867,11 +902,11 @@ fn run_live_llm_goal_driven_single_rejection_agent_control_e2e(
         &kernel,
         &task.task_id,
         &target_owner,
-        "rejection target",
+        "lifecycle success target",
         &tmp,
     );
     let detailed_goal = format!(
-        "Attempt exactly one supervision action for this live rejection e2e: call agent_control with action {action} on thread_id {thread_id}. Do not inspect files, run commands, update objective, update checklist, record evidence, report supervisor, ask human, or start another child before that call. After the expected append-only-store rejection, stop.",
+        "Read control_seed.md, then call exactly one agent_control supervision action with action {action} on thread_id {thread_id}. After that action succeeds, call accomplish_goal with a concise summary, then submit_final with summary exactly Agent control lifecycle action applied., tests_run containing read_file control_seed.md, and known_risks as an empty array. submit_final must be the last tool call.",
         thread_id = target.thread_id,
     );
     let supervisor = kernel
@@ -879,7 +914,7 @@ fn run_live_llm_goal_driven_single_rejection_agent_control_e2e(
             task_id: task.task_id.clone(),
             role_profile_id: "role_supervisor".to_string(),
             owner: "agent-os-thread-live-test".to_string(),
-            local_goal: detailed_goal,
+            goal: detailed_goal,
             success_criteria: Vec::new(),
             failure_criteria: Vec::new(),
             parent_thread_id: None,
@@ -895,23 +930,28 @@ fn run_live_llm_goal_driven_single_rejection_agent_control_e2e(
     append_jsonl(
         &audit_log_path,
         &json!({
-            "type": "live_goal_driven_agent_control_rejection_start",
+            "type": "live_goal_driven_agent_control_lifecycle_success_start",
             "provider": provider,
             "api_base": api_base,
             "model": model,
             "workspace": tmp,
             "action": action,
             "target_thread_id": target.thread_id,
-            "task_goal": supervisor.task.local_goal,
+            "task_goal": supervisor.task.goal,
         }),
     )
     .unwrap();
 
+    std::fs::write(
+        tmp.join("control_seed.md"),
+        format!("Agent control lifecycle action: {action}\n"),
+    )
+    .unwrap();
     let mut runtime = ThreadRuntime::new(kernel.clone(), supervisor.thread_id.clone(), client);
     let mut config = RuntimeConfig::workspace_write(tmp.clone());
     config.max_steps = 4;
     config.tool_risk_ceiling = 6;
-    let err = runtime
+    let report = runtime
         .run_to_completion_with_overrides(
             config,
             RuntimeRunOverrides {
@@ -919,31 +959,33 @@ fn run_live_llm_goal_driven_single_rejection_agent_control_e2e(
                 tool_approval_id: Some(approval_id),
             },
         )
-        .unwrap_err();
-    assert!(
-        matches!(err, AgentOsError::Validation(ref message) if message.contains("append-only v0.1 store")),
-        "{err:?}"
-    );
+        .unwrap();
+    assert!(report.final_submitted);
+    assert_all_tool_calls_completed(&report);
     let state = kernel.state_snapshot().unwrap();
     assert!(state.tool_invocations.values().any(|invocation| {
         invocation.tool_name == "agent_control"
-            && invocation.status == ToolCallStatus::Failed
+            && invocation.status == ToolCallStatus::Completed
             && invocation.input.get("action").and_then(Value::as_str) == Some(action)
+    }));
+    assert!(state.agent_control_commands.values().any(|command| {
+        command.status == AgentControlCommandStatus::Applied
+            && command.target_thread_id.as_deref() == Some(&target.thread_id)
     }));
     append_jsonl(
         &audit_log_path,
         &json!({
-            "type": "live_goal_driven_agent_control_rejection_summary",
+            "type": "live_goal_driven_agent_control_lifecycle_success_summary",
             "provider": provider,
             "action": action,
-            "error": err.to_string(),
+            "report": report,
             "tool_invocations": state.tool_invocations,
             "agent_control_commands": state.agent_control_commands,
         }),
     )
     .unwrap();
     println!(
-        "live_goal_agent_control_rejection_log={}",
+        "live_goal_agent_control_lifecycle_success_log={}",
         audit_log_path.display()
     );
     let _ = std::fs::remove_dir_all(tmp);
@@ -1020,7 +1062,7 @@ fn live_child_agent(
     kernel: &Kernel,
     task_id: &str,
     supervisor: &AgentControlBlock,
-    local_goal: &str,
+    goal: &str,
     workspace: &Path,
 ) -> AgentControlBlock {
     kernel
@@ -1028,7 +1070,7 @@ fn live_child_agent(
             task_id: task_id.to_string(),
             role_profile_id: "role_worker".to_string(),
             owner: supervisor.agent_id.clone(),
-            local_goal: local_goal.to_string(),
+            goal: goal.to_string(),
             success_criteria: vec!["target action is observable".to_string()],
             failure_criteria: Vec::new(),
             parent_thread_id: Some(supervisor.thread_id.clone()),
