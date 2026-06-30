@@ -5,9 +5,12 @@ forward-only system design.
 
 ## Non-Negotiable Forward-Only Rules
 
+- Keep the changed code on a clean forward-only design.
 - Choose the cleanest current contract over preserving old behavior.
 - Do not add fallbacks, compatibility layers, legacy adapters, deprecated paths,
   migration shims, feature flags, or temporary workarounds.
+- This project is unreleased: remove obsolete code instead of preserving
+  compatibility logic.
 - When existing code conflicts with the intended architecture, refactor or
   remove it instead of adapting around it.
 - Prefer one canonical implementation path over multiple supported paths.
@@ -79,6 +82,7 @@ forward-only system design.
 
 ## Testing Rules
 
+- When updating changed code, add or update relevant tests before handoff.
 - Maintain a practical test mix near 60% unit tests, 25% integration tests, and
   15% e2e tests by meaningful scenarios and assertions, not by brittle raw line
   counts. Document any material deviation when the risk profile calls for it.
@@ -120,6 +124,11 @@ forward-only system design.
   into broad fixture files.
 - Run the relevant test suite and `cargo clippy --workspace --all-targets -- -D
   warnings` before handing off when feasible.
+- For benchmark regressions, acceptance must include one-by-one reruns of the
+  original failing benchmark instances. Do not accept a fix only from synthetic
+  tests when a concrete benchmark failure is available.
+- Report code changes, test changes, commands run, and command results in the
+  handoff.
 
 ## Audit And Fix Workflow
 

@@ -1,5 +1,8 @@
 use crate::common::*;
-use agent_os_thread::{RuntimeConfig, RuntimeRunOverrides, ThreadRuntime, ToolAction};
+use agent_os_thread::{
+    ModelAction, ModelClient, ModelTurnRequest, ModelTurnResponse, RuntimeConfig,
+    RuntimeRunOverrides, ThreadRuntime, ToolAction,
+};
 use serde_json::Value;
 use std::{
     collections::BTreeSet,
@@ -302,6 +305,144 @@ fn goal_driven_runtime_integration_covers_tools_and_agent_control_actions() {
 
 #[test]
 fn goal_driven_runtime_integration_rejects_understated_privileged_agent_control_risk() {
+    struct UnderstatedRiskRecoveryModel {
+        action: String,
+        target_thread_id: String,
+        risk_level: u8,
+        workspace_root: String,
+        current_exe: String,
+    }
+
+    impl ModelClient for UnderstatedRiskRecoveryModel {
+        fn next(&mut self, request: &ModelTurnRequest) -> AgentOsResult<ModelTurnResponse> {
+            let agent_control_result = request
+                .context
+                .tool_results
+                .iter()
+                .find(|result| result.tool_name == "agent_control");
+            let read_result = request
+                .context
+                .tool_results
+                .iter()
+                .find(|result| result.tool_name == "read_file");
+            let write_result = request
+                .context
+                .tool_results
+                .iter()
+                .find(|result| result.tool_name == "write_file");
+            let command_result = request
+                .context
+                .tool_results
+                .iter()
+                .find(|result| result.tool_name == "run_command");
+            match (
+                agent_control_result,
+                read_result,
+                write_result,
+                command_result,
+            ) {
+                (None, _, _, _) => Ok(ModelTurnResponse::single(ModelAction::ToolCall(
+                    ToolAction::new(
+                        "agent_control",
+                        json!({
+                            "action": self.action.clone(),
+                            "thread_id": self.target_thread_id.clone()
+                        }),
+                        self.risk_level,
+                        Some(
+                            "understated privileged agent_control action was attempted".to_string(),
+                        ),
+                    ),
+                ))),
+                (Some(failed), None, _, _) => {
+                    assert_eq!(failed.status, ToolCallStatus::Failed);
+                    Ok(ModelTurnResponse::single(ModelAction::ToolCall(
+                        ToolAction::new(
+                            "read_file",
+                            json!({
+                                "workspace_root": self.workspace_root.clone(),
+                                "path": "risk_seed.txt"
+                            }),
+                            1,
+                            Some(
+                                "understated privileged action failure seed was inspected"
+                                    .to_string(),
+                            ),
+                        ),
+                    )))
+                }
+                (Some(failed), Some(_), None, _) => {
+                    assert_eq!(failed.status, ToolCallStatus::Failed);
+                    Ok(ModelTurnResponse::single(ModelAction::ToolCall(
+                        ToolAction::new(
+                            "write_file",
+                            json!({
+                                "workspace_root": self.workspace_root.clone(),
+                                "path": "risk_diff.txt",
+                                "content": "understated privileged action failed as a tool result\n"
+                            }),
+                            4,
+                            Some("understated privileged action failure was written".to_string()),
+                        ),
+                    )))
+                }
+                (Some(failed), Some(_), Some(_), None) => {
+                    assert_eq!(failed.status, ToolCallStatus::Failed);
+                    Ok(ModelTurnResponse::single(ModelAction::ToolCall(
+                        ToolAction::new(
+                            "run_command",
+                            json!({
+                                "program": self.current_exe.clone(),
+                                "args": ["--help"],
+                                "cwd": self.workspace_root.clone()
+                            }),
+                            4,
+                            Some("understated privileged action recovery command ran".to_string()),
+                        ),
+                    )))
+                }
+                (Some(failed), Some(_), Some(_), Some(_)) => {
+                    assert_eq!(failed.status, ToolCallStatus::Failed);
+                    let evidence_map = request
+                        .context
+                        .tool_results
+                        .iter()
+                        .filter(|result| !result.evidence_ids.is_empty())
+                        .map(|result| {
+                            let claim = result.evidence_claim.clone().ok_or_else(|| {
+                                AgentOsError::Validation(format!(
+                                    "tool {} omitted evidence claim",
+                                    result.tool_name
+                                ))
+                            })?;
+                            Ok(EvidenceMapEntry {
+                                claim,
+                                evidence_refs: result.evidence_ids.clone(),
+                            })
+                        })
+                        .collect::<AgentOsResult<Vec<_>>>()?;
+                    Ok(ModelTurnResponse::single(ModelAction::Final {
+                        submission: FinalSubmission {
+                            summary:
+                                "Understated privileged agent_control action failed as a tool result."
+                                    .to_string(),
+                            changed_artifacts: Vec::new(),
+                            evidence_map,
+                            unverified_claims: Vec::new(),
+                            known_risks: Vec::new(),
+                            tests_run: vec![
+                                "goal_driven_runtime_integration_rejects_understated_privileged_agent_control_risk"
+                                    .to_string(),
+                            ],
+                            tests_not_run: Vec::new(),
+                            approvals: Vec::new(),
+                        },
+                    }))
+                }
+            }
+        }
+    }
+
     let case = RejectionCase {
         action: "kill",
         risk_level: 4,
@@ -310,24 +451,39 @@ fn goal_driven_runtime_integration_rejects_understated_privileged_agent_control_
         "agent-os-runtime-integration-reject-{}",
         case.action
     ));
-    let script = DeterministicModelClient::new(vec![agent_control(
-        case.action,
-        json!({"thread_id": fx.kill_thread_id}),
-        case.risk_level,
-    )]);
+    fs::write(fx.workspace.join("risk_seed.txt"), "risk seed\n").unwrap();
+    let script = UnderstatedRiskRecoveryModel {
+        action: case.action.to_string(),
+        target_thread_id: fx.kill_thread_id.clone(),
+        risk_level: case.risk_level,
+        workspace_root: fx.workspace.to_string_lossy().to_string(),
+        current_exe: std::env::current_exe()
+            .unwrap()
+            .to_string_lossy()
+            .to_string(),
+    };
     let mut runtime =
         ThreadRuntime::new(fx.kernel.clone(), fx.supervisor_thread_id.clone(), script);
     let mut config = RuntimeConfig::workspace_write(&fx.workspace);
-    config.max_steps = 2;
+    config.max_steps = 5;
     config.tool_risk_ceiling = 6;
+    config.auto_commit_patch_artifacts = false;
     let overrides = RuntimeRunOverrides {
-        sandbox_profile_id: None,
+        sandbox_profile_id: Some("sbox_workspace_write".to_string()),
         tool_approval_id: Some(fx.tool_approval_id.clone()),
     };
-    let err = runtime
-        .run_to_completion_with_overrides(config, overrides)
-        .unwrap_err();
-    assert!(matches!(err, AgentOsError::PermissionDenied(_)), "{err:?}");
+    let report = match runtime.run_to_completion_with_overrides(config, overrides) {
+        Ok(report) => report,
+        Err(error) => {
+            let state = fx.kernel.state_snapshot().unwrap();
+            panic!(
+                "runtime failed: {error:?}; tool_invocations={:#?}; evidence={:#?}",
+                state.tool_invocations, state.evidence
+            );
+        }
+    };
+    assert_eq!(report.status, ThreadStatus::Completed);
+    assert!(report.final_submitted);
 
     let state = fx.kernel.state_snapshot().unwrap();
     assert!(state.tool_invocations.values().any(|invocation| {
@@ -342,7 +498,7 @@ fn goal_driven_runtime_integration_rejects_understated_privileged_agent_control_
         ),
         &[
             json!({"type": "rejection_case", "action": case.action, "risk_level": case.risk_level}),
-            json!({"type": "error", "error": err.to_string()}),
+            json!({"type": "runtime_report", "report": report}),
             json!({"type": "tool_invocations", "invocations": state.tool_invocations}),
             json!({"type": "agent_control_commands", "commands": state.agent_control_commands}),
         ],

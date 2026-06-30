@@ -713,7 +713,7 @@ fn privileged_agent_control_actions_require_privileged_risk() {
             None,
         )
         .unwrap();
-    let err = fx
+    let result = fx
         .kernel
         .invoke_tool(
             &supervisor.agent_id,
@@ -730,8 +730,15 @@ fn privileged_agent_control_actions_require_privileged_risk() {
                 evidence_claim: None,
             },
         )
-        .unwrap_err();
-    assert!(matches!(err, AgentOsError::PermissionDenied(_)));
+        .unwrap();
+    assert_eq!(result.status, ToolCallStatus::Failed);
+    let error = result
+        .output
+        .as_ref()
+        .and_then(|output| output.get("error"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    assert!(error.contains("agent_control action requires risk level 6"));
 }
 
 #[test]

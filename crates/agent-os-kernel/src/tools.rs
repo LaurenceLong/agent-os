@@ -110,7 +110,6 @@ impl Kernel {
             .thread_by_agent(&syscall.agent_id)?
             .ok_or_else(|| AgentOsError::NotFound(format!("agent {}", syscall.agent_id)))?;
         self.require_tool_authority(&acb, &descriptor, syscall.risk_level)?;
-        validate_json_schema(&descriptor.input_schema, &input.input, "tool.input")?;
         let now = now_rfc3339();
         let mut invocation = ToolInvocation {
             call_id: new_id("call_"),
@@ -120,13 +119,40 @@ impl Kernel {
             task_id: syscall.task_id.clone(),
             status: ToolCallStatus::Running,
             risk_level: syscall.risk_level,
-            input: input.input,
+            input: input.input.clone(),
             output: None,
             evidence_ids: Vec::new(),
             audit_refs: Vec::new(),
             created_at: now,
             completed_at: None,
         };
+        if let Err(error) =
+            validate_json_schema(&descriptor.input_schema, &input.input, "tool.input")
+        {
+            invocation.status = ToolCallStatus::Failed;
+            invocation.output = Some(tool_failure_output("input_schema", &error));
+            invocation.completed_at = Some(now_rfc3339());
+            self.emit(
+                "ToolCallFailed",
+                "tool_invocation",
+                &invocation.call_id,
+                Some(invocation.agent_id.clone()),
+                Some(invocation.task_id.clone()),
+                causation_id,
+                None,
+                &invocation,
+            )?;
+            self.audit(
+                AuditActorType::Agent,
+                &syscall.agent_id,
+                "tool.invoke",
+                "tool_invocation",
+                &invocation.call_id,
+                Some("tool input schema validation failed".to_string()),
+                AuditResult::Error,
+            )?;
+            return Ok(invocation);
+        }
         self.emit(
             "ToolCallStarted",
             "tool_invocation",
@@ -141,6 +167,7 @@ impl Kernel {
             Ok(output) => output,
             Err(error) => {
                 invocation.status = ToolCallStatus::Failed;
+                invocation.output = Some(tool_failure_output("driver", &error));
                 invocation.completed_at = Some(now_rfc3339());
                 self.emit(
                     "ToolCallFailed",
@@ -161,13 +188,18 @@ impl Kernel {
                     Some("tool driver failed".to_string()),
                     AuditResult::Error,
                 )?;
-                return Err(error);
+                return Ok(invocation);
             }
         };
         if let Err(error) = validate_json_schema(&descriptor.output_schema, &output, "tool.output")
         {
-            invocation.output = Some(output);
             invocation.status = ToolCallStatus::Failed;
+            invocation.output = Some(json!({
+                "status": "failed",
+                "stage": "output_schema",
+                "error": error.to_string(),
+                "invalid_output": output,
+            }));
             invocation.completed_at = Some(now_rfc3339());
             self.emit(
                 "ToolCallFailed",
@@ -188,7 +220,7 @@ impl Kernel {
                 Some("tool output schema validation failed".to_string()),
                 AuditResult::Error,
             )?;
-            return Err(error);
+            return Ok(invocation);
         }
         invocation.output = Some(output.clone());
         invocation.status = ToolCallStatus::Completed;
@@ -299,6 +331,14 @@ impl Kernel {
             .cloned()
             .ok_or_else(|| AgentOsError::NotFound(format!("tool {}", input.tool_name)))
     }
+}
+
+fn tool_failure_output(stage: &str, error: &AgentOsError) -> serde_json::Value {
+    json!({
+        "status": "failed",
+        "stage": stage,
+        "error": error.to_string(),
+    })
 }
 
 fn tool_resource_scope(

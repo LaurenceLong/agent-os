@@ -423,8 +423,15 @@ fn workspace_and_process_tools_execute_through_broker_and_attach_evidence() {
                 evidence_claim: Some("workspace file was written".to_string()),
             },
         )
-        .unwrap_err();
-    assert!(matches!(denied, AgentOsError::PermissionDenied(_)));
+        .unwrap();
+    assert_eq!(denied.status, ToolCallStatus::Failed);
+    let error = denied
+        .output
+        .as_ref()
+        .and_then(|output| output.get("error"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    assert!(error.contains("active compatible environment lease"));
 
     let env = fx
         .kernel
@@ -653,10 +660,18 @@ fn tool_invocation_rejects_input_schema_violations_before_side_effects() {
             "evidence_claim": "tests were run"
         }),
     );
-    let err = fx.kernel.handle_syscall(syscall).unwrap_err();
-    assert!(matches!(err, AgentOsError::Validation(_)), "{err:?}");
+    let result = fx.kernel.handle_syscall(syscall).unwrap();
+    let invocation: ToolInvocation = serde_json::from_value(result.output).unwrap();
+    assert_eq!(invocation.status, ToolCallStatus::Failed);
+    let error = invocation
+        .output
+        .as_ref()
+        .and_then(|output| output.get("error"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    assert!(error.contains("tool.input missing required field args"));
     let state = fx.kernel.state_snapshot().unwrap();
-    assert!(state.tool_invocations.is_empty());
+    assert_eq!(state.tool_invocations.len(), 1);
     assert!(state.evidence.is_empty());
     assert!(!fx
         .kernel
@@ -734,8 +749,9 @@ fn tool_invocation_records_failure_when_output_schema_is_violated() {
             "evidence_claim": "should not attach"
         }),
     );
-    let err = fx.kernel.handle_syscall(syscall).unwrap_err();
-    assert!(matches!(err, AgentOsError::Validation(_)), "{err:?}");
+    let result = fx.kernel.handle_syscall(syscall).unwrap();
+    let result_invocation: ToolInvocation = serde_json::from_value(result.output).unwrap();
+    assert_eq!(result_invocation.status, ToolCallStatus::Failed);
     let state = fx.kernel.state_snapshot().unwrap();
     let invocation = state.tool_invocations.values().next().unwrap();
     assert_eq!(invocation.status, ToolCallStatus::Failed);

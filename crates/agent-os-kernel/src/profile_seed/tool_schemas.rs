@@ -59,7 +59,12 @@ pub(super) fn apply_core_model_metadata(descriptors: &mut [ToolDescriptor]) {
                     &["program", "args"],
                     json!({
                         "program": {"type": "string"},
-                        "args": {"type": "array", "items": {"type": "string"}}
+                        "args": {"type": "array", "items": {"type": "string"}},
+                        "env": {
+                            "type": "object",
+                            "description": "Optional per-command environment variables.",
+                            "additionalProperties": {"type": "string"}
+                        }
                     }),
                 ),
                 injected_workspace_root("cwd"),

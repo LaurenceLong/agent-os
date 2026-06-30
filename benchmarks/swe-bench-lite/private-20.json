@@ -1,0 +1,574 @@
+{
+  "benchmark_id": "agent-os-private-swe-bench-lite-20",
+  "manifest_version": 1,
+  "created_at": "2026-06-29",
+  "purpose": "Private 20-task SWE-bench Lite subset for validating Agent-OS software-engineering runtime design, evidence discipline, recovery, and task execution quality.",
+  "source_dataset": {
+    "name": "princeton-nlp/SWE-bench_Lite",
+    "url": "https://huggingface.co/datasets/princeton-nlp/SWE-bench_Lite",
+    "config": "default",
+    "split": "test",
+    "retrieval": "Hugging Face datasets-server rows API",
+    "retrieved_rows": 300,
+    "retrieved_at": "2026-06-29"
+  },
+  "selection_policy": {
+    "sampling_strategy": "Cover every SWE-bench Lite repository at least once, then add proportional depth for the largest repositories and Agent-OS-relevant task surfaces.",
+    "preferred_shape": "Moderate implementation size, explicit failing tests, readable problem statement, and enough regression surface to exercise evidence capture without turning the first private suite into a stress-only workload.",
+    "deferred_to_stress_suites": [
+      "Extremely long problem statements or hint payloads",
+      "Very large pass-to-pass suites when the task does not add a distinct design signal",
+      "Near-duplicate issues from the same repository subsystem"
+    ],
+    "agent_os_validation_dimensions": [
+      "repository understanding",
+      "targeted edit planning",
+      "tool-broker mediated file changes",
+      "test command evidence",
+      "review and verification independence",
+      "artifact and replay bundle export",
+      "long-task recovery after interruption",
+      "unsupported final-claim rejection"
+    ]
+  },
+  "source_fields_omitted": [
+    "patch",
+    "test_patch",
+    "problem_statement",
+    "hints_text",
+    "PASS_TO_PASS"
+  ],
+  "repo_coverage": {
+    "astropy/astropy": 1,
+    "django/django": 4,
+    "matplotlib/matplotlib": 2,
+    "mwaskom/seaborn": 1,
+    "pallets/flask": 1,
+    "psf/requests": 1,
+    "pydata/xarray": 1,
+    "pylint-dev/pylint": 1,
+    "pytest-dev/pytest": 2,
+    "scikit-learn/scikit-learn": 2,
+    "sphinx-doc/sphinx": 1,
+    "sympy/sympy": 3
+  },
+  "tasks": [
+    {
+      "order": 1,
+      "instance_id": "astropy__astropy-14365",
+      "repo": "astropy/astropy",
+      "version": "5.1",
+      "base_commit": "7269fa3e33e8d02485a647da91a5a2a60a06af61",
+      "environment_setup_commit": "5f74eacbcc7fff707a44d8eb58adaa514cb7dcb5",
+      "title": "ascii.qdp Table format assumes QDP commands are upper case",
+      "category": "parser normalization",
+      "agent_os_focus": [
+        "small scoped source search",
+        "format edge-case reasoning",
+        "targeted regression evidence"
+      ],
+      "expected_signal": "Can the runtime localize a parser assumption and prove the fix with a narrow format roundtrip test.",
+      "fail_to_pass": [
+        "astropy/io/ascii/tests/test_qdp.py::test_roundtrip[True]"
+      ],
+      "fail_to_pass_count": 1,
+      "pass_to_pass_count": 8,
+      "patch_chars": 955,
+      "test_patch_chars": 1194,
+      "problem_statement_chars": 1339,
+      "created_at": "2023-02-06T19:20:34Z"
+    },
+    {
+      "order": 2,
+      "instance_id": "django__django-11099",
+      "repo": "django/django",
+      "version": "3.0",
+      "base_commit": "d26b2424437dabeeca94d7900b37d2df4410da0c",
+      "environment_setup_commit": "419a78300f7cd27611196e1e464d50fd0385ff27",
+      "title": "UsernameValidator allows trailing newline in usernames",
+      "category": "validation boundary",
+      "agent_os_focus": [
+        "security-adjacent validation",
+        "test-first failure isolation",
+        "unsupported claim prevention"
+      ],
+      "expected_signal": "Can final output distinguish a validator contract fix from broad authentication claims and attach the exact validator tests.",
+      "fail_to_pass": [
+        "test_ascii_validator (auth_tests.test_validators.UsernameValidatorsTests)",
+        "test_unicode_validator (auth_tests.test_validators.UsernameValidatorsTests)",
+        "test_help_text (auth_tests.test_validators.UserAttributeSimilarityValidatorTest)"
+      ],
+      "fail_to_pass_count": 3,
+      "pass_to_pass_count": 19,
+      "patch_chars": 808,
+      "test_patch_chars": 989,
+      "problem_statement_chars": 764,
+      "created_at": "2019-03-20T03:46:18Z"
+    },
+    {
+      "order": 3,
+      "instance_id": "django__django-14667",
+      "repo": "django/django",
+      "version": "4.0",
+      "base_commit": "6a970a8b4600eb91be25f38caed0a52269d6303d",
+      "environment_setup_commit": "475cffd1d64c690cdad16ede4d5e81985738ceb4",
+      "title": "QuerySet.defer() doesn't clear deferred field when chaining with only().",
+      "category": "ORM query state",
+      "agent_os_focus": [
+        "stateful API semantics",
+        "multi-file source navigation",
+        "regression-scope selection"
+      ],
+      "expected_signal": "Can the agent reason about chained ORM state without widening the public API contract.",
+      "fail_to_pass": [
+        "test_defer_only_chaining (defer.tests.DeferTests)"
+      ],
+      "fail_to_pass_count": 1,
+      "pass_to_pass_count": 29,
+      "patch_chars": 849,
+      "test_patch_chars": 1024,
+      "problem_statement_chars": 1040,
+      "created_at": "2021-07-19T21:08:03Z"
+    },
+    {
+      "order": 4,
+      "instance_id": "django__django-15789",
+      "repo": "django/django",
+      "version": "4.2",
+      "base_commit": "d4d5427571b4bf3a21c902276c2a00215c2a37cc",
+      "environment_setup_commit": "0fbdb9784da915fce5dcc1fe82bac9b4785749e5",
+      "title": "Add an encoder parameter to django.utils.html.json_script().",
+      "category": "API extension",
+      "agent_os_focus": [
+        "forward contract design",
+        "call-site compatibility analysis",
+        "focused unit evidence"
+      ],
+      "expected_signal": "Can the agent add a minimal public argument while keeping the implementation path canonical and explicit.",
+      "fail_to_pass": [
+        "test_json_script_custom_encoder (utils_tests.test_html.TestUtilsHtml)"
+      ],
+      "fail_to_pass_count": 1,
+      "pass_to_pass_count": 17,
+      "patch_chars": 907,
+      "test_patch_chars": 1044,
+      "problem_statement_chars": 533,
+      "created_at": "2022-06-23T08:59:04Z"
+    },
+    {
+      "order": 5,
+      "instance_id": "django__django-16400",
+      "repo": "django/django",
+      "version": "4.2",
+      "base_commit": "0bd2c0c9015b53c41394a1c0989afbfd94dc2830",
+      "environment_setup_commit": "0fbdb9784da915fce5dcc1fe82bac9b4785749e5",
+      "title": "migrate management command does not respect database parameter when adding Permissions.",
+      "category": "management command side effect",
+      "agent_os_focus": [
+        "command-path reasoning",
+        "multi-database test evidence",
+        "side-effect auditability"
+      ],
+      "expected_signal": "Can the runtime preserve the requested execution target through a side-effecting command path.",
+      "fail_to_pass": [
+        "test_set_permissions_fk_to_using_parameter (auth_tests.test_management.CreatePermissionsMultipleDatabasesTests)"
+      ],
+      "fail_to_pass_count": 1,
+      "pass_to_pass_count": 63,
+      "patch_chars": 954,
+      "test_patch_chars": 1049,
+      "problem_statement_chars": 2354,
+      "created_at": "2022-12-23T17:17:00Z"
+    },
+    {
+      "order": 6,
+      "instance_id": "matplotlib__matplotlib-23562",
+      "repo": "matplotlib/matplotlib",
+      "version": "3.5",
+      "base_commit": "29a86636a9c45ab5ac4d80ac76eaee497f460dce",
+      "environment_setup_commit": "de98877e3dc45de8dd441d008f23d88738dc015d",
+      "title": "'Poly3DCollection' object has no attribute '_facecolors2d'",
+      "category": "visual object state",
+      "agent_os_focus": [
+        "object lifecycle reasoning",
+        "targeted visual-library tests",
+        "review of private attribute use"
+      ],
+      "expected_signal": "Can the agent repair a visual object state contract without overfitting to a single attribute error.",
+      "fail_to_pass": [
+        "lib/mpl_toolkits/tests/test_mplot3d.py::test_Poly3DCollection_get_facecolor",
+        "lib/mpl_toolkits/tests/test_mplot3d.py::test_Poly3DCollection_get_edgecolor"
+      ],
+      "fail_to_pass_count": 2,
+      "pass_to_pass_count": 136,
+      "patch_chars": 849,
+      "test_patch_chars": 1077,
+      "problem_statement_chars": 1257,
+      "created_at": "2022-08-05T13:44:06Z"
+    },
+    {
+      "order": 7,
+      "instance_id": "matplotlib__matplotlib-25332",
+      "repo": "matplotlib/matplotlib",
+      "version": "3.7",
+      "base_commit": "66ba515e671638971bd11a34cff12c107a437e0b",
+      "environment_setup_commit": "0849036fd992a2dd133a0cffc3f84f58ccf1840f",
+      "title": "[Bug]: Unable to pickle figure with aligned labels",
+      "category": "serialization",
+      "agent_os_focus": [
+        "state serialization",
+        "artifact persistence analogy",
+        "regression command evidence"
+      ],
+      "expected_signal": "Can the agent identify persisted state that must survive serialization rather than only fixing immediate rendering.",
+      "fail_to_pass": [
+        "lib/matplotlib/tests/test_pickle.py::test_complete[png]"
+      ],
+      "fail_to_pass_count": 1,
+      "pass_to_pass_count": 181,
+      "patch_chars": 824,
+      "test_patch_chars": 928,
+      "problem_statement_chars": 1004,
+      "created_at": "2023-02-26T11:18:40Z"
+    },
+    {
+      "order": 8,
+      "instance_id": "mwaskom__seaborn-2848",
+      "repo": "mwaskom/seaborn",
+      "version": "0.12",
+      "base_commit": "94621cef29f80282436d73e8d2c0aa76dab81273",
+      "environment_setup_commit": "d25872b0fc99dbf7e666a91f59bd4ed125186aa1",
+      "title": "pairplot fails with hue_order not containing all hue values in seaborn 0.11.1",
+      "category": "categorical plotting",
+      "agent_os_focus": [
+        "data-dependent branching",
+        "minimal plotting regression",
+        "test environment readiness"
+      ],
+      "expected_signal": "Can the agent preserve category ordering semantics while handling missing category values.",
+      "fail_to_pass": [
+        "tests/test_relational.py::TestScatterPlotter::test_hue_order"
+      ],
+      "fail_to_pass_count": 1,
+      "pass_to_pass_count": 50,
+      "patch_chars": 767,
+      "test_patch_chars": 979,
+      "problem_statement_chars": 965,
+      "created_at": "2022-06-11T18:21:32Z"
+    },
+    {
+      "order": 9,
+      "instance_id": "pallets__flask-4992",
+      "repo": "pallets/flask",
+      "version": "2.3",
+      "base_commit": "4c288bc97ea371817199908d0d9b12de9dae327e",
+      "environment_setup_commit": "182ce3dd15dfa3537391c3efaf9c3ff407d134d4",
+      "title": "Add a file mode parameter to flask.Config.from_file()",
+      "category": "configuration loading",
+      "agent_os_focus": [
+        "file IO contract",
+        "API argument threading",
+        "configuration test evidence"
+      ],
+      "expected_signal": "Can the agent carry an explicit file-mode contract through a config-loading API.",
+      "fail_to_pass": [
+        "tests/test_config.py::test_config_from_file_toml"
+      ],
+      "fail_to_pass_count": 1,
+      "pass_to_pass_count": 18,
+      "patch_chars": 1664,
+      "test_patch_chars": 1275,
+      "problem_statement_chars": 1135,
+      "created_at": "2023-02-22T14:00:17Z"
+    },
+    {
+      "order": 10,
+      "instance_id": "psf__requests-2148",
+      "repo": "psf/requests",
+      "version": "2.3",
+      "base_commit": "fe693c492242ae532211e0c173324f09ca8cf227",
+      "environment_setup_commit": "3eb69be879063de4803f7f0152b83738a1c95ca4",
+      "title": "socket.error exception not caught/wrapped in a requests exception (ConnectionError perhaps?)",
+      "category": "exception translation",
+      "agent_os_focus": [
+        "failure taxonomy",
+        "broad regression surface",
+        "network-boundary reasoning"
+      ],
+      "expected_signal": "Can the agent fix an exception boundary and avoid unsupported claims about all network failures.",
+      "fail_to_pass": [
+        "test_requests.py::RequestsTestCase::test_DIGEST_AUTH_RETURNS_COOKIE",
+        "test_requests.py::RequestsTestCase::test_HTTP_200_OK_GET_ALTERNATIVE",
+        "test_requests.py::RequestsTestCase::test_HTTP_200_OK_HEAD",
+        "test_requests.py::RequestsTestCase::test_POSTBIN_GET_POST_FILES",
+        "test_requests.py::RequestsTestCase::test_auth_is_stripped_on_redirect_off_host",
+        "test_requests.py::RequestsTestCase::test_basicauth_with_netrc",
+        "test_requests.py::RequestsTestCase::test_cookie_quote_wrapped",
+        "test_requests.py::RequestsTestCase::test_generic_cookiejar_works",
+        "test_requests.py::RequestsTestCase::test_iter_content_handles_socket_error",
+        "test_requests.py::RequestsTestCase::test_unicode_multipart_post"
+      ],
+      "fail_to_pass_count": 10,
+      "pass_to_pass_count": 118,
+      "patch_chars": 1059,
+      "test_patch_chars": 1188,
+      "problem_statement_chars": 2311,
+      "created_at": "2014-07-24T21:03:03Z"
+    },
+    {
+      "order": 11,
+      "instance_id": "pydata__xarray-4094",
+      "repo": "pydata/xarray",
+      "version": "0.12",
+      "base_commit": "a64cf2d5476e7bbda099b34c40b7be1880dbd39a",
+      "environment_setup_commit": "1c198a191127c601d091213c4b3292a8bb3054e1",
+      "title": "to_unstacked_dataset broken for single-dim variables",
+      "category": "array reshaping",
+      "agent_os_focus": [
+        "data model transformation",
+        "high regression-suite awareness",
+        "narrow failing-test proof"
+      ],
+      "expected_signal": "Can the agent reason about dimensional metadata while keeping regression claims bounded to the executed tests.",
+      "fail_to_pass": [
+        "xarray/tests/test_dataset.py::TestDataset::test_to_stacked_array_to_unstacked_dataset"
+      ],
+      "fail_to_pass_count": 1,
+      "pass_to_pass_count": 862,
+      "patch_chars": 517,
+      "test_patch_chars": 784,
+      "problem_statement_chars": 1604,
+      "created_at": "2020-05-26T00:36:02Z"
+    },
+    {
+      "order": 12,
+      "instance_id": "pylint-dev__pylint-6506",
+      "repo": "pylint-dev/pylint",
+      "version": "2.14",
+      "base_commit": "0a4204fd7555cfedd43f43017c94d24ef48244a5",
+      "environment_setup_commit": "680edebc686cad664bbed934a490aeafa775f163",
+      "title": "Traceback printed for unrecognized option",
+      "category": "CLI error handling",
+      "agent_os_focus": [
+        "user-facing command failure",
+        "stderr/stdout evidence",
+        "negative path review"
+      ],
+      "expected_signal": "Can the runtime capture command-output evidence and distinguish expected diagnostic output from an internal crash.",
+      "fail_to_pass": [
+        "tests/config/test_config.py::test_unknown_option_name",
+        "tests/config/test_config.py::test_unknown_short_option_name"
+      ],
+      "fail_to_pass_count": 2,
+      "pass_to_pass_count": 6,
+      "patch_chars": 683,
+      "test_patch_chars": 1567,
+      "problem_statement_chars": 1698,
+      "created_at": "2022-05-05T13:01:41Z"
+    },
+    {
+      "order": 13,
+      "instance_id": "pytest-dev__pytest-8365",
+      "repo": "pytest-dev/pytest",
+      "version": "6.3",
+      "base_commit": "4964b468c83c06971eb743fbc57cc404f760c573",
+      "environment_setup_commit": "634312b14a45db8d60d72016e01294284e3a18d4",
+      "title": "tmpdir creation fails when the username contains illegal characters for directory names",
+      "category": "filesystem environment",
+      "agent_os_focus": [
+        "environment-specific failure reproduction",
+        "path sanitization",
+        "workspace isolation"
+      ],
+      "expected_signal": "Can Agent-OS preserve enough environment evidence to explain a user-specific filesystem failure.",
+      "fail_to_pass": [
+        "testing/test_tmpdir.py::test_tmp_path_factory_handles_invalid_dir_characters"
+      ],
+      "fail_to_pass_count": 1,
+      "pass_to_pass_count": 32,
+      "patch_chars": 846,
+      "test_patch_chars": 1088,
+      "problem_statement_chars": 1873,
+      "created_at": "2021-02-22T20:26:35Z"
+    },
+    {
+      "order": 14,
+      "instance_id": "pytest-dev__pytest-5692",
+      "repo": "pytest-dev/pytest",
+      "version": "5.0",
+      "base_commit": "29e336bd9bf87eaef8e2683196ee1975f1ad4088",
+      "environment_setup_commit": "c2f762460f4c42547de906d53ea498dd499ea837",
+      "title": "Hostname and timestamp properties in generated JUnit XML reports",
+      "category": "test artifact generation",
+      "agent_os_focus": [
+        "structured output verification",
+        "artifact inspection",
+        "time/host metadata discipline"
+      ],
+      "expected_signal": "Can the agent verify generated machine-readable artifacts instead of relying only on test pass/fail.",
+      "fail_to_pass": [
+        "testing/test_junitxml.py::TestPython::test_hostname_in_xml",
+        "testing/test_junitxml.py::TestPython::test_timestamp_in_xml"
+      ],
+      "fail_to_pass_count": 2,
+      "pass_to_pass_count": 68,
+      "patch_chars": 675,
+      "test_patch_chars": 1270,
+      "problem_statement_chars": 1280,
+      "created_at": "2019-08-03T14:15:04Z"
+    },
+    {
+      "order": 15,
+      "instance_id": "scikit-learn__scikit-learn-10508",
+      "repo": "scikit-learn/scikit-learn",
+      "version": "0.20",
+      "base_commit": "c753b77ac49e72ebc0fe5e3c2369fe628f975017",
+      "environment_setup_commit": "55bf5d93e5674f13a1134d93a11fd0cd11aabcd1",
+      "title": "LabelEncoder transform fails for empty lists (for certain inputs)",
+      "category": "empty input handling",
+      "agent_os_focus": [
+        "edge-case reproduction",
+        "typed data validation",
+        "small patch review"
+      ],
+      "expected_signal": "Can the agent produce a precise data-shape fix without broad estimator behavior claims.",
+      "fail_to_pass": [
+        "sklearn/preprocessing/tests/test_label.py::test_label_encoder_errors",
+        "sklearn/preprocessing/tests/test_label.py::test_label_encoder_empty_array"
+      ],
+      "fail_to_pass_count": 2,
+      "pass_to_pass_count": 18,
+      "patch_chars": 924,
+      "test_patch_chars": 1013,
+      "problem_statement_chars": 1646,
+      "created_at": "2018-01-19T18:00:29Z"
+    },
+    {
+      "order": 16,
+      "instance_id": "scikit-learn__scikit-learn-25570",
+      "repo": "scikit-learn/scikit-learn",
+      "version": "1.3",
+      "base_commit": "cd25abee0ad0ac95225d4a9be8948eff69f49690",
+      "environment_setup_commit": "1e8a5b833d1b58f3ab84099c4582239af854b23a",
+      "title": "ColumnTransformer with pandas output can't handle transformers with no features",
+      "category": "pipeline schema edge case",
+      "agent_os_focus": [
+        "multi-component ML pipeline",
+        "pandas output contract",
+        "parameterized regression tests"
+      ],
+      "expected_signal": "Can the agent track an empty-selection schema through a composed transformer pipeline.",
+      "fail_to_pass": [
+        "sklearn/compose/tests/test_column_transformer.py::test_empty_selection_pandas_output[list]",
+        "sklearn/compose/tests/test_column_transformer.py::test_empty_selection_pandas_output[bool]",
+        "sklearn/compose/tests/test_column_transformer.py::test_empty_selection_pandas_output[bool_int]"
+      ],
+      "fail_to_pass_count": 3,
+      "pass_to_pass_count": 184,
+      "patch_chars": 793,
+      "test_patch_chars": 1421,
+      "problem_statement_chars": 5590,
+      "created_at": "2023-02-08T18:28:21Z"
+    },
+    {
+      "order": 17,
+      "instance_id": "sphinx-doc__sphinx-8713",
+      "repo": "sphinx-doc/sphinx",
+      "version": "4.0",
+      "base_commit": "3ed7590ed411bd93b26098faab4f23619cdb2267",
+      "environment_setup_commit": "8939a75efaa911a12dbe6edccedf261e88bf7eef",
+      "title": "napoleon_use_param should also affect \"other parameters\" section",
+      "category": "documentation rendering",
+      "agent_os_focus": [
+        "parser and renderer path tracing",
+        "configuration propagation",
+        "fixture-based evidence"
+      ],
+      "expected_signal": "Can the agent follow configuration semantics across documentation parsing and rendered output.",
+      "fail_to_pass": [
+        "tests/test_ext_napoleon_docstring.py::NumpyDocstringTest::test_parameters_with_class_reference"
+      ],
+      "fail_to_pass_count": 1,
+      "pass_to_pass_count": 45,
+      "patch_chars": 954,
+      "test_patch_chars": 1064,
+      "problem_statement_chars": 1868,
+      "created_at": "2021-01-20T14:24:12Z"
+    },
+    {
+      "order": 18,
+      "instance_id": "sympy__sympy-12481",
+      "repo": "sympy/sympy",
+      "version": "1.0",
+      "base_commit": "c807dfe7569692cad24f02a08477b70c1679a4dd",
+      "environment_setup_commit": "50b81f9f6be151014501ffac44e5dc6b2416938f",
+      "title": "`Permutation` constructor fails with non-disjoint cycles",
+      "category": "constructor semantics",
+      "agent_os_focus": [
+        "mathematical invariant reasoning",
+        "compact failing test",
+        "review of canonical representation"
+      ],
+      "expected_signal": "Can the agent respect domain invariants instead of only patching an exception path.",
+      "fail_to_pass": [
+        "test_args"
+      ],
+      "fail_to_pass_count": 1,
+      "pass_to_pass_count": 7,
+      "patch_chars": 760,
+      "test_patch_chars": 1120,
+      "problem_statement_chars": 407,
+      "created_at": "2017-04-03T01:52:33Z"
+    },
+    {
+      "order": 19,
+      "instance_id": "sympy__sympy-15308",
+      "repo": "sympy/sympy",
+      "version": "1.4",
+      "base_commit": "fb59d703e6863ed803c98177b59197b5513332e9",
+      "environment_setup_commit": "73b3f90093754c5ed1561bd885242330e3583004",
+      "title": "LaTeX printing for Matrix Expression",
+      "category": "symbolic printing",
+      "agent_os_focus": [
+        "output-format correctness",
+        "small symbolic surface",
+        "golden-output review"
+      ],
+      "expected_signal": "Can the agent verify exact textual output while avoiding brittle global printer changes.",
+      "fail_to_pass": [
+        "test_trace"
+      ],
+      "fail_to_pass_count": 1,
+      "pass_to_pass_count": 120,
+      "patch_chars": 837,
+      "test_patch_chars": 1449,
+      "problem_statement_chars": 294,
+      "created_at": "2018-09-28T16:42:11Z"
+    },
+    {
+      "order": 20,
+      "instance_id": "sympy__sympy-24066",
+      "repo": "sympy/sympy",
+      "version": "1.12",
+      "base_commit": "514579c655bf22e2af14f0743376ae1d7befe345",
+      "environment_setup_commit": "c6cb7c5602fa48034ab1bd43c2347a7e8488f12e",
+      "title": "SI._collect_factor_and_dimension() cannot properly detect that exponent is dimensionless",
+      "category": "units and dimension analysis",
+      "agent_os_focus": [
+        "domain-specific reasoning",
+        "symbolic simplification boundary",
+        "focused regression proof"
+      ],
+      "expected_signal": "Can the agent track a domain rule through symbolic simplification and attach the exact issue regression.",
+      "fail_to_pass": [
+        "test_issue_24062"
+      ],
+      "fail_to_pass_count": 1,
+      "pass_to_pass_count": 30,
+      "patch_chars": 883,
+      "test_patch_chars": 1185,
+      "problem_statement_chars": 605,
+      "created_at": "2022-09-16T22:58:15Z"
+    }
+  ]
+}

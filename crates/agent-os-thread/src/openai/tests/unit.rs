@@ -34,7 +34,7 @@ fn default_system_prompt_generates_tool_contract() {
     assert!(prompt.contains("write_file(path, content)"));
     assert!(prompt.contains("replace_text(path, old, new)"));
     assert!(prompt.contains("delete_file(path)"));
-    assert!(prompt.contains("run_command(program, args)"));
+    assert!(prompt.contains("run_command(program, args, env?)"));
     assert!(prompt.contains("set_goal(goal, target_thread_id, target_agent_id)"));
     assert!(prompt.contains("accomplish_goal(summary)"));
     assert!(prompt.contains("update_checklist(items)"));
@@ -135,6 +135,41 @@ fn build_messages_includes_tool_results() {
     );
     assert_eq!(messages[3]["role"], "tool");
     assert_eq!(messages[3]["tool_call_id"], "call_001");
+}
+
+#[test]
+fn build_messages_projects_runtime_feedback_as_user_text() {
+    let tmp = std::env::temp_dir().join(format!("aos-openai-feedback-{}", new_id("t_")));
+    let request = ModelTurnRequest {
+        thread: make_request(&tmp).thread,
+        workspace_root: tmp.clone(),
+        step_index: 2,
+        context: ModelContextProjection {
+            tool_results: vec![ToolExecutionRecord {
+                call_id: "feedback_001".to_string(),
+                tool_name: "runtime_feedback".to_string(),
+                status: ToolCallStatus::Failed,
+                input: Some(json!({"step_index": 1})),
+                output: Some(json!({
+                    "message": "The previous model response had no tool call or final submission.",
+                    "text_excerpt": "I will inspect the repository."
+                })),
+                evidence_ids: Vec::new(),
+                evidence_claim: None,
+            }],
+            ..ModelContextProjection::default()
+        },
+    };
+
+    let messages = build_messages(&request, tmp.to_str().unwrap(), &None);
+
+    assert_eq!(messages.len(), 3);
+    assert_eq!(messages[2]["role"], "user");
+    assert!(messages[2]["content"]
+        .as_str()
+        .unwrap()
+        .contains("Runtime feedback"));
+    assert!(messages[2].get("tool_calls").is_none());
 }
 
 #[test]
@@ -394,6 +429,14 @@ fn tool_definitions_include_all_core_tools() {
     assert!(names.contains(&"read_skill_resource"));
     assert!(names.contains(&"agent_control"));
     assert!(names.contains(&"submit_final"));
+    let run_command = tools
+        .iter()
+        .find(|tool| tool.pointer("/function/name").and_then(Value::as_str) == Some("run_command"))
+        .unwrap();
+    assert_eq!(
+        run_command.pointer("/function/parameters/properties/env/type"),
+        Some(&json!("object"))
+    );
 }
 
 #[test]

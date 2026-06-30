@@ -2,6 +2,7 @@ use crate::util::required_string;
 use crate::*;
 use agent_os_sys::*;
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
@@ -146,11 +147,15 @@ pub(super) fn run_process(
             })
         })
         .collect::<AgentOsResult<Vec<_>>>()?;
+    let env = optional_string_map(input, "env")?;
     let cwd = canonical_workspace_root(&cwd)?;
     ensure_environment_lease_for_path(kernel, syscall, &cwd, false)?;
-    let output = Command::new(program)
-        .args(args)
-        .current_dir(&cwd)
+    let mut command = Command::new(program);
+    command.args(args).current_dir(&cwd);
+    if !env.is_empty() {
+        command.envs(env);
+    }
+    let output = command
         .output()
         .map_err(|error| AgentOsError::Validation(format!("run process: {error}")))?;
     Ok(json!({
@@ -162,6 +167,28 @@ pub(super) fn run_process(
         "stdout": String::from_utf8_lossy(&output.stdout),
         "stderr": String::from_utf8_lossy(&output.stderr),
     }))
+}
+
+fn optional_string_map(input: &Value, field: &str) -> AgentOsResult<BTreeMap<String, String>> {
+    let Some(value) = input.get(field) else {
+        return Ok(BTreeMap::new());
+    };
+    let map = value.as_object().ok_or_else(|| {
+        AgentOsError::Validation(format!("run_command {field} must be an object"))
+    })?;
+    let mut env = BTreeMap::new();
+    for (key, value) in map {
+        if key.is_empty() {
+            return Err(AgentOsError::Validation(
+                "run_command env keys must not be empty".to_string(),
+            ));
+        }
+        let value = value.as_str().ok_or_else(|| {
+            AgentOsError::Validation("run_command env values must be strings".to_string())
+        })?;
+        env.insert(key.clone(), value.to_string());
+    }
+    Ok(env)
 }
 
 fn ensure_safe_relative_path(path: &Path) -> AgentOsResult<()> {

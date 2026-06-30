@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 agent-os-kernel.workspace = true
+agent-os-store.workspace = true
 agent-os-store-sqlite.workspace = true
 agent-os-thread.workspace = true
 agent-os-sys.workspace = true

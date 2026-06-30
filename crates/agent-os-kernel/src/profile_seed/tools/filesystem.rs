@@ -153,7 +153,11 @@ pub(super) fn descriptors(now: &str) -> Vec<ToolDescriptor> {
                 "properties": {
                     "program": {"type": "string"},
                     "args": {"type": "array", "items": {"type": "string"}},
-                    "cwd": {"type": "string"}
+                    "cwd": {"type": "string"},
+                    "env": {
+                        "type": "object",
+                        "additionalProperties": {"type": "string"}
+                    }
                 },
                 "additionalProperties": false
             }),

@@ -3,6 +3,8 @@ use super::prompt::default_system_prompt;
 use crate::{ModelTurnRequest, ToolExecutionRecord};
 use serde_json::{json, Value};
 
+const RUNTIME_FEEDBACK_TOOL: &str = "runtime_feedback";
+
 pub(crate) fn build_messages(
     request: &ModelTurnRequest,
     workspace_root: &str,
@@ -71,6 +73,14 @@ fn inject_tool_result_messages(
     result: &ToolExecutionRecord,
     _workspace_root: &str,
 ) {
+    if result.tool_name == RUNTIME_FEEDBACK_TOOL {
+        messages.push(json!({
+            "role": "user",
+            "content": format_runtime_feedback(result),
+        }));
+        return;
+    }
+
     let (func_name, func_input) = reconstruct_call(result);
     let call_id = &result.call_id;
 
@@ -106,6 +116,14 @@ fn inject_tool_result_messages(
 }
 
 fn inject_anthropic_tool_result_messages(messages: &mut Vec<Value>, result: &ToolExecutionRecord) {
+    if result.tool_name == RUNTIME_FEEDBACK_TOOL {
+        messages.push(json!({
+            "role": "user",
+            "content": format_runtime_feedback(result),
+        }));
+        return;
+    }
+
     let (tool_name, input) = reconstruct_call(result);
     messages.push(json!({
         "role": "assistant",
@@ -135,6 +153,25 @@ fn inject_anthropic_tool_result_messages(messages: &mut Vec<Value>, result: &Too
             "content": truncate(&result_content, 8000)
         }]
     }));
+}
+
+fn format_runtime_feedback(result: &ToolExecutionRecord) -> String {
+    let Some(output) = &result.output else {
+        return "Runtime feedback: previous response did not include a tool call or final submission.".to_string();
+    };
+    let message = output
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("Previous response did not include a tool call or final submission.");
+    let excerpt = output
+        .get("text_excerpt")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if excerpt.trim().is_empty() {
+        format!("Runtime feedback: {message}")
+    } else {
+        format!("Runtime feedback: {message}\nPrevious text excerpt:\n{excerpt}")
+    }
 }
 
 fn reconstruct_call(result: &ToolExecutionRecord) -> (String, Value) {

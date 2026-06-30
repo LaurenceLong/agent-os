@@ -47,6 +47,7 @@ pub(crate) struct ResumeOptions {
 pub(crate) struct ChatOptions {
     pub(crate) workspace: PathBuf,
     pub(crate) task: Option<String>,
+    pub(crate) task_file: Option<PathBuf>,
     pub(crate) provider: Option<String>,
     pub(crate) max_steps: u32,
     pub(crate) max_tokens: Option<u64>,
@@ -357,6 +358,7 @@ impl ChatOptions {
     pub(crate) fn parse(args: &[String]) -> AgentOsResult<Self> {
         let mut workspace = PathBuf::from(".");
         let mut task = None;
+        let mut task_file = None;
         let mut provider = None;
         let mut max_steps = 32u32;
         let mut max_tokens = None;
@@ -375,6 +377,10 @@ impl ChatOptions {
                     let (value, consumed_index) = collect_task_arg(args, index, "--task")?;
                     task = Some(value);
                     index = consumed_index;
+                }
+                "--task-file" => {
+                    index += 1;
+                    task_file = Some(PathBuf::from(required_arg(args, index, "--task-file")?));
                 }
                 "--provider" | "-p" => {
                     index += 1;
@@ -434,9 +440,15 @@ impl ChatOptions {
             }
             index += 1;
         }
+        if task.is_some() && task_file.is_some() {
+            return Err(AgentOsError::Validation(
+                "--task and --task-file cannot be used together".to_string(),
+            ));
+        }
         Ok(Self {
             workspace,
             task,
+            task_file,
             provider,
             max_steps,
             max_tokens,
@@ -459,14 +471,15 @@ pub(crate) fn usage_json() -> Value {
         },
         "chat_options": {
             "--workspace, -w": "Workspace directory. Default: .",
-            "--task, -t": "Initial task to run before entering interactive mode.",
+            "--task, -t": "Initial batch task to run before exiting.",
+            "--task-file": "Read initial batch task text from a UTF-8 file before exiting.",
             "--provider, -p": "Provider name from the global Agent-OS provider config. Defaults to default_provider.",
             "--max-steps": "Maximum agent steps per task. Default: 32",
             "--max-tokens": "Maximum output tokens per model call.",
             "--temperature": "Model temperature (0.0 = deterministic). Default: 0.0",
             "--state-db": "Optional SQLite event store path for durable replay.",
             "--bundle-output": "Optional relative path for task bundle JSON.",
-            "<task>": "Positional: initial task text."
+            "<task>": "Positional: initial batch task text."
         },
         "run_options": {
             "--workspace": "Workspace directory. Default: .",
@@ -534,6 +547,28 @@ mod tests {
 
         assert_eq!(options.task.as_deref(), Some("Backend smoke task"));
         assert_eq!(options.provider.as_deref(), Some("mify"));
+    }
+
+    #[test]
+    fn chat_task_file_sets_initial_task_path() {
+        let options = ChatOptions::parse(&argv(&["--task-file", "SWE_BENCH_TASK.md"])).unwrap();
+
+        assert_eq!(options.task_file, Some(PathBuf::from("SWE_BENCH_TASK.md")));
+        assert_eq!(options.task, None);
+    }
+
+    #[test]
+    fn chat_rejects_task_text_and_task_file_together() {
+        let error = ChatOptions::parse(&argv(&[
+            "--task",
+            "inline",
+            "task",
+            "--task-file",
+            "SWE_BENCH_TASK.md",
+        ]))
+        .unwrap_err();
+
+        assert!(error.to_string().contains("--task and --task-file"));
     }
 
     #[test]

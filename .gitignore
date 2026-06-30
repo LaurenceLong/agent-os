@@ -1,2 +1,6 @@
 /target/
 .env
+logs/
+benchmarks/swe-bench-lite/results/
+__pycache__/
+*.pyc

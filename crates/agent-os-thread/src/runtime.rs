@@ -17,6 +17,9 @@ mod tool_policy;
 
 const MAX_PROJECTED_TOOL_RESULTS: usize = 8;
 const MAX_PROJECTED_ARTIFACTS: usize = 8;
+const MAX_PROJECTED_OLDER_TOOL_STRING_CHARS: usize = 2000;
+const RUNTIME_FEEDBACK_TOOL: &str = "runtime_feedback";
+const MAX_CONSECUTIVE_NO_ACTION_TURNS: u32 = 2;
 
 #[derive(Debug, Clone)]
 pub struct RuntimeConfig {
@@ -132,6 +135,7 @@ impl<C: ModelClient> ThreadRuntime<C> {
         let mut tool_results = self.hydrated_tool_results(&acb.task.task_id)?;
         let mut artifacts = self.hydrated_artifacts(&acb.task.task_id)?;
         let mut final_submitted = false;
+        let mut consecutive_no_action_turns = 0;
 
         for step_index in 0..config.max_steps {
             // Yield boundary: before model call.
@@ -142,17 +146,7 @@ impl<C: ModelClient> ThreadRuntime<C> {
             let stream = self.open_stream_session(&acb, step_index, &config)?;
             provider_stream_session_ids.push(stream.session_id.clone());
             let state = self.kernel.state_snapshot()?;
-            let tool_result_recent_start = tool_results
-                .len()
-                .saturating_sub(MAX_PROJECTED_TOOL_RESULTS);
-            let projected_tool_results = tool_results
-                .iter()
-                .enumerate()
-                .filter(|(index, result)| {
-                    *index >= tool_result_recent_start || !result.evidence_ids.is_empty()
-                })
-                .map(|(_, result)| result.clone())
-                .collect();
+            let projected_tool_results = project_tool_results(&tool_results);
             let artifact_recent_start = artifacts.len().saturating_sub(MAX_PROJECTED_ARTIFACTS);
             let projected_artifacts = artifacts
                 .iter()
@@ -265,9 +259,12 @@ impl<C: ModelClient> ThreadRuntime<C> {
                     }
                 }
             };
+            let mut turn_had_completion_action = false;
+            let mut output_texts = Vec::new();
             for action in response.actions {
                 match action {
                     ModelAction::OutputText { text } => {
+                        output_texts.push(text.clone());
                         self.kernel.record_provider_stream_event(
                             &stream.session_id,
                             ProviderStreamEventType::OutputTextDelta,
@@ -275,6 +272,7 @@ impl<C: ModelClient> ThreadRuntime<C> {
                         )?;
                     }
                     ModelAction::ToolCall(action) => {
+                        turn_had_completion_action = true;
                         let record = self.execute_tool_action(
                             &acb,
                             &stream.session_id,
@@ -305,6 +303,7 @@ impl<C: ModelClient> ThreadRuntime<C> {
                         )?;
                     }
                     ModelAction::Final { submission } => {
+                        turn_had_completion_action = true;
                         // Yield boundary: before final submission.
                         self.kernel.record_checkpoint(
                             &acb.thread_id,
@@ -315,18 +314,45 @@ impl<C: ModelClient> ThreadRuntime<C> {
                     }
                 }
             }
+            if !turn_had_completion_action {
+                consecutive_no_action_turns += 1;
+                tool_results.push(runtime_feedback_record(
+                    step_index,
+                    consecutive_no_action_turns,
+                    &output_texts,
+                ));
+                self.kernel.record_checkpoint(
+                    &acb.thread_id,
+                    format!("ckpt_after_runtime_feedback_{}", new_id("y_")),
+                )?;
+            } else {
+                consecutive_no_action_turns = 0;
+            }
             self.kernel
                 .record_provider_usage(&stream.session_id, response.usage)?;
             self.kernel.complete_stream_session(&stream.session_id)?;
+            if consecutive_no_action_turns >= MAX_CONSECUTIVE_NO_ACTION_TURNS {
+                return self.block_without_final(
+                    &acb,
+                    format!("runtime received {MAX_CONSECUTIVE_NO_ACTION_TURNS} consecutive model turns with no tool call or final submission"),
+                    provider_stream_session_ids,
+                    tool_results,
+                    artifacts,
+                );
+            }
             if final_submitted {
                 break;
             }
             acb = self.acb()?;
         }
         if !final_submitted {
-            return Err(AgentOsError::Validation(
+            return self.block_without_final(
+                &acb,
                 "runtime reached max_steps without final submission".to_string(),
-            ));
+                provider_stream_session_ids,
+                tool_results,
+                artifacts,
+            );
         }
         let state = self.kernel.state_snapshot()?;
         let acb = state
@@ -342,6 +368,47 @@ impl<C: ModelClient> ThreadRuntime<C> {
             tool_results,
             artifacts,
             final_submitted,
+            events: self.kernel.events()?.len(),
+        })
+    }
+
+    fn block_without_final(
+        &self,
+        acb: &AgentControlBlock,
+        reason: String,
+        provider_stream_session_ids: Vec<String>,
+        tool_results: Vec<ToolExecutionRecord>,
+        artifacts: Vec<ArtifactRecord>,
+    ) -> AgentOsResult<RuntimeRunReport> {
+        self.kernel.update_task(UpdateTaskInput {
+            task_id: acb.task.task_id.clone(),
+            status: Some(TaskStatus::Blocked),
+            blocked_reason: Some(reason.clone()),
+            owner_agent_id: Some(acb.agent_id.clone()),
+            title: None,
+            description: None,
+            checklist: None,
+        })?;
+        self.kernel
+            .transition_thread(&acb.thread_id, ThreadStatus::Blocked, Some(reason))?;
+        self.kernel.record_checkpoint(
+            &acb.thread_id,
+            format!("ckpt_after_runtime_blocked_{}", new_id("y_")),
+        )?;
+        let state = self.kernel.state_snapshot()?;
+        let acb = state
+            .threads
+            .get(&self.thread_id)
+            .cloned()
+            .ok_or_else(|| AgentOsError::NotFound(format!("thread {}", self.thread_id)))?;
+        Ok(RuntimeRunReport {
+            thread_id: self.thread_id.clone(),
+            task_id: acb.task.task_id,
+            status: acb.status,
+            provider_stream_session_ids,
+            tool_results,
+            artifacts,
+            final_submitted: false,
             events: self.kernel.events()?.len(),
         })
     }
@@ -525,7 +592,15 @@ impl<C: ModelClient> ThreadRuntime<C> {
             .tool_invocations
             .values()
             .filter(|invocation| {
-                invocation.task_id == task_id && invocation.status == ToolCallStatus::Completed
+                invocation.task_id == task_id
+                    && matches!(
+                        invocation.status,
+                        ToolCallStatus::Completed
+                            | ToolCallStatus::Failed
+                            | ToolCallStatus::Denied
+                            | ToolCallStatus::Cancelled
+                            | ToolCallStatus::TimedOut
+                    )
             })
             .cloned()
             .collect();
@@ -599,6 +674,113 @@ impl<C: ModelClient> ThreadRuntime<C> {
                 }
             })
             .collect())
+    }
+}
+
+fn project_tool_results(tool_results: &[ToolExecutionRecord]) -> Vec<ToolExecutionRecord> {
+    let recent_start = tool_results
+        .len()
+        .saturating_sub(MAX_PROJECTED_TOOL_RESULTS);
+    tool_results
+        .iter()
+        .enumerate()
+        .filter(|(index, result)| *index >= recent_start || !result.evidence_ids.is_empty())
+        .map(|(index, result)| {
+            if index >= recent_start {
+                result.clone()
+            } else {
+                compact_tool_result(result)
+            }
+        })
+        .collect()
+}
+
+fn compact_tool_result(result: &ToolExecutionRecord) -> ToolExecutionRecord {
+    let mut compacted = result.clone();
+    if let Some(output) = &result.output {
+        let (mut value, truncated) =
+            compact_json_value(output, MAX_PROJECTED_OLDER_TOOL_STRING_CHARS);
+        if truncated {
+            if let Value::Object(map) = &mut value {
+                map.insert("projection_truncated".to_string(), Value::Bool(true));
+                map.insert(
+                    "projection_note".to_string(),
+                    Value::String(
+                        "Older evidence output was truncated for projection; rerun a narrower command if exact omitted content is needed."
+                            .to_string(),
+                    ),
+                );
+            }
+        }
+        compacted.output = Some(value);
+    }
+    compacted
+}
+
+fn compact_json_value(value: &Value, max_string_chars: usize) -> (Value, bool) {
+    match value {
+        Value::String(text) if text.chars().count() > max_string_chars => {
+            let prefix = text.chars().take(max_string_chars).collect::<String>();
+            let omitted = text.chars().count().saturating_sub(max_string_chars);
+            (
+                Value::String(format!(
+                    "{prefix}\n...[truncated for projection: {omitted} chars omitted]"
+                )),
+                true,
+            )
+        }
+        Value::String(_) | Value::Null | Value::Bool(_) | Value::Number(_) => {
+            (value.clone(), false)
+        }
+        Value::Array(items) => {
+            let mut truncated = false;
+            let values = items
+                .iter()
+                .map(|item| {
+                    let (value, item_truncated) = compact_json_value(item, max_string_chars);
+                    truncated |= item_truncated;
+                    value
+                })
+                .collect();
+            (Value::Array(values), truncated)
+        }
+        Value::Object(map) => {
+            let mut truncated = false;
+            let values = map
+                .iter()
+                .map(|(key, item)| {
+                    let (value, item_truncated) = compact_json_value(item, max_string_chars);
+                    truncated |= item_truncated;
+                    (key.clone(), value)
+                })
+                .collect();
+            (Value::Object(values), truncated)
+        }
+    }
+}
+
+fn runtime_feedback_record(
+    step_index: u32,
+    consecutive_no_action_turns: u32,
+    output_texts: &[String],
+) -> ToolExecutionRecord {
+    let text = output_texts.join("\n\n");
+    let text_excerpt = text.chars().take(1200).collect::<String>();
+    ToolExecutionRecord {
+        call_id: new_id("feedback_"),
+        tool_name: RUNTIME_FEEDBACK_TOOL.to_string(),
+        status: ToolCallStatus::Failed,
+        input: Some(json!({
+            "step_index": step_index,
+            "consecutive_no_action_turns": consecutive_no_action_turns
+        })),
+        output: Some(json!({
+            "message": "The previous model response had no tool call or final submission. On the next turn, call exactly one available tool or call submit_final if the task is complete or blocked with evidence.",
+            "max_consecutive_no_action_turns": MAX_CONSECUTIVE_NO_ACTION_TURNS,
+            "text_excerpt": text_excerpt,
+        })),
+        evidence_ids: Vec::new(),
+        evidence_claim: None,
     }
 }
 

@@ -176,19 +176,29 @@ fn skill_tools_enforce_scope_and_skill_root_resource_bounds() {
         .unwrap();
     assert_eq!(resource.output.unwrap()["bytes_read"], json!(30));
 
-    let denied = fx.kernel.invoke_tool(
-        &fx.worker.agent_id,
-        &fx.task.task_id,
-        &fx.worker.session_id,
-        allowed.capability_id,
-        1,
-        ToolInvokeInput {
-            tool_name: "read_skill_resource".to_string(),
-            input: json!({"name": "review-skill", "path": "../SKILL.md"}),
-            evidence_claim: None,
-        },
-    );
-    assert!(matches!(denied, Err(AgentOsError::Validation(_))));
+    let denied = fx
+        .kernel
+        .invoke_tool(
+            &fx.worker.agent_id,
+            &fx.task.task_id,
+            &fx.worker.session_id,
+            allowed.capability_id,
+            1,
+            ToolInvokeInput {
+                tool_name: "read_skill_resource".to_string(),
+                input: json!({"name": "review-skill", "path": "../SKILL.md"}),
+                evidence_claim: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(denied.status, ToolCallStatus::Failed);
+    let error = denied
+        .output
+        .as_ref()
+        .and_then(|output| output.get("error"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    assert!(error.contains("skill resource path") && error.contains("skill root"));
     let _ = fs::remove_dir_all(workspace);
 }
 
@@ -342,8 +352,9 @@ fn runtime_projects_ecosystem_into_model_context() {
     let mut runtime = agent_os_thread::ThreadRuntime::new(kernel, worker.thread_id, model);
     let mut config = agent_os_thread::RuntimeConfig::workspace_write(&workspace);
     config.max_steps = 1;
-    let err = runtime.run_to_completion(config).unwrap_err();
-    assert!(matches!(err, AgentOsError::Validation(_)));
+    let report = runtime.run_to_completion(config).unwrap();
+    assert_eq!(report.status, ThreadStatus::Blocked);
+    assert!(!report.final_submitted);
     let request = seen.lock().unwrap().clone().unwrap();
     assert!(request
         .context

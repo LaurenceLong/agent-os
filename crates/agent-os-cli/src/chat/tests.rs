@@ -28,6 +28,20 @@ fn chat_session_reports_summary() {
 }
 
 #[test]
+fn chat_options_with_initial_task_run_in_batch_mode() {
+    let mut options =
+        ChatOptions::parse(&["--task-file".to_string(), "task.md".to_string()]).unwrap();
+    assert!(exits_after_initial_task(&options));
+
+    options.task_file = None;
+    options.task = Some("inline task".to_string());
+    assert!(exits_after_initial_task(&options));
+
+    options.task = None;
+    assert!(!exits_after_initial_task(&options));
+}
+
+#[test]
 fn format_tool_summary_shows_read_file_path() {
     let record = agent_os_thread::ToolExecutionRecord {
         call_id: "c1".to_string(),

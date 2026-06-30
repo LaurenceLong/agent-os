@@ -51,10 +51,15 @@ pub(crate) fn run_chat(options: &ChatOptions) -> AgentOsResult<Value> {
 
     session.print_welcome();
 
-    if let Some(initial_task) = &options.task {
+    let initial_task = resolve_initial_task(options)?;
+    if let Some(initial_task) = &initial_task {
         let _ = writeln!(io::stdout(), "\n> {initial_task}");
         let _ = io::stdout().flush();
         session.process_task(initial_task, client_builder.clone(), options)?;
+        if exits_after_initial_task(options) {
+            session.print_farewell();
+            return Ok(session.summary());
+        }
     }
 
     let stdin = io::stdin();
@@ -99,6 +104,23 @@ pub(crate) fn run_chat(options: &ChatOptions) -> AgentOsResult<Value> {
 
     session.print_farewell();
     Ok(session.summary())
+}
+
+fn exits_after_initial_task(options: &ChatOptions) -> bool {
+    options.task.is_some() || options.task_file.is_some()
+}
+
+fn resolve_initial_task(options: &ChatOptions) -> AgentOsResult<Option<String>> {
+    if let Some(task) = &options.task {
+        return Ok(Some(task.clone()));
+    }
+    let Some(task_file) = &options.task_file else {
+        return Ok(None);
+    };
+    let task = fs::read_to_string(task_file).map_err(|error| {
+        AgentOsError::Validation(format!("read task file {}: {error}", task_file.display()))
+    })?;
+    Ok(Some(task))
 }
 
 struct ChatSession {

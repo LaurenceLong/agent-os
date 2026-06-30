@@ -82,13 +82,18 @@ fn tool_broker_integration_runs_all_model_visible_tool_families() {
         }),
         Some("workspace file was deleted"),
     );
-    tools.invoke(
+    let command = tools.invoke(
         4,
         "run_command",
         json!({
-            "program": std::env::current_exe().unwrap().to_string_lossy(),
-            "args": ["--help"],
-            "cwd": workspace.to_string_lossy()
+            "program": if cfg!(windows) { "cmd" } else { "sh" },
+            "args": if cfg!(windows) {
+                json!(["/C", "echo %AGENT_OS_RUN_COMMAND_ENV_TEST%"])
+            } else {
+                json!(["-c", "printf %s \"$AGENT_OS_RUN_COMMAND_ENV_TEST\""])
+            },
+            "cwd": workspace.to_string_lossy(),
+            "env": {"AGENT_OS_RUN_COMMAND_ENV_TEST": "env-visible"}
         }),
         Some("test command was executed"),
     );
@@ -206,6 +211,13 @@ fn tool_broker_integration_runs_all_model_visible_tool_families() {
         "alpha new beta\n"
     );
     assert!(!workspace.join("delete.txt").exists());
+    assert_eq!(
+        command.output.as_ref().unwrap()["stdout"]
+            .as_str()
+            .unwrap()
+            .trim(),
+        "env-visible"
+    );
 
     let state = fx.kernel.state_snapshot().unwrap();
     let completed_tools = state

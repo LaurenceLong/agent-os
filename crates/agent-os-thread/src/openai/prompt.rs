@@ -33,7 +33,7 @@ Host OS tools:
 - write_file(path, content): Create or replace one workspace file with complete content. Use for new files or intentional full rewrites.
 - replace_text(path, old, new): Replace one exact text occurrence in a workspace file. Use for surgical edits after reading the file.
 - delete_file(path): Delete one workspace file. Use only when the task explicitly requires deletion or the file is generated/obsolete.
-- run_command(program, args): Run a program with explicit arguments in the workspace. Use for tests, builds, linters, git inspection, and local smoke checks.
+- run_command(program, args, env?): Run a program with explicit arguments in the workspace. Use for tests, builds, linters, git inspection, and local smoke checks. Pass env for per-command environment variables.
 
 Work State tools:
 - set_goal(goal, target_thread_id, target_agent_id): SupervisorAgent-only goal setting and direct-child retargeting.
@@ -59,6 +59,7 @@ Session Lifecycle:
 
 - Paths are relative to the workspace root unless a tool field explicitly says otherwise.
 - For run_command, pass the executable in program and command-line arguments in args. Do not collapse the command into a shell string.
+- For per-command environment variables, use run_command env such as {{"PYTHONPATH": "."}}; do not rely on shell-specific inline assignments.
 - On Windows, shell builtins and batch scripts are not standalone executables. Use program "cmd" with args ["/C", "..."] for commands such as dir, type, copy, del, and .cmd/.bat scripts.
 - For replace_text, old must be exact and unique. If you are not sure, read the file again first.
 - Imported instruction documents are already authoritative context. Imported skills are listed by name only; call load_skill before following a skill, and use read_skill_resource only for files referenced by that skill.
