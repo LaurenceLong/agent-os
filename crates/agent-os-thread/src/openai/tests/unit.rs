@@ -31,9 +31,7 @@ fn default_system_prompt_generates_tool_contract() {
 
     assert!(prompt.contains("## Available tools"));
     assert!(prompt.contains("read_file(path)"));
-    assert!(prompt.contains("write_file(path, content)"));
-    assert!(prompt.contains("replace_text(path, old, new)"));
-    assert!(prompt.contains("delete_file(path)"));
+    assert!(prompt.contains("apply_patch(patch)"));
     assert!(prompt.contains("run_command(program, args, env?)"));
     assert!(prompt.contains("set_goal(goal, target_thread_id, target_agent_id)"));
     assert!(prompt.contains("accomplish_goal(summary)"));
@@ -50,6 +48,9 @@ fn default_system_prompt_generates_tool_contract() {
     assert!(prompt.contains("Session Lifecycle"));
     assert!(prompt.contains("For agent_control, use one action per call"));
     assert!(prompt.contains("Paths are relative to the workspace root"));
+    assert!(!prompt.contains("write_file(path, content)"));
+    assert!(!prompt.contains("replace_text(path, old, new)"));
+    assert!(!prompt.contains("delete_file(path)"));
     assert!(!prompt.contains("workspace.read_file"));
     assert!(!prompt.contains("process.run"));
 }
@@ -244,8 +245,8 @@ fn parse_anthropic_response_extracts_tool_use() {
         "content": [{
             "type": "tool_use",
             "id": "toolu_1",
-            "name": "write_file",
-            "input": {"path": "out.txt", "content": "hello\n"}
+            "name": "apply_patch",
+            "input": {"patch": "*** Begin Patch\n*** Add File: out.txt\n+hello\n*** End Patch\n"}
         }],
         "usage": {"input_tokens": 8, "output_tokens": 5}
     });
@@ -253,8 +254,8 @@ fn parse_anthropic_response_extracts_tool_use() {
     assert_eq!(response.usage.output_tokens, 5);
     match &response.actions[0] {
         ModelAction::ToolCall(action) => {
-            assert_eq!(action.tool_name, "write_file");
-            assert_eq!(action.input["path"], "out.txt");
+            assert_eq!(action.tool_name, "apply_patch");
+            assert!(action.input["patch"].as_str().unwrap().contains("out.txt"));
             assert_eq!(
                 action.input["workspace_root"],
                 tmp.to_string_lossy().to_string()
@@ -267,17 +268,20 @@ fn parse_anthropic_response_extracts_tool_use() {
 #[test]
 fn parse_response_extracts_submit_final() {
     let tmp = std::env::temp_dir().join(format!("aos-openai-sf-{}", new_id("t_")));
+    let base_request = make_request(&tmp);
     let request = ModelTurnRequest {
-        thread: make_request(&tmp).thread,
+        thread: base_request.thread,
         workspace_root: tmp,
         step_index: 3,
         context: ModelContextProjection {
             tool_results: vec![ToolExecutionRecord {
                 call_id: "call_1".to_string(),
-                tool_name: "write_file".to_string(),
+                tool_name: "apply_patch".to_string(),
                 status: ToolCallStatus::Completed,
                 input: None,
-                output: Some(json!({"input": {"path": "out.txt"}})),
+                output: Some(
+                    json!({"input": {"patch": "*** Begin Patch\n*** Add File: out.txt\n+done\n*** End Patch\n"}}),
+                ),
                 evidence_ids: vec!["evi_final".to_string()],
                 evidence_claim: Some("wrote output".to_string()),
             }],
@@ -287,6 +291,7 @@ fn parse_response_extracts_submit_final() {
                 blob_ref: None,
                 evidence_ids: vec![],
             }],
+            tool_descriptors: base_request.context.tool_descriptors,
             ..ModelContextProjection::default()
         },
     };
@@ -314,31 +319,33 @@ fn parse_response_extracts_submit_final() {
         _ => panic!("expected OutputText"),
     }
     match &response.actions[1] {
-        ModelAction::Final { submission } => {
-            assert_eq!(submission.summary, "Task completed");
-            assert_eq!(submission.tests_run, vec!["cargo test"]);
-            assert_eq!(submission.changed_artifacts, vec!["art_1"]);
-            assert_eq!(submission.evidence_map.len(), 1);
-            assert_eq!(submission.evidence_map[0].evidence_refs, vec!["evi_final"]);
+        ModelAction::ToolCall(action) => {
+            assert_eq!(action.tool_name, "submit_final");
+            assert_eq!(action.risk_level, 2);
+            assert_eq!(action.input["summary"], "Task completed");
+            assert_eq!(action.input["tests_run"], json!(["cargo test"]));
         }
-        _ => panic!("expected Final"),
+        _ => panic!("expected submit_final ToolCall"),
     }
 }
 
 #[test]
 fn parse_anthropic_response_extracts_submit_final() {
     let tmp = std::env::temp_dir().join(format!("aos-anthropic-sf-{}", new_id("t_")));
+    let base_request = make_request(&tmp);
     let request = ModelTurnRequest {
-        thread: make_request(&tmp).thread,
+        thread: base_request.thread,
         workspace_root: tmp,
         step_index: 2,
         context: ModelContextProjection {
             tool_results: vec![ToolExecutionRecord {
                 call_id: "call_1".to_string(),
-                tool_name: "write_file".to_string(),
+                tool_name: "apply_patch".to_string(),
                 status: ToolCallStatus::Completed,
-                input: Some(json!({"path": "out.txt"})),
-                output: Some(json!({"written_path": "out.txt"})),
+                input: Some(
+                    json!({"patch": "*** Begin Patch\n*** Add File: out.txt\n+done\n*** End Patch\n"}),
+                ),
+                output: Some(json!({"path": "out.txt"})),
                 evidence_ids: vec!["evi_anthropic".to_string()],
                 evidence_claim: Some("wrote output".to_string()),
             }],
@@ -348,6 +355,7 @@ fn parse_anthropic_response_extracts_submit_final() {
                 blob_ref: None,
                 evidence_ids: vec![],
             }],
+            tool_descriptors: base_request.context.tool_descriptors,
             ..ModelContextProjection::default()
         },
     };
@@ -365,15 +373,16 @@ fn parse_anthropic_response_extracts_submit_final() {
     });
     let response = parse_anthropic_response(&body, &request).unwrap();
     match &response.actions[0] {
-        ModelAction::Final { submission } => {
-            assert_eq!(submission.summary, "Anthropic path complete");
-            assert_eq!(submission.changed_artifacts, vec!["art_1"]);
+        ModelAction::ToolCall(action) => {
+            assert_eq!(action.tool_name, "submit_final");
+            assert_eq!(action.risk_level, 2);
+            assert_eq!(action.input["summary"], "Anthropic path complete");
             assert_eq!(
-                submission.evidence_map[0].evidence_refs,
-                vec!["evi_anthropic"]
+                action.input["tests_run"],
+                json!(["cargo test -p agent-os-thread openai::tests"])
             );
         }
-        _ => panic!("expected Final"),
+        _ => panic!("expected submit_final ToolCall"),
     }
 }
 
@@ -411,11 +420,9 @@ fn tool_definitions_include_all_core_tools() {
                 .and_then(Value::as_str)
         })
         .collect();
-    assert_eq!(names.len(), 17);
+    assert_eq!(names.len(), 15);
+    assert!(names.contains(&"apply_patch"));
     assert!(names.contains(&"read_file"));
-    assert!(names.contains(&"write_file"));
-    assert!(names.contains(&"replace_text"));
-    assert!(names.contains(&"delete_file"));
     assert!(names.contains(&"run_command"));
     assert!(names.contains(&"set_goal"));
     assert!(names.contains(&"accomplish_goal"));
@@ -429,6 +436,25 @@ fn tool_definitions_include_all_core_tools() {
     assert!(names.contains(&"read_skill_resource"));
     assert!(names.contains(&"agent_control"));
     assert!(names.contains(&"submit_final"));
+    assert!(!names.contains(&"write_file"));
+    assert!(!names.contains(&"replace_text"));
+    assert!(!names.contains(&"delete_file"));
+    for tool in &tools {
+        let name = tool
+            .pointer("/function/name")
+            .and_then(Value::as_str)
+            .unwrap();
+        let description = tool
+            .pointer("/function/description")
+            .and_then(Value::as_str)
+            .unwrap();
+        assert!(description.contains("Examples:"), "{name}: {description}");
+        assert!(description.contains("parameters:"), "{name}: {description}");
+        assert!(
+            description.contains("expected_result:"),
+            "{name}: {description}"
+        );
+    }
     let run_command = tools
         .iter()
         .find(|tool| tool.pointer("/function/name").and_then(Value::as_str) == Some("run_command"))
@@ -437,6 +463,87 @@ fn tool_definitions_include_all_core_tools() {
         run_command.pointer("/function/parameters/properties/env/type"),
         Some(&json!("object"))
     );
+}
+
+#[test]
+fn apply_patch_tool_schema_projects_exact_patch_markers() {
+    let tools = tool_definitions();
+    let apply_patch = tools
+        .iter()
+        .find(|tool| tool.pointer("/function/name").and_then(Value::as_str) == Some("apply_patch"))
+        .unwrap();
+    let description = apply_patch
+        .pointer("/function/description")
+        .and_then(Value::as_str)
+        .unwrap();
+    let patch_description = apply_patch
+        .pointer("/function/parameters/properties/patch/description")
+        .and_then(Value::as_str)
+        .unwrap();
+
+    for text in [description, patch_description] {
+        assert!(text.contains("*** Begin Patch"), "{text}");
+        assert!(text.contains("*** Add File:"), "{text}");
+        assert!(text.contains("*** Update File:"), "{text}");
+        assert!(text.contains("*** Delete File:"), "{text}");
+        assert!(text.contains("*** End Patch"), "{text}");
+    }
+    assert!(description.contains("Examples:"), "{description}");
+    assert!(description.contains("Add a new file"), "{description}");
+    assert!(
+        description.contains("*** Add File: docs/example.md"),
+        "{description}"
+    );
+    assert!(
+        description.contains("Update an existing file"),
+        "{description}"
+    );
+    assert!(
+        description.contains("*** Update File: src/lib.rs"),
+        "{description}"
+    );
+    assert!(
+        description.contains("Delete an obsolete file"),
+        "{description}"
+    );
+    assert!(
+        description.contains("*** Delete File: tmp/obsolete.txt"),
+        "{description}"
+    );
+    assert!(
+        patch_description.contains("plain lines")
+            || patch_description.contains("plain context lines"),
+        "{patch_description}"
+    );
+}
+
+#[test]
+fn agent_control_tool_schema_warns_against_invented_agent_ids() {
+    let tools = tool_definitions();
+    let agent_control = tools
+        .iter()
+        .find(|tool| {
+            tool.pointer("/function/name").and_then(Value::as_str) == Some("agent_control")
+        })
+        .unwrap();
+    let description = agent_control
+        .pointer("/function/description")
+        .and_then(Value::as_str)
+        .unwrap();
+    let agent_id_description = agent_control
+        .pointer("/function/parameters/properties/agent_id/description")
+        .and_then(Value::as_str)
+        .unwrap();
+    let thread_id_description = agent_control
+        .pointer("/function/parameters/properties/thread_id/description")
+        .and_then(Value::as_str)
+        .unwrap();
+
+    for text in [description, agent_id_description, thread_id_description] {
+        assert!(text.contains("Do not invent"), "{text}");
+        assert!(text.contains("agent_id"), "{text}");
+        assert!(text.contains("thread_id"), "{text}");
+    }
 }
 
 #[test]
@@ -459,6 +566,10 @@ fn anthropic_tool_definitions_mirror_core_tools() {
     assert!(anthropic_tools
         .iter()
         .all(|tool| tool.get("input_schema").is_some()));
+    assert!(anthropic_tools.iter().all(|tool| tool
+        .get("description")
+        .and_then(Value::as_str)
+        .is_some_and(|description| description.contains("Examples:"))));
 }
 
 #[test]
@@ -576,12 +687,12 @@ fn request_tool_view_projects_core_tools_from_kernel_descriptors() {
         .iter()
         .find(|tool| tool.pointer("/function/name").and_then(Value::as_str) == Some("read_file"))
         .unwrap();
-    assert_eq!(
-        read_file
-            .pointer("/function/description")
-            .and_then(Value::as_str),
-        Some("Kernel-owned read descriptor projection.")
-    );
+    let openai_description = read_file
+        .pointer("/function/description")
+        .and_then(Value::as_str)
+        .unwrap();
+    assert!(openai_description.starts_with("Kernel-owned read descriptor projection."));
+    assert!(openai_description.contains("Examples:"));
     assert_eq!(
         read_file.pointer("/function/parameters/required"),
         Some(&json!(["path", "read_mode"]))
@@ -591,10 +702,12 @@ fn request_tool_view_projects_core_tools_from_kernel_descriptors() {
         .into_iter()
         .find(|tool| tool.get("name").and_then(Value::as_str) == Some("read_file"))
         .unwrap();
-    assert_eq!(
-        anthropic_read.get("description").and_then(Value::as_str),
-        Some("Kernel-owned read descriptor projection.")
-    );
+    let anthropic_description = anthropic_read
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap();
+    assert!(anthropic_description.starts_with("Kernel-owned read descriptor projection."));
+    assert!(anthropic_description.contains("Examples:"));
     assert_eq!(
         anthropic_read.pointer("/input_schema/required"),
         Some(&json!(["path", "read_mode"]))
@@ -625,22 +738,25 @@ fn map_function_call_injects_workspace_root() {
     let tmp = std::env::temp_dir().join(format!("aos-openai-mf-{}", new_id("t_")));
     let request = make_request(&tmp);
     let (tool_name, input, risk) = map_function_call(
-        "write_file",
-        json!({"path": "test.rs", "content": "fn main() {}"}),
+        "apply_patch",
+        json!({"patch": "*** Begin Patch\n*** Add File: test.rs\n+fn main() {}\n*** End Patch\n"}),
         &request,
     );
-    assert_eq!(tool_name, "write_file");
+    assert_eq!(tool_name, "apply_patch");
     assert_eq!(input["workspace_root"], tmp.to_string_lossy().to_string());
     assert_eq!(risk, 4);
 }
 
 #[test]
-fn map_function_call_supports_delete_file() {
+fn map_function_call_keeps_apply_patch_delete_operation() {
     let tmp = std::env::temp_dir().join(format!("aos-openai-md-{}", new_id("t_")));
     let request = make_request(&tmp);
-    let (tool_name, input, risk) =
-        map_function_call("delete_file", json!({"path": "old.txt"}), &request);
-    assert_eq!(tool_name, "delete_file");
+    let (tool_name, input, risk) = map_function_call(
+        "apply_patch",
+        json!({"patch": "*** Begin Patch\n*** Delete File: old.txt\n*** End Patch\n"}),
+        &request,
+    );
+    assert_eq!(tool_name, "apply_patch");
     assert_eq!(input["workspace_root"], tmp.to_string_lossy().to_string());
     assert_eq!(risk, 4);
 }

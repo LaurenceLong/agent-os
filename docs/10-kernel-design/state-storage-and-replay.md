@@ -141,6 +141,7 @@ Examples:
 - `ToolCallApprovalRequested`
 - `ToolCallApprovalResolved`
 - `ToolCallStarted`
+- `ToolCallProgressed`
 - `ToolCallCompleted`
 - `ToolCallFailed`
 - `ArtifactCommitted`
@@ -199,6 +200,12 @@ manual_compensation_required
 
 Non-idempotent high-risk tool calls SHOULD require approval.
 
+`ToolCallProgressed` records non-terminal progress for a started invocation.
+The canonical use is the 15 second foreground wait cap: the invocation becomes
+`Running`, model-visible output includes `tool_call_id`, and the background
+worker later emits `ToolCallCompleted` or `ToolCallFailed`. Replay MUST preserve
+`Running` as non-terminal until a terminal event for the same call id appears.
+
 ## 7. Locks and Leases
 
 Agent-OS MUST prevent conflicting mutation.
@@ -234,7 +241,8 @@ Rules:
 - migrations MUST be reversible in local development where possible
 - production migrations MUST include backup guidance
 - ABI-breaking migrations MUST have ADRs
-- event schema changes MUST preserve old event readability
+- event schema changes MUST preserve deterministic replay for the current schema
+  and current event model
 
 ## 9. Backup and Export
 

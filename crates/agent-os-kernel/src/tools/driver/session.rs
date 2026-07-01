@@ -4,7 +4,7 @@ use crate::*;
 use agent_os_sys::*;
 use serde_json::{json, Value};
 
-pub(super) fn run_submit_final(
+pub(in crate::tools) fn run_submit_final(
     kernel: &Kernel,
     syscall: &SyscallEnvelope,
     descriptor: &ToolDescriptor,
@@ -15,7 +15,9 @@ pub(super) fn run_submit_final(
         .get("evidence_map")
         .map(parse_payload::<Vec<EvidenceMapEntry>>)
         .transpose()?
-        .unwrap_or_default();
+        .ok_or_else(|| {
+            AgentOsError::Validation("submit_final requires evidence_map".to_string())
+        })?;
     let submission = FinalSubmission {
         summary: required_string(input, "summary")?,
         changed_artifacts: string_array(input, "changed_artifacts")?,

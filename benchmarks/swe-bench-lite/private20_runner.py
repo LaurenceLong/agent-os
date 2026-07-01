@@ -36,6 +36,85 @@ class ProviderSpec:
     api_style: str
 
 
+DEFAULT_SWEBENCH_VENV = Path("/root/agent-os-swebench-venv")
+DEFAULT_SWEBENCH_DATASET = "SWE-bench/SWE-bench_Lite"
+DEFAULT_SWEBENCH_SPLIT = "test"
+
+
+def repository_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def parse_dotenv_content(content: str) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for raw_line in content.splitlines():
+        line = raw_line.strip().lstrip("\ufeff")
+        if not line or line.startswith("#"):
+            continue
+        key, separator, value = line.partition("=")
+        if not separator:
+            continue
+        key = key.strip().lstrip("\ufeff")
+        if not key or key.startswith("#"):
+            continue
+        values[key] = normalize_dotenv_value(value.strip())
+    return values
+
+
+def normalize_dotenv_value(value: str) -> str:
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        return value[1:-1]
+    return value
+
+
+def load_dotenv_values(dotenv_path: Path | None = None) -> dict[str, str]:
+    path = repository_root() / ".env" if dotenv_path is None else dotenv_path
+    if not path.exists():
+        return {}
+    return parse_dotenv_content(path.read_text(encoding="utf-8"))
+
+
+def resolve_required_config_value(
+    name: str,
+    *,
+    explicit: str | None = None,
+    env: Mapping[str, str] | None = None,
+    dotenv_values: Mapping[str, str] | None = None,
+) -> str:
+    if explicit is not None and explicit.strip():
+        return explicit.strip()
+    source_env = os.environ if env is None else env
+    env_value = source_env.get(name, "").strip()
+    if env_value:
+        return env_value
+    source_dotenv = load_dotenv_values() if dotenv_values is None else dotenv_values
+    dotenv_value = source_dotenv.get(name, "").strip()
+    if dotenv_value:
+        return dotenv_value
+    raise ValueError(f"{name} is required via CLI, process environment, or repository .env")
+
+
+def resolve_config_value(
+    name: str,
+    *,
+    explicit: str | None = None,
+    env: Mapping[str, str] | None = None,
+    dotenv_values: Mapping[str, str] | None = None,
+    default: str,
+) -> str:
+    if explicit is not None and explicit.strip():
+        return explicit.strip()
+    source_env = os.environ if env is None else env
+    env_value = source_env.get(name, "").strip()
+    if env_value:
+        return env_value
+    source_dotenv = load_dotenv_values() if dotenv_values is None else dotenv_values
+    dotenv_value = source_dotenv.get(name, "").strip()
+    if dotenv_value:
+        return dotenv_value
+    return default
+
+
 def load_manifest_tasks(manifest_path: Path) -> list[BenchmarkTask]:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     tasks = []
@@ -95,6 +174,10 @@ smallest scoped edit. After a focused fix, relevant validation or a captured
 environment blocker, and git diff inspection, submit the final answer
 immediately instead of repeating checks.
 
+After you have a patch, one focused validation result or concrete environment
+blocker, and one git diff inspection, the next action must be submit_final. Do
+not keep exploring, rerun unrelated tests, or start a second fix.
+
 Before final submission, inspect git diff and summarize changed files and
 validation commands. Do not claim a test passed without command evidence. Do
 not include any gold patch, hidden hints, or test patch in the solution.
@@ -121,6 +204,151 @@ def write_predictions_jsonl(
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+def load_run_instance_ids(summary_path: Path) -> list[str]:
+    records = json.loads(summary_path.read_text(encoding="utf-8"))
+    if not isinstance(records, list):
+        raise ValueError(f"run summary must be a JSON array: {summary_path}")
+    instance_ids = []
+    for index, record in enumerate(records):
+        if not isinstance(record, dict):
+            raise ValueError(f"run summary item {index} must be a JSON object")
+        instance_id = record.get("instance_id")
+        if not isinstance(instance_id, str) or not instance_id:
+            raise ValueError(f"run summary item {index} is missing instance_id")
+        instance_ids.append(instance_id)
+    if not instance_ids:
+        raise ValueError(f"run summary contains no instances: {summary_path}")
+    if len(set(instance_ids)) != len(instance_ids):
+        raise ValueError(f"run summary contains duplicate instance ids: {summary_path}")
+    return instance_ids
+
+
+def build_swebench_harness_command(
+    *,
+    swebench_venv: Path,
+    dataset_name: str,
+    split: str,
+    predictions_path: Path,
+    instance_ids: Sequence[str],
+    max_workers: int,
+    timeout: int,
+    run_id: str,
+    report_dir: Path,
+) -> list[str]:
+    if not instance_ids:
+        raise ValueError("official SWE-bench evaluation requires at least one instance id")
+    python_bin = swebench_venv / "bin" / "python"
+    if not python_bin.exists():
+        raise FileNotFoundError(f"missing SWE-bench venv python: {python_bin}")
+    return [
+        python_bin.as_posix(),
+        "-m",
+        "swebench.harness.run_evaluation",
+        "--dataset_name",
+        dataset_name,
+        "--split",
+        split,
+        "--predictions_path",
+        predictions_path.as_posix(),
+        "--instance_ids",
+        *instance_ids,
+        "--max_workers",
+        str(max_workers),
+        "--timeout",
+        str(timeout),
+        "--run_id",
+        run_id,
+        "--report_dir",
+        report_dir.as_posix(),
+    ]
+
+
+def swebench_report_name(*, model_name: str, run_id: str) -> str:
+    return f"{model_name.replace('/', '__')}.{run_id}.json"
+
+
+def find_swebench_report(
+    *,
+    cwd: Path,
+    report_dir: Path,
+    model_name: str,
+    run_id: str,
+) -> Path:
+    name = swebench_report_name(model_name=model_name, run_id=run_id)
+    candidates = [cwd / name]
+    if report_dir != cwd:
+        candidates.append(report_dir / name)
+    for path in candidates:
+        if path.exists():
+            return path
+    candidate_list = ", ".join(path.as_posix() for path in candidates)
+    raise FileNotFoundError(f"official SWE-bench report was not written; checked: {candidate_list}")
+
+
+def swebench_report_passed(*, report_path: Path, expected_instance_ids: Sequence[str]) -> bool:
+    expected = set(expected_instance_ids)
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    resolved = set(str(value) for value in report.get("resolved_ids", []))
+    submitted = set(str(value) for value in report.get("submitted_ids", []))
+    completed = set(str(value) for value in report.get("completed_ids", []))
+    return submitted == expected and completed == expected and resolved == expected
+
+
+def evaluate_agent_os_run(
+    *,
+    tasks: Sequence[BenchmarkTask],
+    output_root: Path,
+    swebench_venv: Path,
+    dataset_name: str,
+    split: str,
+    model_name: str,
+    instance_ids: Sequence[str],
+    max_workers: int,
+    timeout: int,
+    run_id: str,
+    predictions_output: Path | None = None,
+    report_dir: Path | None = None,
+    executor=None,
+) -> int:
+    if executor is None:
+        executor = run_command
+    selected = select_tasks(tasks, instance_ids)
+    output_root.mkdir(parents=True, exist_ok=True)
+    predictions_path = predictions_output or output_root / "agent-os-evaluation-predictions.jsonl"
+    official_report_dir = report_dir or output_root / "swebench-report-official"
+    official_report_dir.mkdir(parents=True, exist_ok=True)
+    write_predictions_jsonl(
+        tasks=selected,
+        patch_dir=output_root / "agent-os" / "patches",
+        output_path=predictions_path,
+        model_name=model_name,
+    )
+    command = build_swebench_harness_command(
+        swebench_venv=swebench_venv,
+        dataset_name=dataset_name,
+        split=split,
+        predictions_path=predictions_path,
+        instance_ids=[task.instance_id for task in selected],
+        max_workers=max_workers,
+        timeout=timeout,
+        run_id=run_id,
+        report_dir=official_report_dir,
+    )
+    exit_code = executor(command, cwd=output_root, env=os.environ)
+    report_path = find_swebench_report(
+        cwd=output_root,
+        report_dir=official_report_dir,
+        model_name=model_name,
+        run_id=run_id,
+    )
+    if exit_code != 0:
+        return exit_code
+    return 0 if swebench_report_passed(
+        report_path=report_path,
+        expected_instance_ids=[task.instance_id for task in selected],
+    ) else 1
+
+
 def write_agent_os_provider_config(*, config_home: Path, provider: ProviderSpec) -> Path:
     path = config_home / "agent-os" / "providers.json"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -144,23 +372,25 @@ def resolve_api_key(
     api_key_file: Path | None,
     api_key_env: str,
     env: Mapping[str, str] | None = None,
+    dotenv_values: Mapping[str, str] | None = None,
 ) -> str:
     if api_key_file is not None:
         key = api_key_file.read_text(encoding="utf-8").strip()
         if not key:
             raise ValueError(f"API key file is empty: {api_key_file}")
         return key
-    source_env = os.environ if env is None else env
-    key = source_env.get(api_key_env, "").strip()
-    if not key:
-        raise ValueError(f"environment variable {api_key_env} is required")
-    return key
+    return resolve_required_config_value(
+        api_key_env,
+        env=env,
+        dotenv_values=dotenv_values,
+    )
 
 
 def build_task_process_env(
     base_env: Mapping[str, str] | None = None,
     *,
     extra: Mapping[str, str] | None = None,
+    prepend_paths: Sequence[Path] | None = None,
 ) -> dict[str, str]:
     env = dict(os.environ if base_env is None else base_env)
     runner_virtualenv = env.pop("VIRTUAL_ENV", None)
@@ -182,7 +412,33 @@ def build_task_process_env(
 
     if extra:
         env.update(extra)
+    if prepend_paths:
+        existing_path = env.get("PATH", "")
+        leading = [path.as_posix() for path in prepend_paths]
+        env["PATH"] = os.pathsep.join([*leading, existing_path] if existing_path else leading)
     return env
+
+
+def prepare_agent_os_tool_bin(output_root: Path) -> Path:
+    tool_bin = output_root / "agent-os" / "tool-bin"
+    tool_bin.mkdir(parents=True, exist_ok=True)
+    if os.name == "nt":
+        shim = tool_bin / "python.cmd"
+        shim.write_text("@echo off\r\npython3 %*\r\n", encoding="utf-8", newline="\r\n")
+    else:
+        shim = tool_bin / "python"
+        shim.write_text("#!/usr/bin/env sh\nexec python3 \"$@\"\n", encoding="utf-8", newline="\n")
+        shim.chmod(0o755)
+    return tool_bin
+
+
+def build_workspace_pythonpath(workspace: Path) -> str:
+    entries = [workspace]
+    for child in ("lib", "src"):
+        path = workspace / child
+        if path.exists():
+            entries.append(path)
+    return os.pathsep.join(path.as_posix() for path in entries)
 
 
 def build_agent_os_command(
@@ -193,6 +449,7 @@ def build_agent_os_command(
     bundle_output: Path,
     task_file: Path,
     max_steps: int,
+    runtime_timeout_seconds: int,
 ) -> list[str]:
     return [
         agent_os_bin.as_posix(),
@@ -207,6 +464,8 @@ def build_agent_os_command(
         bundle_output.as_posix(),
         "--max-steps",
         str(max_steps),
+        "--runtime-timeout-seconds",
+        str(runtime_timeout_seconds),
         "--task-file",
         task_file.as_posix(),
     ]
@@ -354,6 +613,7 @@ def run_agent_os_task(
     prompt = build_task_prompt(task, dataset_row)
     paths["prompt"].parent.mkdir(parents=True, exist_ok=True)
     paths["prompt"].write_text(prompt, encoding="utf-8", newline="\n")
+    tool_bin = prepare_agent_os_tool_bin(output_root)
     command = build_agent_os_command(
         agent_os_bin=agent_os_bin,
         workspace=paths["workspace"],
@@ -361,6 +621,7 @@ def run_agent_os_task(
         bundle_output=Path("agent-os-task-bundle.json"),
         task_file=paths["prompt"],
         max_steps=max_steps,
+        runtime_timeout_seconds=task_timeout_seconds or 3600,
     )
     paths["log"].parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=f"agent-os-provider-{task.instance_id}-") as config_tmp:
@@ -369,8 +630,9 @@ def run_agent_os_task(
         env = build_task_process_env(
             extra={
                 "XDG_CONFIG_HOME": config_home.as_posix(),
-                "PYTHONPATH": paths["workspace"].as_posix(),
-            }
+                "PYTHONPATH": build_workspace_pythonpath(paths["workspace"]),
+            },
+            prepend_paths=[tool_bin],
         )
         exit_code = executor(
             command,
@@ -414,7 +676,7 @@ def run_opencode_task(
     paths["prompt"].parent.mkdir(parents=True, exist_ok=True)
     paths["prompt"].write_text(prompt, encoding="utf-8", newline="\n")
 
-    env = build_task_process_env(extra={"PYTHONPATH": paths["workspace"].as_posix()})
+    env = build_task_process_env(extra={"PYTHONPATH": build_workspace_pythonpath(paths["workspace"])})
     command = build_opencode_command(
         opencode_bin=opencode_bin,
         workspace=paths["workspace"],
@@ -476,17 +738,33 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     run_agent.add_argument("--output-root", type=Path, required=True)
     run_agent.add_argument("--repo-cache", type=Path, required=True)
     run_agent.add_argument("--agent-os-bin", type=Path, required=True)
-    run_agent.add_argument("--base-url", required=True)
-    run_agent.add_argument("--model", required=True)
+    run_agent.add_argument("--base-url")
+    run_agent.add_argument("--model")
     run_agent.add_argument("--api-key-file", type=Path)
     run_agent.add_argument("--api-key-env", default="LLM_API_KEY")
-    run_agent.add_argument("--api-style", default="anthropic-compatible")
+    run_agent.add_argument("--api-style")
     run_agent.add_argument("--max-steps", type=int, default=48)
     run_agent.add_argument("--task-timeout-seconds", type=int, default=3600)
     run_agent.add_argument("--resume-existing", action="store_true")
-    run_agent.add_argument("--dataset-name", default="SWE-bench/SWE-bench_Lite")
-    run_agent.add_argument("--split", default="test")
+    run_agent.add_argument("--dataset-name", default=DEFAULT_SWEBENCH_DATASET)
+    run_agent.add_argument("--split", default=DEFAULT_SWEBENCH_SPLIT)
     run_agent.add_argument("--instance-id", action="append", default=[])
+
+    evaluate_agent = subcommands.add_parser(
+        "evaluate-agent-os",
+        help="score an Agent-OS run with the official SWE-bench harness",
+    )
+    evaluate_agent.add_argument("--output-root", type=Path, required=True)
+    evaluate_agent.add_argument("--swebench-venv", type=Path, default=DEFAULT_SWEBENCH_VENV)
+    evaluate_agent.add_argument("--dataset-name", default=DEFAULT_SWEBENCH_DATASET)
+    evaluate_agent.add_argument("--split", default=DEFAULT_SWEBENCH_SPLIT)
+    evaluate_agent.add_argument("--model-name", default="agent-os")
+    evaluate_agent.add_argument("--instance-id", action="append", default=[])
+    evaluate_agent.add_argument("--max-workers", type=int, default=2)
+    evaluate_agent.add_argument("--timeout", type=int, default=1800)
+    evaluate_agent.add_argument("--run-id")
+    evaluate_agent.add_argument("--predictions-output", type=Path)
+    evaluate_agent.add_argument("--report-dir", type=Path)
 
     run_opencode = subcommands.add_parser("run-opencode", help="run OpenCode on selected tasks")
     run_opencode.add_argument("--output-root", type=Path, required=True)
@@ -495,8 +773,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     run_opencode.add_argument("--model", required=True)
     run_opencode.add_argument("--task-timeout-seconds", type=int, default=3600)
     run_opencode.add_argument("--resume-existing", action="store_true")
-    run_opencode.add_argument("--dataset-name", default="SWE-bench/SWE-bench_Lite")
-    run_opencode.add_argument("--split", default="test")
+    run_opencode.add_argument("--dataset-name", default=DEFAULT_SWEBENCH_DATASET)
+    run_opencode.add_argument("--split", default=DEFAULT_SWEBENCH_SPLIT)
     run_opencode.add_argument("--instance-id", action="append", default=[])
 
     return parser.parse_args(argv)
@@ -527,13 +805,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.command == "run-agent-os":
         selected = select_tasks(tasks, args.instance_id)
-        api_key = resolve_api_key(api_key_file=args.api_key_file, api_key_env=args.api_key_env)
+        dotenv_values = load_dotenv_values()
+        api_key = resolve_api_key(
+            api_key_file=args.api_key_file,
+            api_key_env=args.api_key_env,
+            dotenv_values=dotenv_values,
+        )
         rows = load_dataset_rows(args.dataset_name, args.split, selected)
         provider = ProviderSpec(
-            base_url=args.base_url,
-            model=args.model,
+            base_url=resolve_required_config_value(
+                "LLM_BASE_URL",
+                explicit=args.base_url,
+                dotenv_values=dotenv_values,
+            ),
+            model=resolve_required_config_value(
+                "LLM_MODEL",
+                explicit=args.model,
+                dotenv_values=dotenv_values,
+            ),
             api_key=api_key,
-            api_style=args.api_style,
+            api_style=resolve_config_value(
+                "LLM_API_STYLE",
+                explicit=args.api_style,
+                dotenv_values=dotenv_values,
+                default="anthropic-compatible",
+            ),
         )
         records = []
         for task in selected:
@@ -555,6 +851,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         summary = args.output_root / "agent-os" / "summary.json"
         summary.write_text(json.dumps(records, indent=2), encoding="utf-8", newline="\n")
         return 0
+    if args.command == "evaluate-agent-os":
+        instance_ids = args.instance_id or load_run_instance_ids(args.output_root / "agent-os" / "summary.json")
+        run_id = args.run_id or f"agent-os-{args.output_root.name}"
+        return evaluate_agent_os_run(
+            tasks=tasks,
+            output_root=args.output_root,
+            swebench_venv=args.swebench_venv,
+            dataset_name=args.dataset_name,
+            split=args.split,
+            model_name=args.model_name,
+            instance_ids=instance_ids,
+            max_workers=args.max_workers,
+            timeout=args.timeout,
+            run_id=run_id,
+            predictions_output=args.predictions_output,
+            report_dir=args.report_dir,
+        )
     if args.command == "run-opencode":
         selected = select_tasks(tasks, args.instance_id)
         rows = load_dataset_rows(args.dataset_name, args.split, selected)

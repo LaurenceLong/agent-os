@@ -128,8 +128,11 @@ Example transition rules:
 - `Created -> Ready` requires a valid ACB.
 - `Ready -> Thinking` requires dependency readiness.
 - `Thinking -> CallingTool` requires a proposed syscall.
-- `CallingTool -> WaitingTool` requires Tool Broker acceptance.
-- `WaitingTool -> Thinking` requires tool result or failure event.
+- `CallingTool -> WaitingTool` requires Tool Broker acceptance or a `Running`
+  tool result after the foreground wait cap.
+- `WaitingTool -> Ready` requires completion or failure of all running tool
+  invocations for the thread's active task.
+- `WaitingTool -> Thinking` requires scheduler admission for the next model turn.
 - `Thinking -> Completed` requires required evidence or explicit waiver.
 - `Blocked -> Ready` requires blocker resolution.
 - `Any -> Quarantined` is allowed for policy violation or suspicious behavior.
@@ -154,6 +157,34 @@ Agent Thread execution MUST follow a kernel-controlled outer loop:
 
 The LLM is used inside step 4 and MAY assist in step 5. It MUST NOT bypass steps 6-9.
 
+Tool calls are foreground-bounded. The Tool Broker waits at most 15 seconds for
+any tool invocation. If the invocation is still running, the runtime records the
+tool result as `Running`, transitions the Agent Thread to `WaitingTool`, and
+yields instead of immediately calling the model again. The background worker
+records the eventual completed or failed invocation; if no other tool call is
+running for the task, the kernel returns the thread to `Ready` for normal
+scheduler admission.
+
+Provider requests are also bounded at the client layer. OpenAI-compatible and
+Anthropic-compatible requests use a hard per-request timeout so live e2e and
+benchmark runs fail through the normal provider retry/failure path instead of
+holding a runtime worker indefinitely.
+
+The runtime applies bounded progress gates to keep model loops from consuming
+the entire turn budget without resolving the task. If a thread accumulates a
+bounded sequence of pre-patch investigation results from read/command tools and
+has not attempted `apply_patch`, the runtime first emits soft feedback while
+leaving the normal tool surface available. If investigation continues past the
+hard gate without any patch attempt, the next projected tool surface is narrowed
+to `apply_patch`, `submit_final`, and `accomplish_goal`; rejected investigation
+calls receive `runtime_feedback` and are not executed. Once any `apply_patch`
+attempt exists, this pre-patch resolution gate is released so normal recovery
+can handle patch failures. After a successful patch has following command
+evidence, finalization feedback narrows the projected tool surface to
+`submit_final` and `accomplish_goal` until the thread closes. Runtime feedback
+that still controls the current tool surface remains projected even after it
+falls outside the normal recent tool-result window.
+
 ## 5. Yield and Checkpoint Semantics
 
 Agent Threads MUST yield at these boundaries:
@@ -162,6 +193,7 @@ Agent Threads MUST yield at these boundaries:
 - after model call
 - before tool call
 - after tool result
+- after a tool reports `Running`
 - before artifact commit
 - after artifact commit
 - before approval request

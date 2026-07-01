@@ -37,6 +37,44 @@ pub enum ResourceType {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum ResourceSessionType {
+    Environment,
+    Worktree,
+    Terminal,
+    Browser,
+    GitReview,
+}
+
+impl ResourceSessionType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Environment => "environment",
+            Self::Worktree => "worktree",
+            Self::Terminal => "terminal",
+            Self::Browser => "browser",
+            Self::GitReview => "git_review",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceSessionStatus {
+    Active,
+    Closed,
+}
+
+impl ResourceSessionStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Closed => "closed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LeaseMode {
     Shared,
     Exclusive,
@@ -86,6 +124,29 @@ pub struct ResourceLease {
     pub lease_expires_at: Option<String>,
     pub created_at: String,
     pub released_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourceSession {
+    pub session_id: String,
+    pub resource_type: ResourceSessionType,
+    pub client_thread_id: Option<String>,
+    pub owner_agent_id: Option<String>,
+    pub status: ResourceSessionStatus,
+    pub lease_expires_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub closed_at: Option<String>,
+    pub payload: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenResourceSessionInput {
+    pub resource_type: ResourceSessionType,
+    pub client_thread_id: Option<String>,
+    pub owner_agent_id: Option<String>,
+    pub lease_expires_at: Option<String>,
+    pub payload: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

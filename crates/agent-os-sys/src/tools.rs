@@ -54,6 +54,13 @@ pub struct CapabilityToken {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolExample {
+    pub description: String,
+    pub parameters: Value,
+    pub expected_result: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDescriptor {
     pub tool_id: String,
     pub name: String,
@@ -65,6 +72,8 @@ pub struct ToolDescriptor {
     pub input_schema: Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_input_schema: Option<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub examples: Vec<ToolExample>,
     pub output_schema: Value,
     #[serde(default)]
     pub runtime_input_policy: ToolRuntimeInputPolicy,
@@ -86,6 +95,7 @@ impl Default for ToolDescriptor {
             risk_level: 0,
             input_schema: crate::empty_object(),
             model_input_schema: None,
+            examples: Vec::new(),
             output_schema: crate::empty_object(),
             runtime_input_policy: ToolRuntimeInputPolicy::default(),
             driver_config: crate::empty_object(),

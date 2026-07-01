@@ -7,6 +7,7 @@
 //! answer gates.
 
 mod artifacts;
+mod automation;
 mod blackboard;
 mod capability;
 mod communication;
@@ -34,7 +35,7 @@ mod tools;
 mod util;
 mod verification;
 
-pub use ecosystem::mcp_tool_descriptor;
+pub use ecosystem::{discover_mcp_tool_definitions, mcp_tool_descriptor};
 pub use export::*;
 pub use inputs::*;
 pub use recovery::ReconciliationReport;

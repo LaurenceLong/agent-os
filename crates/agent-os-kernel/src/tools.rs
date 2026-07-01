@@ -1,11 +1,32 @@
+mod builtin;
 mod driver;
+mod output;
 mod validation;
 
 use crate::schema::validate_json_schema;
+use crate::state::{ToolStreamOutput, ToolWorkerOutput, ToolWorkerRecord};
 use crate::util::{hash_json, to_value};
 use crate::*;
 use agent_os_sys::*;
 use serde_json::json;
+use std::sync::mpsc;
+
+#[derive(Debug, Clone, Copy)]
+pub(in crate::tools) enum ToolOutputStream {
+    Stdout,
+    Stderr,
+}
+
+pub(in crate::tools) struct StreamWindow {
+    pub text: String,
+    pub start_byte: usize,
+    pub end_byte: usize,
+    pub truncated: bool,
+}
+
+pub(crate) fn core_tool_descriptors(now: &str) -> Vec<ToolDescriptor> {
+    builtin::core_tool_descriptors(now)
+}
 
 impl Kernel {
     pub fn register_tool_descriptor(
@@ -163,7 +184,105 @@ impl Kernel {
             None,
             &invocation,
         )?;
-        let output = match driver::run_tool_driver(self, syscall, &descriptor, &invocation.input) {
+        self.run_started_tool_with_foreground_timeout(
+            syscall.clone(),
+            input,
+            descriptor,
+            invocation,
+            causation_id,
+        )
+    }
+
+    fn run_started_tool_with_foreground_timeout(
+        &self,
+        syscall: SyscallEnvelope,
+        input: ToolInvokeInput,
+        descriptor: ToolDescriptor,
+        invocation: ToolInvocation,
+        causation_id: Option<String>,
+    ) -> AgentOsResult<ToolInvocation> {
+        let foreground_timeout = builtin::tool(&descriptor.name)
+            .map(|tool| tool.foreground_timeout)
+            .unwrap_or(builtin::FOREGROUND_TIMEOUT);
+        let call_id = invocation.call_id.clone();
+        let running_snapshot = invocation.clone();
+        self.register_tool_worker(&invocation)?;
+        let (sender, receiver) = mpsc::channel();
+        let worker_kernel = self.clone();
+        let worker_call_id = call_id.clone();
+        std::thread::spawn(move || {
+            let result = worker_kernel.complete_started_tool_invocation(
+                syscall,
+                input,
+                descriptor,
+                invocation,
+                causation_id,
+            );
+            worker_kernel.unregister_tool_worker(&worker_call_id);
+            let _ = sender.send(result);
+        });
+        match receiver.recv_timeout(foreground_timeout) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                let mut progressed = running_snapshot;
+                progressed.output = Some(json!({
+                    "status": "running",
+                    "tool_call_id": progressed.call_id,
+                    "tool_name": progressed.tool_name,
+                    "foreground_timeout_ms": foreground_timeout.as_millis() as u64,
+                    "message": "tool exceeded the foreground wait cap and is still running in the background"
+                }));
+                self.emit(
+                    "ToolCallProgressed",
+                    "tool_invocation",
+                    &progressed.call_id,
+                    Some(progressed.agent_id.clone()),
+                    Some(progressed.task_id.clone()),
+                    None,
+                    None,
+                    &progressed,
+                )?;
+                Ok(progressed)
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                let mut failed = running_snapshot;
+                failed.status = ToolCallStatus::Failed;
+                failed.output = Some(json!({
+                    "status": "failed",
+                    "stage": "worker",
+                    "error": "tool worker disconnected before reporting a result"
+                }));
+                failed.completed_at = Some(now_rfc3339());
+                self.emit(
+                    "ToolCallFailed",
+                    "tool_invocation",
+                    &failed.call_id,
+                    Some(failed.agent_id.clone()),
+                    Some(failed.task_id.clone()),
+                    None,
+                    None,
+                    &failed,
+                )?;
+                Ok(failed)
+            }
+        }
+    }
+
+    fn complete_started_tool_invocation(
+        &self,
+        syscall: SyscallEnvelope,
+        input: ToolInvokeInput,
+        descriptor: ToolDescriptor,
+        mut invocation: ToolInvocation,
+        causation_id: Option<String>,
+    ) -> AgentOsResult<ToolInvocation> {
+        let output = match driver::run_tool_driver(
+            self,
+            &syscall,
+            &descriptor,
+            &invocation.call_id,
+            &invocation.input,
+        ) {
             Ok(output) => output,
             Err(error) => {
                 invocation.status = ToolCallStatus::Failed;
@@ -188,6 +307,7 @@ impl Kernel {
                     Some("tool driver failed".to_string()),
                     AuditResult::Error,
                 )?;
+                self.ready_thread_after_background_tool(&syscall)?;
                 return Ok(invocation);
             }
         };
@@ -220,8 +340,10 @@ impl Kernel {
                 Some("tool output schema validation failed".to_string()),
                 AuditResult::Error,
             )?;
+            self.ready_thread_after_background_tool(&syscall)?;
             return Ok(invocation);
         }
+        let output = output::attach_output_management(self, &invocation.call_id, output)?;
         invocation.output = Some(output.clone());
         invocation.status = ToolCallStatus::Completed;
         invocation.completed_at = Some(now_rfc3339());
@@ -269,7 +391,95 @@ impl Kernel {
             None,
             AuditResult::Success,
         )?;
+        self.ready_thread_after_background_tool(&syscall)?;
         Ok(invocation)
+    }
+
+    fn register_tool_worker(&self, invocation: &ToolInvocation) -> AgentOsResult<()> {
+        let mut workers = self.tool_workers.lock().map_err(|_| {
+            AgentOsError::Validation("tool worker registry lock poisoned".to_string())
+        })?;
+        workers.insert(
+            invocation.call_id.clone(),
+            ToolWorkerRecord {
+                call_id: invocation.call_id.clone(),
+                tool_name: invocation.tool_name.clone(),
+                started_at: now_rfc3339(),
+                output: ToolWorkerOutput::default(),
+            },
+        );
+        Ok(())
+    }
+
+    pub(in crate::tools) fn append_tool_worker_output(
+        &self,
+        call_id: &str,
+        stream: ToolOutputStream,
+        chunk: &[u8],
+    ) {
+        if chunk.is_empty() {
+            return;
+        }
+        let Ok(mut workers) = self.tool_workers.lock() else {
+            return;
+        };
+        let Some(worker) = workers.get_mut(call_id) else {
+            return;
+        };
+        match stream {
+            ToolOutputStream::Stdout => append_stream_output(&mut worker.output.stdout, chunk),
+            ToolOutputStream::Stderr => append_stream_output(&mut worker.output.stderr, chunk),
+        }
+        worker.output.updated_at = Some(now_rfc3339());
+    }
+
+    pub(in crate::tools) fn set_tool_worker_output_spool(
+        &self,
+        call_id: &str,
+        stdout_path: String,
+        stderr_path: String,
+    ) {
+        let Ok(mut workers) = self.tool_workers.lock() else {
+            return;
+        };
+        let Some(worker) = workers.get_mut(call_id) else {
+            return;
+        };
+        worker.output.stdout.spool_path = Some(stdout_path);
+        worker.output.stderr.spool_path = Some(stderr_path);
+        worker.output.updated_at = Some(now_rfc3339());
+    }
+
+    fn unregister_tool_worker(&self, call_id: &str) {
+        if let Ok(mut workers) = self.tool_workers.lock() {
+            workers.remove(call_id);
+        }
+    }
+
+    fn ready_thread_after_background_tool(&self, syscall: &SyscallEnvelope) -> AgentOsResult<()> {
+        let acb = self
+            .thread_by_agent(&syscall.agent_id)?
+            .ok_or_else(|| AgentOsError::NotFound(format!("agent {}", syscall.agent_id)))?;
+        if acb.status != ThreadStatus::WaitingTool {
+            return Ok(());
+        }
+        let has_running_tool = self
+            .read_state()?
+            .tool_invocations
+            .values()
+            .any(|invocation| {
+                invocation.task_id == syscall.task_id
+                    && invocation.status == ToolCallStatus::Running
+            });
+        if has_running_tool {
+            return Ok(());
+        }
+        self.transition_thread(
+            &acb.thread_id,
+            ThreadStatus::Ready,
+            Some("background tool completed".to_string()),
+        )?;
+        Ok(())
     }
 
     fn record_denied_tool_call(
@@ -330,6 +540,68 @@ impl Kernel {
             .get(&input.tool_name)
             .cloned()
             .ok_or_else(|| AgentOsError::NotFound(format!("tool {}", input.tool_name)))
+    }
+}
+
+fn append_stream_output(output: &mut ToolStreamOutput, chunk: &[u8]) {
+    let limit = builtin::run_command::OUTPUT_PREVIEW_CHARS;
+    let head_remaining = limit.saturating_sub(output.head.len());
+    if head_remaining > 0 {
+        output
+            .head
+            .extend_from_slice(&chunk[..chunk.len().min(head_remaining)]);
+    }
+    output.tail.extend_from_slice(chunk);
+    if output.tail.len() > limit {
+        let excess = output.tail.len() - limit;
+        output.tail.drain(0..excess);
+        output.truncated = true;
+    }
+    output.bytes = output.bytes.saturating_add(chunk.len());
+}
+
+impl ToolStreamOutput {
+    pub(in crate::tools) fn append_bounded(&mut self, chunk: &[u8]) {
+        append_stream_output(self, chunk);
+    }
+
+    pub(in crate::tools) fn head_window(&self, limit: usize) -> StreamWindow {
+        let byte_limit = limit.min(builtin::run_command::OUTPUT_PREVIEW_CHARS);
+        let end_byte = self.head.len().min(byte_limit);
+        StreamWindow {
+            text: String::from_utf8_lossy(&self.head[..end_byte]).to_string(),
+            start_byte: 0,
+            end_byte,
+            truncated: self.bytes > end_byte,
+        }
+    }
+
+    pub(in crate::tools) fn tail_window(&self, limit: usize) -> StreamWindow {
+        let byte_limit = limit.min(builtin::run_command::OUTPUT_PREVIEW_CHARS);
+        let selected_len = self.tail.len().min(byte_limit);
+        let start = self.tail.len().saturating_sub(selected_len);
+        let start_byte = self.bytes.saturating_sub(self.tail.len()) + start;
+        StreamWindow {
+            text: String::from_utf8_lossy(&self.tail[start..]).to_string(),
+            start_byte,
+            end_byte: self.bytes,
+            truncated: self.bytes > selected_len,
+        }
+    }
+
+    pub(in crate::tools) fn new_window(&self, cursor: usize, limit: usize) -> StreamWindow {
+        let byte_limit = limit.min(builtin::run_command::OUTPUT_PREVIEW_CHARS);
+        let tail_start_byte = self.bytes.saturating_sub(self.tail.len());
+        let effective_cursor = cursor.max(tail_start_byte).min(self.bytes);
+        let tail_offset = effective_cursor.saturating_sub(tail_start_byte);
+        let available = &self.tail[tail_offset..];
+        let selected_len = available.len().min(byte_limit);
+        StreamWindow {
+            text: String::from_utf8_lossy(&available[..selected_len]).to_string(),
+            start_byte: effective_cursor,
+            end_byte: effective_cursor + selected_len,
+            truncated: cursor < tail_start_byte || available.len() > selected_len,
+        }
     }
 }
 

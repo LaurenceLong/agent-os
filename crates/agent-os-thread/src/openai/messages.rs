@@ -99,7 +99,8 @@ fn inject_tool_result_messages(
 
     let result_content = match &result.output {
         Some(output) => {
-            let trimmed = trim_tool_output(output);
+            let mut trimmed = trim_tool_output(output);
+            attach_evidence_ids(&mut trimmed, result);
             serde_json::to_string(&trimmed).unwrap_or_else(|_| "{}".to_string())
         }
         None => format!(
@@ -113,6 +114,23 @@ fn inject_tool_result_messages(
         "tool_call_id": call_id,
         "content": truncate(&result_content, 8000),
     }));
+}
+
+fn attach_evidence_ids(value: &mut Value, result: &ToolExecutionRecord) {
+    if result.evidence_ids.is_empty() {
+        return;
+    }
+    match value {
+        Value::Object(map) => {
+            map.insert("evidence_ids".to_string(), json!(result.evidence_ids));
+        }
+        other => {
+            *other = json!({
+                "output": other.clone(),
+                "evidence_ids": result.evidence_ids,
+            });
+        }
+    }
 }
 
 fn inject_anthropic_tool_result_messages(messages: &mut Vec<Value>, result: &ToolExecutionRecord) {
@@ -137,7 +155,9 @@ fn inject_anthropic_tool_result_messages(messages: &mut Vec<Value>, result: &Too
 
     let result_content = match &result.output {
         Some(output) => {
-            serde_json::to_string(&trim_tool_output(output)).unwrap_or_else(|_| "{}".to_string())
+            let mut trimmed = trim_tool_output(output);
+            attach_evidence_ids(&mut trimmed, result);
+            serde_json::to_string(&trimmed).unwrap_or_else(|_| "{}".to_string())
         }
         None => format!(
             "{{\"status\": \"{}\"}}",
@@ -186,9 +206,7 @@ fn reconstruct_call(result: &ToolExecutionRecord) -> (String, Value) {
 
     match result.tool_name.as_str() {
         "read_file" => ("read_file".to_string(), strip_workspace_root(&input)),
-        "write_file" => ("write_file".to_string(), strip_workspace_root(&input)),
-        "delete_file" => ("delete_file".to_string(), strip_workspace_root(&input)),
-        "replace_text" => ("replace_text".to_string(), strip_workspace_root(&input)),
+        "apply_patch" => ("apply_patch".to_string(), strip_workspace_root(&input)),
         "run_command" => ("run_command".to_string(), strip_cwd(&input)),
         known @ ("set_goal"
         | "accomplish_goal"

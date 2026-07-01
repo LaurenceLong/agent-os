@@ -2,7 +2,7 @@
 
 Status: private benchmark seed
 
-Last updated: 2026-06-29
+Last updated: 2026-07-01
 
 ## 1. Purpose
 
@@ -158,8 +158,13 @@ the Hugging Face dataset row, runs the selected agent, and writes a patch file.
 Build Agent-OS for the Linux runner:
 
 ```bash
+CARGO_TARGET_DIR=target/wsl2-linux cargo build -p agent-os-kerneld
 CARGO_TARGET_DIR=target/wsl2-linux cargo build -p agent-os-cli --bin agent-os
 ```
+
+The Agent-OS runner starts the standalone `agent-os-kerneld` binary next to the
+CLI binary. The benchmark process must therefore run from a build output where
+both binaries are present.
 
 Run one Agent-OS task:
 
@@ -168,11 +173,107 @@ python benchmarks/swe-bench-lite/private20_runner.py run-agent-os \
   --repo-cache /root/swebench-repo-cache \
   --output-root "$RUN_ROOT" \
   --agent-os-bin target/wsl2-linux/debug/agent-os \
-  --base-url "$LLM_BASE_URL" \
-  --model "$LLM_MODEL" \
-  --api-key-env LLM_API_KEY \
   --instance-id django__django-11099
 ```
+
+Run the deterministic random-5 Agent-OS smoke sample used for the 2026-06-30
+long-running kernel refactor gate:
+
+```bash
+python benchmarks/swe-bench-lite/private20_runner.py run-agent-os \
+  --repo-cache /root/swebench-repo-cache \
+  --output-root "$RUN_ROOT" \
+  --agent-os-bin target/wsl2-linux/debug/agent-os \
+  --instance-id sympy__sympy-15308 \
+  --instance-id sympy__sympy-24066 \
+  --instance-id mwaskom__seaborn-2848 \
+  --instance-id matplotlib__matplotlib-25332 \
+  --instance-id pydata__xarray-4094
+```
+
+This sample was selected by shuffling the 20-task manifest with random seed
+`20260630` and taking the first five tasks. The runner resolves `LLM_API_KEY`,
+`LLM_MODEL`, `LLM_BASE_URL`, and optional `LLM_API_STYLE` from the process
+environment first and then from the repository-root `.env` file. `--api-key-file`
+overrides the API key source, and `--base-url`, `--model`, or `--api-style`
+override their matching environment keys. If neither source supplies API style,
+the runner uses `anthropic-compatible`. Before claiming this gate, verify that
+`/root/swebench-repo-cache` contains bare clones for `sympy__sympy.git`,
+`mwaskom__seaborn.git`,
+`matplotlib__matplotlib.git`, and `pydata__xarray.git`.
+
+The Agent-OS runner isolates task execution from the runner virtual
+environment: it clears `VIRTUAL_ENV`, `PYTHONPATH`, and `PYTHONHOME`, sets
+`PYTHONNOUSERSITE=1`, prepends an Agent-OS benchmark `tool-bin` containing a
+`python` shim that executes `python3`, and then sets task `PYTHONPATH` to the
+checked-out workspace plus existing `lib` and `src` directories. This is part
+of the current contract because source-layout repositories such as Matplotlib
+must import the checked-out source tree, not a stale editable install from the
+runner environment, and model-generated `python` commands must resolve
+deterministically in the Linux benchmark environment.
+
+The Agent-OS benchmark prompt contract is intentionally biased toward
+finalization after useful evidence exists: after a patch, one focused
+validation command or a concrete environment blocker, and a diff check, the
+next model-visible action must be `submit_final` unless the latest validation
+proves the patch wrong. The CLI command uses
+`--runtime-timeout-seconds <task-timeout>` so long tasks are bounded by the
+benchmark timeout rather than the interactive chat default. Provider requests
+inside the runtime client also have a hard per-request timeout, so a stalled
+live endpoint fails through provider retry/failure handling instead of holding
+the benchmark worker indefinitely.
+
+Runtime loop control is also part of the benchmark contract. A task that spends
+the bounded pre-patch investigation budget on read/command tools without any
+`apply_patch` attempt receives soft runtime feedback while normal tools remain
+available for a short window. If investigation continues past the hard gate, the
+runtime narrows the tool surface to `apply_patch`, `submit_final`, and
+`accomplish_goal`. This prevents no-patch search loops from exhausting the
+benchmark step limit while still releasing the gate after any patch attempt so
+normal recovery can handle failed hunks.
+
+Observed 2026-07-01 gate evidence for this sample:
+
+- Final gated `.env` random-5 run after unit, integration, live e2e, WSL
+  rebuild, provider timeout, runtime requeue, and descriptor-example fixes:
+  `/root/agent-os-private20-runs/qwen36-agentos-random5-dotenv-20260701-172316/agent-os/summary.json`.
+- This evidence is the Agent-OS execution gate: the agent completed each task,
+  submitted a final answer, and wrote a non-empty patch. It is not an official
+  SWE-bench harness resolved score.
+- The batch completed all five sampled tasks with exit code 0 and non-empty
+  patches: `matplotlib__matplotlib-25332` 784 bytes,
+  `mwaskom__seaborn-2848` 699 bytes, `pydata__xarray-4094` 744 bytes,
+  `sympy__sympy-15308` 579 bytes, and `sympy__sympy-24066` 942 bytes.
+- Tool-call success for that final run was 116 completed out of 120 started
+  calls, or 96.67%. All four failed calls were recoverable `apply_patch`
+  context/hunk mismatches; every runtime job completed, every task submitted a
+  final answer, and no `RuntimeJobFailed` event was recorded.
+- The five-row predictions file for official scoring is
+  `/root/agent-os-private20-runs/qwen36-agentos-random5-dotenv-20260701-172316/agent-os-random5-predictions.jsonl`.
+  The official SWE-bench harness from `/root/agent-os-swebench-venv` was started
+  against the exact five ids. The first completed official case,
+  `mwaskom__seaborn-2848`, applied the patch cleanly but remained unresolved
+  because FAIL_TO_PASS
+  `tests/test_relational.py::TestScatterPlotter::test_hue_order` still failed.
+  The random-5 benchmark gate therefore did not pass. The full five-case
+  official summary did not complete in this run because the harness stopped
+  making Docker progress during later image preparation.
+- Post tool-system-refactor gated random-5 run after live e2e passed:
+  `/root/agent-os-private20-runs/qwen36-agentos-random5-tool-output-20260701-123243/agent-os/summary.json`.
+- The batch wrote 5 Agent-OS records. Exit codes were:
+  `matplotlib__matplotlib-25332=0`, `mwaskom__seaborn-2848=1`,
+  `pydata__xarray-4094=0`, `sympy__sympy-15308=1`, and
+  `sympy__sympy-24066=0`.
+- Patch sizes were 919, 1465, 643, 0, and 706 bytes respectively. The runner
+  wrote the benchmark summary successfully; the surrounding shell wrapper
+  exited 1 only because a post-run inline Python summarizer lost string quotes
+  after the benchmark had already completed.
+- Full all-zero random-5 run:
+  `/root/agent-os-private20-runs/qwen36-agentos-random5-allzero-20260701-3/agent-os/summary.json`.
+- The batch completed `matplotlib__matplotlib-25332`,
+  `mwaskom__seaborn-2848`, `pydata__xarray-4094`,
+  `sympy__sympy-15308`, and `sympy__sympy-24066` with exit code 0.
+- Every task wrote a non-empty patch file in the same invocation.
 
 Run one OpenCode task with the same prompt contract:
 
@@ -185,19 +286,29 @@ python benchmarks/swe-bench-lite/private20_runner.py run-opencode \
   --instance-id django__django-11099
 ```
 
-Convert generated patches into a SWE-bench predictions JSONL file:
+Score Agent-OS patches with the official SWE-bench harness:
 
 ```bash
-python benchmarks/swe-bench-lite/private20_runner.py predictions \
-  --patch-dir "$RUN_ROOT/agent-os/patches" \
-  --output "$RUN_ROOT/agent-os-predictions.jsonl" \
-  --model-name agent-os-qwen3.6-plus
+python benchmarks/swe-bench-lite/private20_runner.py evaluate-agent-os \
+  --output-root "$RUN_ROOT" \
+  --swebench-venv /root/agent-os-swebench-venv \
+  --model-name agent-os-qwen3.6-plus \
+  --run-id "agent-os-$(basename "$RUN_ROOT")"
 ```
 
-Score predictions with the official SWE-bench harness from the Linux
-environment. Commit only the manifest, runner, tests, and documentation; keep
-all `output-root`, `logs/`, harness reports, patch outputs, and result
-summaries out of Git.
+When `--instance-id` is omitted, `evaluate-agent-os` reads the exact evaluated
+case set from `$RUN_ROOT/agent-os/summary.json`, writes
+`$RUN_ROOT/agent-os-evaluation-predictions.jsonl`, invokes
+`/root/agent-os-swebench-venv/bin/python -m swebench.harness.run_evaluation`,
+and returns success only when the official report has the same submitted,
+completed, and resolved ids. Do not claim a benchmark passed from the
+Agent-OS process exit code alone.
+
+The lower-level `predictions` command remains available for explicit artifact
+generation, but benchmark gates should use `evaluate-agent-os` so the official
+resolved report is checked in the same step. Commit only the manifest, runner,
+tests, and documentation; keep all `output-root`, `logs/`, harness reports,
+patch outputs, and result summaries out of Git.
 
 ## 8. Forward-Only Notes
 

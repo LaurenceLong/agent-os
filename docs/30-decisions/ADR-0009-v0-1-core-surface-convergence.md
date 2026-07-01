@@ -16,19 +16,17 @@ That made the system look like a multi-agent framework with many named roles and
 
 ## Decision
 
-Agent-OS v0.1 will converge on a typed model-visible tool taxonomy.
+Agent-OS v0.2 will converge on a typed model-visible tool taxonomy.
 
 Host OS tools are exactly:
 
 ```text
 read_file
-write_file
-replace_text
-delete_file
+apply_patch
 run_command
 ```
 
-These are substrate tools. They expose the minimum file and process capabilities that a hosted operating system must provide to an agent. They do not include Agent-OS control-plane actions.
+These are substrate tools. They expose the minimum file and process capabilities that a hosted operating system must provide to an agent. `apply_patch` is the only workspace mutation tool; each call describes exactly one file operation: create, update, or delete. They do not include Agent-OS control-plane actions.
 
 Agent-OS control-plane tools are separate:
 
@@ -182,7 +180,7 @@ Negative:
 
 - existing workflow examples must be rewritten as distribution examples, not kernel requirements
 - exploratory convenience behavior must move behind `run_command`, context projection, or internal Agent-OS services
-- implementations need a `delete_file` tool to complete the converged filesystem CRUD set
+- implementations must not reintroduce standalone create, write, edit, or delete filesystem mutation tools
 - agent supervision requires more state than a simple spawn tool
 
 ## Supersedes

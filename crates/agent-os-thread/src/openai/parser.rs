@@ -44,19 +44,14 @@ pub(crate) fn parse_response(
                 .map(parse_tool_arguments)
                 .unwrap_or_else(|| json!({}));
 
-            if name == "submit_final" {
-                let submission = build_final_submission(&arguments, request);
-                actions.push(ModelAction::Final { submission });
-            } else {
-                let (tool_name, input, risk_level) = map_function_call(name, arguments, request);
-                let claim = evidence_claim_for_tool(&tool_name);
-                actions.push(ModelAction::ToolCall(ToolAction::new(
-                    tool_name,
-                    input,
-                    risk_level,
-                    Some(claim),
-                )));
-            }
+            let (tool_name, input, risk_level) = map_function_call(name, arguments, request);
+            let claim = evidence_claim_for_tool(&tool_name);
+            actions.push(ModelAction::ToolCall(ToolAction::new(
+                tool_name,
+                input,
+                risk_level,
+                Some(claim),
+            )));
         }
     }
 
@@ -120,19 +115,14 @@ pub(crate) fn parse_anthropic_response(
                     .and_then(Value::as_str)
                     .ok_or_else(|| AgentOsError::Validation("tool_use missing name".to_string()))?;
                 let input = block.get("input").cloned().unwrap_or_else(|| json!({}));
-                if name == "submit_final" {
-                    let submission = build_final_submission(&input, request);
-                    actions.push(ModelAction::Final { submission });
-                } else {
-                    let (tool_name, input, risk_level) = map_function_call(name, input, request);
-                    let claim = evidence_claim_for_tool(&tool_name);
-                    actions.push(ModelAction::ToolCall(ToolAction::new(
-                        tool_name,
-                        input,
-                        risk_level,
-                        Some(claim),
-                    )));
-                }
+                let (tool_name, input, risk_level) = map_function_call(name, input, request);
+                let claim = evidence_claim_for_tool(&tool_name);
+                actions.push(ModelAction::ToolCall(ToolAction::new(
+                    tool_name,
+                    input,
+                    risk_level,
+                    Some(claim),
+                )));
             }
             _ => {}
         }
@@ -212,9 +202,7 @@ fn inject_runtime_fields(
 fn evidence_claim_for_tool(tool_name: &str) -> String {
     match tool_name {
         "read_file" => "file contents were read from the workspace".to_string(),
-        "write_file" => "file was written to the workspace".to_string(),
-        "delete_file" => "file was deleted from the workspace".to_string(),
-        "replace_text" => "exact text replacement was applied to a workspace file".to_string(),
+        "apply_patch" => "workspace file patch was applied".to_string(),
         "run_command" => "command was executed and output captured".to_string(),
         "set_goal" => "agent goal was updated in Agent-OS work state".to_string(),
         "accomplish_goal" => "agent local goal was marked accomplished".to_string(),
@@ -231,63 +219,5 @@ fn evidence_claim_for_tool(tool_name: &str) -> String {
             "local MCP tool was executed through the kernel tool broker".to_string()
         }
         _ => "tool was executed through the kernel tool broker".to_string(),
-    }
-}
-
-fn build_final_submission(arguments: &Value, request: &ModelTurnRequest) -> FinalSubmission {
-    let summary = arguments
-        .get("summary")
-        .and_then(Value::as_str)
-        .unwrap_or("Task completed")
-        .to_string();
-    let tests_run = arguments
-        .get("tests_run")
-        .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default();
-    let known_risks = arguments
-        .get("known_risks")
-        .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let evidence_map: Vec<EvidenceMapEntry> = request
-        .context
-        .tool_results
-        .iter()
-        .filter(|r| !r.evidence_ids.is_empty())
-        .map(|r| EvidenceMapEntry {
-            claim: r
-                .evidence_claim
-                .clone()
-                .unwrap_or_else(|| format!("tool {} completed with evidence", r.tool_name)),
-            evidence_refs: r.evidence_ids.clone(),
-        })
-        .collect();
-
-    let changed_artifacts: Vec<String> = request
-        .context
-        .artifacts
-        .iter()
-        .map(|a| a.artifact_id.clone())
-        .collect();
-
-    FinalSubmission {
-        summary,
-        changed_artifacts,
-        evidence_map,
-        unverified_claims: Vec::new(),
-        known_risks,
-        tests_run,
-        tests_not_run: Vec::new(),
-        approvals: Vec::new(),
     }
 }

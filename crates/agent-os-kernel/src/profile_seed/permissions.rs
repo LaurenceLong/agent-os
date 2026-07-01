@@ -73,10 +73,8 @@ pub(super) fn core_permissions(now: &str) -> Vec<PermissionProfile> {
                     "agent:*",
                 ]),
                 allowed_tool_names: strings(&[
+                    "apply_patch",
                     "read_file",
-                    "write_file",
-                    "delete_file",
-                    "replace_text",
                     "run_command",
                     "accomplish_goal",
                     "update_checklist",

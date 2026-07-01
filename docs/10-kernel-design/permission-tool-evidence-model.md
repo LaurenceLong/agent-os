@@ -117,14 +117,17 @@ Core and dynamically imported model-visible tools MUST project descriptions and
 model input schemas from registered kernel `ToolDescriptor` records. Provider
 adapters may convert the neutral descriptor into provider-specific syntax, but
 they MUST NOT redefine core tool schemas in adapter-local static JSON.
+Every built-in model-visible tool owner MUST also provide at least one
+`ToolExample` in its descriptor. Examples include a description, model-visible
+parameters, and an expected result. Provider adapters expose these examples in
+the model-visible tool description instead of relying on separate prompt-only
+instructions.
 
 Host OS substrate tools are exactly:
 
 ```text
 read_file
-write_file
-replace_text
-delete_file
+apply_patch
 run_command
 ```
 
@@ -174,10 +177,22 @@ approve_permission
 deny_permission
 ```
 
+`read_file`, `load_skill`, and `read_skill_resource` expose `offset` and
+`limit` paging. `read_file` defaults to 200 lines and rejects limits above 1000.
+These tools return `total_lines`, `returned_lines`, `next_offset`,
+`truncated`, and `omitted_lines` so the model can continue reading without
+pulling large files into context.
+
 `load_skill` and `read_skill_resource` are ecosystem tools. `load_skill`
 returns the imported `SKILL.md` body for a named skill. `read_skill_resource`
 reads a skill-root-relative resource path and MUST reject absolute paths,
 parent-directory traversal, and canonical paths outside the skill root.
+
+`apply_patch` is the only Host OS workspace mutation tool. Each call MUST
+describe exactly one file operation. Update hunks use `@@`; changed lines use
+`-old` and `+new`, while unchanged context may be either plain lines or lines
+prefixed with one space. The parser treats plain non-marker lines inside update
+hunks as context and still rejects no-op hunks.
 
 Local stdio MCP tools are registered as dynamic model-visible tools named
 `mcp__server__tool`. Their `ToolDescriptor` comes from the kernel registry and
@@ -185,13 +200,15 @@ uses driver class `mcp`. MCP authorization is controlled by driver class and
 resource scope, especially `mcp:<server>:<tool>`, because the exact model tool
 names are discovered at runtime.
 
-`set_goal` and `agent_control` require `security_level <= 1` and explicit tool authority. S2+ agents MUST NOT gain these tools through permission grants. `request_permissions` remains available to lower-level child agents when their permission set allows it; it records a durable parent-directed request and does not execute the requested operation. `accomplish_goal` is visible to execution agents and marks the caller's local goal accomplished before final submission. `submit_final` is a model-visible lifecycle action, not a filesystem driver, and MUST remain the last tool call in a session. Privileged `agent_control` actions require explicit Supervisor permission and MUST NOT appear in normal WorkerAgent tool views.
+`set_goal` and `agent_control` require `security_level <= 1` and explicit tool authority. S2+ agents MUST NOT gain these tools through permission grants. `request_permissions` remains available to lower-level child agents when their permission set allows it; it records a durable parent-directed request and does not execute the requested operation. `accomplish_goal` is visible to execution agents and marks the caller's local goal accomplished before final submission. `submit_final` is a model-visible lifecycle action, not a filesystem driver, and MUST execute through the Tool Broker as the last tool call in a session. Privileged `agent_control` actions require explicit Supervisor permission and MUST NOT appear in normal WorkerAgent tool views.
 
 `wait_agent` is not a core tool. Agent progress is handled through status reads, output windows, lifecycle events, and `agent_control(action=set_hook)`.
 
 Tool Broker responsibilities:
 
 - normalize tool metadata
+- collect core built-in descriptors from the per-tool owner modules under the
+  kernel tool registry
 - project model tool schemas from registered `ToolDescriptor` records for core
   and dynamically imported tools
 - validate input schema
@@ -205,13 +222,24 @@ Tool Broker responsibilities:
 - check environment attachment and writable lease state where applicable
 - check budget admission
 - request approval when required
-- execute through driver
-- capture stdout, stderr, return code, and structured output
+- execute through the registered tool owner or dynamic MCP driver
+- enforce the 15 second foreground wait cap for every tool invocation
+- return `Running` with `tool_call_id` when a tool exceeds the foreground wait
+  cap while it continues in a background worker
+- capture bounded stdout, stderr, return code, and structured output
 - redact secrets
 - attach evidence
 - record audit event
 
 Agent Threads MUST NOT call tools directly.
+
+Tool outputs MUST be bounded at the tool layer. `apply_patch` returns operation,
+path, byte counts, hunk or replacement counts, hashes, and a small preview
+instead of full before/after file bodies. `run_command`, MCP raw results,
+communication payloads, evidence inline content, and agent output windows MUST
+apply explicit budgets before they enter model-visible context. Provider message
+formatters may still apply defensive truncation, but they are not the primary
+context safety boundary.
 
 ## 6.1 Agent Supervision Tool Semantics
 
@@ -226,6 +254,24 @@ thread_id: string | null
 idempotency_key: string
 payload: object
 ```
+
+`agent_control(action=output)` accepts `payload.cursor` and `payload.limit` to
+read a bounded provider-stream window for the target thread. When
+`payload.tool_call_id` is present, it returns the matching tool invocation plus
+any active background worker metadata for that call id. For process tools such
+as `run_command`, that response includes bounded rolling stdout/stderr previews,
+byte counts, and truncation flags so a supervisor can inspect compile or test
+progress before the command exits. This is not special to `agent_control` or
+`run_command`: every tool result with managed text fields is attached to the
+same tool-output manager. By default, a `tool_call_id` lookup returns
+`payload.new=200` lines after the supplied cursor. The caller may request
+`payload.head`, `payload.tail`, or `payload.new` line limits, or set
+`payload.full=true` with `payload.offset` and `payload.limit` for line paging
+over the complete spooled field. `payload.cursor` may be a byte offset or an
+object such as `{stdout: 1200, stderr: 40}`; `payload.new` returns output after
+that cursor and advances `next_cursor`, so polling does not need to resend
+output the supervisor has already seen. Hard byte caps still apply to every
+returned window.
 
 A started agent record includes:
 
@@ -348,6 +394,13 @@ Initial evidence types:
 | `external_reference` | web/API result with timestamp |
 
 Evidence MUST carry provenance and timestamp.
+
+Built-in tool descriptors declare whether a successful tool result should attach
+evidence. Workspace reads attach `source_ref`, patches attach `diff_ref`,
+commands attach `command_log`, control-plane state and communication tools attach
+`runtime_trace`, and permission requests attach `approval_record`.
+`record_evidence` creates the requested evidence directly and `submit_final`
+does not create a second self-referential evidence record.
 
 ## 9. Evidence Attachment
 

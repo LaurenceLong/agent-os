@@ -228,10 +228,8 @@ pub(super) fn assert_core_tool_mock_effects(
     );
     assert!(!workspace.join("delete.txt").exists());
     for expected in [
+        "apply_patch",
         "read_file",
-        "write_file",
-        "replace_text",
-        "delete_file",
         "run_command",
         "set_goal",
         "accomplish_goal",

@@ -85,6 +85,78 @@ impl Kernel {
         Ok(next)
     }
 
+    pub fn archive_thread(&self, thread_id: &str) -> AgentOsResult<ClientThread> {
+        let acb = self
+            .read_state()?
+            .threads
+            .get(thread_id)
+            .cloned()
+            .ok_or_else(|| AgentOsError::NotFound(format!("thread {thread_id}")))?;
+        let archived = ClientThread {
+            client_thread_id: acb.thread_id.clone(),
+            agent_thread_id: acb.thread_id.clone(),
+            task_id: Some(acb.task.task_id.clone()),
+            goal_id: Some(acb.task.goal_id.clone()),
+            title: acb.task.goal.clone(),
+            status: acb.status,
+            active_turn_id: acb.active_turn.turn_id.clone(),
+            archived: true,
+            updated_at: now_rfc3339(),
+        };
+        self.emit(
+            "ThreadArchived",
+            "thread",
+            &acb.thread_id,
+            Some(acb.agent_id),
+            Some(acb.task.task_id),
+            None,
+            Some(acb.task.goal_id),
+            &archived,
+        )?;
+        Ok(archived)
+    }
+
+    pub fn record_turn_input(
+        &self,
+        client: &ClientConnection,
+        client_thread_id: &str,
+        turn_id: &str,
+        kind: TurnInputKind,
+        input: String,
+    ) -> AgentOsResult<TurnInputRecord> {
+        let acb = self
+            .read_state()?
+            .threads
+            .get(client_thread_id)
+            .cloned()
+            .ok_or_else(|| AgentOsError::NotFound(format!("thread {client_thread_id}")))?;
+        if acb.active_turn.turn_id.as_deref() != Some(turn_id) {
+            return Err(AgentOsError::Validation(format!(
+                "turn {turn_id} is not active on thread {client_thread_id}"
+            )));
+        }
+        let record = TurnInputRecord {
+            input_id: new_id("turn_input_"),
+            client_thread_id: client_thread_id.to_string(),
+            turn_id: turn_id.to_string(),
+            submitted_by_client_id: client.client_id.clone(),
+            kind,
+            input,
+            created_at: now_rfc3339(),
+        };
+        self.emit(
+            "TurnInputRecorded",
+            "thread",
+            client_thread_id,
+            Some(acb.agent_id),
+            Some(acb.task.task_id),
+            None,
+            Some(acb.task.goal_id),
+            &record,
+        )?;
+        Ok(record)
+    }
+
     pub fn record_checkpoint(
         &self,
         thread_id: &str,
@@ -634,6 +706,10 @@ impl Kernel {
         }
         if next == ThreadStatus::Blocked && acb.active_turn.turn_id.is_some() {
             acb.active_turn.status = Some(TurnStatus::Blocked);
+            acb.active_turn.active_step_id = None;
+        }
+        if next == ThreadStatus::Interrupted && acb.active_turn.turn_id.is_some() {
+            acb.active_turn.status = Some(TurnStatus::Interrupted);
             acb.active_turn.active_step_id = None;
         }
         if matches!(

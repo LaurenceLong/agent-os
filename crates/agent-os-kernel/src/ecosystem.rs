@@ -2,6 +2,11 @@ use crate::schema::validate_json_schema;
 use crate::*;
 use agent_os_sys::*;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+use std::io::Write;
+use std::process::{Child, Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 impl Kernel {
     pub fn import_instruction_document(
@@ -198,6 +203,7 @@ pub fn mcp_tool_descriptor(
         risk_level: 3,
         input_schema: input_schema.clone(),
         model_input_schema: Some(input_schema),
+        examples: Vec::new(),
         output_schema,
         runtime_input_policy: ToolRuntimeInputPolicy {
             required_resource_scopes: vec![format!("mcp:{}:{}", server.name, tool_name)],
@@ -215,6 +221,182 @@ pub fn mcp_tool_descriptor(
         evidence_type: Some(EvidenceType::ExternalReference),
         created_at: now.to_string(),
     })
+}
+
+pub fn discover_mcp_tool_definitions(
+    server: &McpServerSpec,
+    source: EcosystemSource,
+) -> AgentOsResult<Vec<McpToolDefinition>> {
+    validate_mcp_server_spec(server)?;
+    let listed = mcp_list_tools(server)?;
+    let now = now_rfc3339();
+    let mut tools = Vec::new();
+    for item in listed {
+        let name = required_json_string(&item, "name", "MCP tool")?;
+        let description = item
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let input_schema = item
+            .get("inputSchema")
+            .or_else(|| item.get("input_schema"))
+            .cloned()
+            .unwrap_or_else(|| json!({"type": "object", "additionalProperties": true}));
+        let output_schema = mcp_output_schema();
+        let descriptor = mcp_tool_descriptor(
+            server,
+            &name,
+            &description,
+            input_schema.clone(),
+            output_schema.clone(),
+            &now,
+        )?;
+        tools.push(McpToolDefinition {
+            mcp_tool_id: stable_mcp_tool_id(&server.name, &name),
+            server_name: server.name.clone(),
+            tool_name: name.clone(),
+            model_tool_name: mcp_model_tool_name(&server.name, &name),
+            description,
+            input_schema,
+            output_schema,
+            source: source.clone(),
+            tool_descriptor: descriptor,
+            created_at: now.clone(),
+        });
+    }
+    Ok(tools)
+}
+
+fn mcp_list_tools(server: &McpServerSpec) -> AgentOsResult<Vec<Value>> {
+    let (program, args) = server
+        .command
+        .split_first()
+        .ok_or_else(|| AgentOsError::Validation("MCP command must not be empty".to_string()))?;
+    let mut child = Command::new(program)
+        .args(args)
+        .envs(server.environment.clone())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| AgentOsError::Validation(format!("spawn MCP server: {error}")))?;
+    {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| AgentOsError::Validation("MCP stdin unavailable".to_string()))?;
+        writeln!(stdin, "{}", json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"agent-os","version":ABI_VERSION}}}))
+            .and_then(|_| writeln!(stdin, "{}", json!({"jsonrpc":"2.0","method":"notifications/initialized","params":{}})))
+            .and_then(|_| writeln!(stdin, "{}", json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})))
+            .map_err(|error| AgentOsError::Validation(format!("write MCP tools/list: {error}")))?;
+    }
+    let output = wait_mcp_child(child, server.timeout_ms, "tools/list")?;
+    if !output.status.success() {
+        return Err(AgentOsError::Validation(format!(
+            "MCP tools/list exited with status {}: {}",
+            output.status,
+            bounded_stderr(&output.stderr)
+        )));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let result = parse_json_rpc_result(&stdout, 2)?;
+    result
+        .get("tools")
+        .and_then(Value::as_array)
+        .cloned()
+        .ok_or_else(|| {
+            AgentOsError::Validation("MCP tools/list response missing tools".to_string())
+        })
+}
+
+fn wait_mcp_child(mut child: Child, timeout_ms: u64, operation: &str) -> AgentOsResult<Output> {
+    let timeout = Duration::from_millis(timeout_ms);
+    let started = Instant::now();
+    loop {
+        if child
+            .try_wait()
+            .map_err(|error| {
+                AgentOsError::Validation(format!("wait for MCP {operation}: {error}"))
+            })?
+            .is_some()
+        {
+            return child.wait_with_output().map_err(|error| {
+                AgentOsError::Validation(format!("wait for MCP {operation}: {error}"))
+            });
+        }
+        if started.elapsed() >= timeout {
+            let _ = child.kill();
+            let output = child.wait_with_output().map_err(|error| {
+                AgentOsError::Validation(format!("wait for timed-out MCP {operation}: {error}"))
+            })?;
+            return Err(AgentOsError::Validation(format!(
+                "MCP {operation} timed out after {timeout_ms}ms: {}",
+                bounded_stderr(&output.stderr)
+            )));
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn parse_json_rpc_result(stdout: &str, id: u64) -> AgentOsResult<Value> {
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let value: Value = serde_json::from_str(trimmed)?;
+        if value.get("id").and_then(Value::as_u64) == Some(id) {
+            return value.get("result").cloned().ok_or_else(|| {
+                AgentOsError::Validation("JSON-RPC response missing result".to_string())
+            });
+        }
+    }
+    Err(AgentOsError::Validation(
+        "JSON-RPC response id was not found".to_string(),
+    ))
+}
+
+fn mcp_output_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["tool", "status", "input", "driver_class", "server_name", "tool_name", "raw_result", "stderr"],
+        "properties": {
+            "tool": {"type": "string"},
+            "status": {"enum": ["ok"]},
+            "input": {"type": "object"},
+            "driver_class": {"type": "string"},
+            "server_name": {"type": "string"},
+            "tool_name": {"type": "string"},
+            "raw_result": {"type": "object"},
+            "stderr": {"type": "string"}
+        },
+        "additionalProperties": false
+    })
+}
+
+fn required_json_string(value: &Value, field: &str, label: &str) -> AgentOsResult<String> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| AgentOsError::Validation(format!("{label} missing string field {field}")))
+}
+
+fn stable_mcp_tool_id(server_name: &str, tool_name: &str) -> String {
+    let digest = Sha256::digest(format!("{server_name}\n{tool_name}").as_bytes());
+    let hash: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!("mcptool_{}", &hash[..16])
+}
+
+fn bounded_stderr(stderr: &[u8]) -> String {
+    const LIMIT: usize = 4096;
+    let text = String::from_utf8_lossy(stderr);
+    let mut bounded: String = text.chars().take(LIMIT).collect();
+    if text.chars().count() > LIMIT {
+        bounded.push_str("...");
+    }
+    bounded
 }
 
 fn validate_skill_definition(skill: &SkillDefinition) -> AgentOsResult<()> {
@@ -289,4 +471,65 @@ fn validate_imported_agent_profile(profile: &ImportedAgentProfile) -> AgentOsRes
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn mcp_discovery_rejects_empty_command_before_spawn() {
+        let server = McpServerSpec {
+            server_id: "mcp_empty".to_string(),
+            name: "empty".to_string(),
+            transport: McpTransportKind::LocalStdio,
+            command: Vec::new(),
+            environment: BTreeMap::new(),
+            enabled: true,
+            timeout_ms: 1000,
+            source: source(),
+            created_at: now_rfc3339(),
+        };
+
+        let err = discover_mcp_tool_definitions(&server, source()).unwrap_err();
+
+        assert!(err.to_string().contains("command"));
+    }
+
+    #[test]
+    fn mcp_discovery_reports_missing_tools_result() {
+        let server = McpServerSpec {
+            server_id: "mcp_invalid".to_string(),
+            name: "invalid".to_string(),
+            transport: McpTransportKind::LocalStdio,
+            command: vec![
+                std::env::current_exe()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string(),
+                "--ignored-by-test-binary".to_string(),
+            ],
+            environment: BTreeMap::new(),
+            enabled: true,
+            timeout_ms: 1000,
+            source: source(),
+            created_at: now_rfc3339(),
+        };
+
+        let err = discover_mcp_tool_definitions(&server, source()).unwrap_err();
+
+        assert!(
+            err.to_string().contains("JSON-RPC response")
+                || err.to_string().contains("exited with status")
+        );
+    }
+
+    fn source() -> EcosystemSource {
+        EcosystemSource {
+            source_kind: EcosystemSourceKind::AgentOs,
+            source_scope: EcosystemSourceScope::Config,
+            source_path: "agent-os.json".to_string(),
+        }
+    }
 }

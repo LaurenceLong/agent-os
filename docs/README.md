@@ -90,7 +90,7 @@ Syscall: A typed request from an Agent Thread to the kernel or to kernel-mediate
 
 Tool Broker: The only path from Agent Threads to external tools, shell commands, MCP servers, APIs, browsers, or file mutation.
 
-Model-Visible Tool: The function surface shown to a model inside a turn. v0.1 tools are grouped by domain: Host OS (`read_file`, `write_file`, `replace_text`, `delete_file`, `run_command`), work state, communication, agent supervision, privileged administration, and session lifecycle (`submit_final`).
+Model-Visible Tool: The function surface shown to a model inside a turn. v0.2 tools are grouped by domain: Host OS (`read_file`, `apply_patch`, `run_command`), work state, communication, agent supervision, privileged administration, and session lifecycle (`submit_final`).
 
 Agent Hook: A kernel-scheduled control-plane action, such as periodic progress-report prompt injection into a child agent with the response routed back to Supervisor.
 

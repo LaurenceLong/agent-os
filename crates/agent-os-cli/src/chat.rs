@@ -1,53 +1,46 @@
 use crate::args::ChatOptions;
 use crate::provider_config::GlobalProviderConfig;
-use crate::support::{io_result, open_kernel, write_task_bundle_if_requested};
-use agent_os_kernel::{
-    Kernel, RegisterGoalInput, SpawnAgentInput, SpawnTaskInput, UpdateTaskInput,
+use crate::support::{
+    ensure_safe_relative_workspace_path, io_result, write_task_bundle_from_app_response,
+    StdioKerneldAppClient, StdioKerneldConfig,
 };
 use agent_os_sys::*;
-use agent_os_thread::{
-    expand_command_template, import_workspace_ecosystem, OpenAiModelClient, RuntimeConfig,
-    RuntimeRunReport, ThreadRuntime,
-};
 use serde_json::{json, Value};
 use std::fs;
 use std::io::{self, BufRead, Write};
+use std::time::{Duration, Instant};
+
+const CHAT_RUNTIME_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 pub(crate) fn run_chat(options: &ChatOptions) -> AgentOsResult<Value> {
+    if let Some(bundle_output) = &options.bundle_output {
+        ensure_safe_relative_workspace_path(bundle_output, "--bundle-output")?;
+    }
     let provider_config = GlobalProviderConfig::load()?;
     let provider = provider_config.resolve(options.provider.as_deref())?;
     let model = provider.model.clone();
-
-    let mut client_builder = OpenAiModelClient::new(provider.api_key.clone(), model.clone())
-        .with_api_base(provider.base_url.clone())
-        .with_api_style(provider.api_style);
-    if let Some(max_tokens) = options.max_tokens {
-        client_builder = client_builder.with_max_tokens(max_tokens);
-    }
-    if let Some(temp) = options.temperature {
-        client_builder = client_builder.with_temperature(temp);
-    }
 
     io_result(
         fs::create_dir_all(&options.workspace),
         "create workspace directory",
     )?;
 
-    let kernel = open_kernel(&options.state_db)?;
-    kernel.register_model_alias(
-        &model,
-        "external",
-        &model,
-        json!({
-            "streaming": true,
-            "tool_calling": true,
-            "reasoning": true,
-            "image_input": false,
-            "structured_output": true
-        }),
-        "prov_default",
+    let state_db = options
+        .state_db
+        .clone()
+        .unwrap_or_else(|| options.workspace.join(".agent-os").join("state.sqlite"));
+    let mut config = StdioKerneldConfig::state_db(state_db);
+    config.provider = Some(provider.name.clone());
+    config.max_steps = Some(options.max_steps);
+    config.max_tokens = options.max_tokens;
+    config.temperature = options.temperature.map(|value| value.to_string());
+    let app_client = StdioKerneldAppClient::open(&config)?;
+    let mut session = ChatSession::new_for_app_client(
+        Box::new(app_client),
+        options.workspace.clone(),
+        provider.name,
+        model,
     )?;
-    let mut session = ChatSession::new(kernel, options.workspace.clone(), provider.name, model);
 
     session.print_welcome();
 
@@ -55,7 +48,7 @@ pub(crate) fn run_chat(options: &ChatOptions) -> AgentOsResult<Value> {
     if let Some(initial_task) = &initial_task {
         let _ = writeln!(io::stdout(), "\n> {initial_task}");
         let _ = io::stdout().flush();
-        session.process_task(initial_task, client_builder.clone(), options)?;
+        session.process_task(initial_task, options)?;
         if exits_after_initial_task(options) {
             session.print_farewell();
             return Ok(session.summary());
@@ -87,7 +80,7 @@ pub(crate) fn run_chat(options: &ChatOptions) -> AgentOsResult<Value> {
             }
             _ => {}
         }
-        match session.process_task(trimmed, client_builder.clone(), options) {
+        match session.process_task(trimmed, options) {
             Ok(()) => {}
             Err(AgentOsError::Validation(msg)) if msg.contains("max_steps") => {
                 let _ = writeln!(
@@ -104,6 +97,16 @@ pub(crate) fn run_chat(options: &ChatOptions) -> AgentOsResult<Value> {
 
     session.print_farewell();
     Ok(session.summary())
+}
+
+trait ChatAppClient {
+    fn request(&mut self, request: AppRequest) -> AgentOsResult<Value>;
+}
+
+impl ChatAppClient for StdioKerneldAppClient {
+    fn request(&mut self, request: AppRequest) -> AgentOsResult<Value> {
+        StdioKerneldAppClient::request(self, request)
+    }
 }
 
 fn exits_after_initial_task(options: &ChatOptions) -> bool {
@@ -123,8 +126,16 @@ fn resolve_initial_task(options: &ChatOptions) -> AgentOsResult<Option<String>> 
     Ok(Some(task))
 }
 
+fn required_json_string(object: &Value, field: &str) -> AgentOsResult<String> {
+    object
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| AgentOsError::Validation(format!("app-server response omitted {field}")))
+}
+
 struct ChatSession {
-    kernel: Kernel,
+    app_client: Box<dyn ChatAppClient>,
     workspace: std::path::PathBuf,
     provider: String,
     model: String,
@@ -132,12 +143,19 @@ struct ChatSession {
     total_events: usize,
     last_thread_id: Option<String>,
     last_task_id: Option<String>,
+    last_bundle_path: Option<String>,
 }
 
 impl ChatSession {
-    fn new(kernel: Kernel, workspace: std::path::PathBuf, provider: String, model: String) -> Self {
-        Self {
-            kernel,
+    fn new_for_app_client(
+        mut app_client: Box<dyn ChatAppClient>,
+        workspace: std::path::PathBuf,
+        provider: String,
+        model: String,
+    ) -> AgentOsResult<Self> {
+        app_client.request(AppRequest::Initialize)?;
+        Ok(Self {
+            app_client,
             workspace,
             provider,
             model,
@@ -145,125 +163,95 @@ impl ChatSession {
             total_events: 0,
             last_thread_id: None,
             last_task_id: None,
-        }
+            last_bundle_path: None,
+        })
     }
 
-    fn process_task(
-        &mut self,
-        task_text: &str,
-        client: OpenAiModelClient,
-        options: &ChatOptions,
-    ) -> AgentOsResult<()> {
+    fn process_task(&mut self, task_text: &str, options: &ChatOptions) -> AgentOsResult<()> {
+        if let Some(bundle_output) = &options.bundle_output {
+            ensure_safe_relative_workspace_path(bundle_output, "--bundle-output")?;
+        }
         self.task_count += 1;
         let task_text = self.resolve_task_text(task_text)?;
-        let goal = self.kernel.register_goal(RegisterGoalInput {
-            namespace: "chat".to_string(),
-            created_by: "agent-os-cli".to_string(),
-            title: task_text.clone(),
-            description: task_text.clone(),
-            acceptance_criteria: vec!["agent completed the task with evidence".to_string()],
-            constraints: Vec::new(),
-            risk_level: 4,
-            deadline: None,
-        })?;
-        let task = self.kernel.spawn_task(SpawnTaskInput {
-            goal_id: goal.goal_id.clone(),
-            parent_task_id: None,
-            title: task_text.to_string(),
-            description: task_text.to_string(),
-            depends_on: Vec::new(),
-            required_artifact_types: vec![ArtifactType::Patch],
-            required_evidence_types: vec![EvidenceType::DiffRef],
-            priority: 10,
-            risk_level: 4,
-        })?;
-        let agent = self.kernel.spawn_agent(SpawnAgentInput {
-            task_id: task.task_id.clone(),
-            role_profile_id: "role_worker".to_string(),
-            owner: "agent-os-cli".to_string(),
+        let started = self.app_client.request(AppRequest::ThreadStart {
             goal: task_text.clone(),
-            success_criteria: vec!["task is complete and verified".to_string()],
-            failure_criteria: Vec::new(),
-            parent_thread_id: None,
-            workspace_roots: vec![self.workspace.to_string_lossy().to_string()],
+            workspace: Some(self.workspace.to_string_lossy().to_string()),
         })?;
-        self.kernel.update_task(UpdateTaskInput {
-            task_id: task.task_id.clone(),
-            status: Some(TaskStatus::Running),
-            blocked_reason: None,
-            owner_agent_id: Some(agent.agent_id.clone()),
-            title: None,
-            description: None,
-            checklist: None,
+        let thread_id = required_json_string(&started["thread"], "client_thread_id")?;
+        let task_id = required_json_string(&started["thread"], "task_id")?;
+        let turn = self.app_client.request(AppRequest::TurnStart {
+            client_thread_id: thread_id.clone(),
+            input: task_text,
         })?;
+        let runtime_job_id = required_json_string(&turn["runtime_job"], "runtime_job_id")?;
 
-        self.last_thread_id = Some(agent.thread_id.clone());
-        self.last_task_id = Some(task.task_id.clone());
+        self.last_thread_id = Some(thread_id.clone());
+        self.last_task_id = Some(task_id);
 
-        let max_steps = options.max_steps;
-        let mut runtime = ThreadRuntime::new(self.kernel.clone(), agent.thread_id.clone(), client);
-        let report = runtime.run_to_completion(RuntimeConfig {
-            workspace_root: self.workspace.clone(),
-            attach_mode: AttachMode::WorkspaceWrite,
-            max_steps,
-            requested_model_alias: Some(self.model.clone()),
-            tool_risk_ceiling: 4,
-            auto_commit_patch_artifacts: true,
-            fail_on_process_nonzero: false,
-        })?;
-
-        self.print_report(&report);
-
-        let bundle_path = write_task_bundle_if_requested(
-            &self.kernel,
-            &task.task_id,
-            &self.workspace,
-            &options.bundle_output,
+        let thread = wait_for_runtime_job(
+            &mut *self.app_client,
+            &thread_id,
+            &runtime_job_id,
+            Duration::from_secs(options.runtime_timeout_seconds),
         )?;
-        if let Some(path) = bundle_path {
-            let _ = writeln!(io::stdout(), "  Bundle: {path}");
+        self.print_projection_report(&thread);
+        self.total_events += thread["timeline"]
+            .as_array()
+            .map(Vec::len)
+            .unwrap_or_default();
+        if options.bundle_output.is_some() {
+            let exported = self.app_client.request(AppRequest::TaskBundleExport {
+                client_thread_id: thread_id,
+            })?;
+            self.last_bundle_path = write_task_bundle_from_app_response(
+                &self.workspace,
+                &options.bundle_output,
+                &exported["bundle"],
+            )?;
         }
-
-        let events = self.kernel.events()?.len();
-        self.total_events = events;
         Ok(())
     }
 
     fn resolve_task_text(&self, task_text: &str) -> AgentOsResult<String> {
-        let Some(invocation) = parse_command_invocation(task_text) else {
-            return Ok(task_text.to_string());
-        };
-        import_workspace_ecosystem(&self.kernel, &self.workspace)?;
-        let state = self.kernel.state_snapshot()?;
-        let command = state
-            .command_definitions
-            .get(invocation.name)
-            .ok_or_else(|| AgentOsError::NotFound(format!("command /{}", invocation.name)))?;
-        Ok(expand_command_template(
-            &command.template,
-            &invocation.args,
-            invocation.raw_arguments,
-        ))
+        if is_command_invocation(task_text) {
+            return Err(AgentOsError::Validation(
+                "workspace command expansion is not supported by chat app-server projection path"
+                    .to_string(),
+            ));
+        }
+        Ok(task_text.to_string())
     }
 
-    fn print_report(&self, report: &RuntimeRunReport) {
+    fn print_projection_report(&self, thread: &Value) {
+        let tool_results = tool_result_values_from_timeline(&thread["timeline"]);
         let _ = writeln!(io::stdout());
-        for result in &report.tool_results {
-            let icon = match result.status {
-                ToolCallStatus::Completed => "[ok]",
-                ToolCallStatus::Failed => "[fail]",
+        for result in &tool_results {
+            let icon = match result["status"].as_str() {
+                Some("Completed") | Some("completed") => "[ok]",
+                Some("Failed") | Some("failed") => "[fail]",
                 _ => "[...]",
             };
-            let detail = format_tool_summary(result);
+            let detail = format_tool_summary_value(result);
             let _ = writeln!(io::stdout(), "  {icon} {}", detail);
         }
-        if report.final_submitted {
+        if thread["runtime_jobs"]
+            .as_array()
+            .is_some_and(|jobs| jobs.iter().any(|job| job["status"] == "completed"))
+        {
+            let artifact_count = thread["artifacts"]
+                .as_array()
+                .map(Vec::len)
+                .unwrap_or_default();
+            let event_count = thread["timeline"]
+                .as_array()
+                .map(Vec::len)
+                .unwrap_or_default();
             let _ = writeln!(
                 io::stdout(),
                 "\n  Done — {} tool call(s), {} artifact(s), {} event(s)",
-                report.tool_results.len(),
-                report.artifacts.len(),
-                report.events,
+                tool_results.len(),
+                artifact_count,
+                event_count,
             );
         }
     }
@@ -309,41 +297,98 @@ impl ChatSession {
             "total_events": self.total_events,
             "last_thread_id": self.last_thread_id,
             "last_task_id": self.last_task_id,
+            "last_bundle_path": self.last_bundle_path,
             "provider": self.provider,
             "model": self.model,
         })
     }
 }
 
-struct CommandInvocation<'a> {
-    name: &'a str,
-    raw_arguments: &'a str,
-    args: Vec<String>,
+fn wait_for_runtime_job(
+    app_client: &mut dyn ChatAppClient,
+    thread_id: &str,
+    runtime_job_id: &str,
+    timeout: Duration,
+) -> AgentOsResult<Value> {
+    let started_at = Instant::now();
+    loop {
+        let thread = app_client.request(AppRequest::ThreadRead {
+            client_thread_id: thread_id.to_string(),
+        })?;
+        let job = runtime_job_by_id(&thread, runtime_job_id)?;
+        match job["status"].as_str() {
+            Some("completed") => return Ok(thread),
+            Some("failed") => {
+                return Err(AgentOsError::Validation(format!(
+                    "runtime job {runtime_job_id} failed: {}",
+                    job["last_error"].as_str().unwrap_or("unknown error")
+                )))
+            }
+            Some("interrupted" | "cancelled") => {
+                return Err(AgentOsError::InvalidTransition(format!(
+                    "runtime job {runtime_job_id} ended as {}",
+                    job["status"].as_str().unwrap_or("unknown")
+                )))
+            }
+            Some("queued" | "running") => {}
+            Some(status) => {
+                return Err(AgentOsError::Validation(format!(
+                    "runtime job {runtime_job_id} has unknown status {status}"
+                )))
+            }
+            None => {
+                return Err(AgentOsError::Validation(format!(
+                    "runtime job {runtime_job_id} omitted status"
+                )))
+            }
+        }
+        let elapsed = started_at.elapsed();
+        if elapsed >= timeout {
+            break;
+        }
+        std::thread::sleep(CHAT_RUNTIME_POLL_INTERVAL.min(timeout - elapsed));
+    }
+    Err(AgentOsError::Validation(format!(
+        "runtime job {runtime_job_id} did not complete before chat timeout"
+    )))
 }
 
-fn parse_command_invocation(input: &str) -> Option<CommandInvocation<'_>> {
+fn runtime_job_by_id<'a>(thread: &'a Value, runtime_job_id: &str) -> AgentOsResult<&'a Value> {
+    thread["runtime_jobs"]
+        .as_array()
+        .and_then(|jobs| {
+            jobs.iter()
+                .find(|job| job["runtime_job_id"].as_str() == Some(runtime_job_id))
+        })
+        .ok_or_else(|| AgentOsError::NotFound(format!("runtime job {runtime_job_id}")))
+}
+
+fn tool_result_values_from_timeline(timeline: &Value) -> Vec<Value> {
+    timeline
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter(|item| item["item_type"].as_str() == Some("ToolUpdated"))
+                .map(|item| item["payload"].clone())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn is_command_invocation(input: &str) -> bool {
     let input = input.trim();
-    let rest = input.strip_prefix('/')?;
-    if rest.is_empty() {
-        return None;
-    }
-    let (name, raw_arguments) = rest
+    let Some(rest) = input.strip_prefix('/') else {
+        return false;
+    };
+    let (name, _) = rest
         .split_once(char::is_whitespace)
         .map(|(name, args)| (name, args.trim()))
         .unwrap_or((rest, ""));
-    if name.is_empty() {
-        return None;
-    }
-    Some(CommandInvocation {
-        name,
-        raw_arguments,
-        args: raw_arguments
-            .split_whitespace()
-            .map(str::to_string)
-            .collect(),
-    })
+    !name.is_empty()
 }
 
+#[cfg(test)]
 fn format_tool_summary(result: &agent_os_thread::ToolExecutionRecord) -> String {
     let name = friendly_tool_name(&result.tool_name);
     match result.tool_name.as_str() {
@@ -356,39 +401,21 @@ fn format_tool_summary(result: &agent_os_thread::ToolExecutionRecord) -> String 
                 .unwrap_or("?");
             format!("{name} {path}")
         }
-        "write_file" => {
+        "apply_patch" => {
             let path = result
                 .output
                 .as_ref()
-                .and_then(|o| o.get("written_path"))
+                .and_then(|o| o.get("path"))
                 .or_else(|| result.output.as_ref().and_then(|o| o.get("path")))
                 .and_then(Value::as_str)
                 .unwrap_or("?");
-            format!("{name} {path}")
-        }
-        "replace_text" => {
-            let path = result
+            let operation = result
                 .output
                 .as_ref()
-                .and_then(|o| o.get("changed_path"))
+                .and_then(|o| o.get("operation"))
                 .and_then(Value::as_str)
-                .unwrap_or("?");
-            let count = result
-                .output
-                .as_ref()
-                .and_then(|o| o.get("replacements"))
-                .and_then(Value::as_i64)
-                .unwrap_or(1);
-            format!("{name} {path} ({count} replacement(s))")
-        }
-        "delete_file" => {
-            let path = result
-                .output
-                .as_ref()
-                .and_then(|o| o.get("deleted_path"))
-                .and_then(Value::as_str)
-                .unwrap_or("?");
-            format!("{name} {path}")
+                .unwrap_or("patch");
+            format!("{name} {operation} {path}")
         }
         "run_command" => {
             let exit = result
@@ -410,12 +437,32 @@ fn format_tool_summary(result: &agent_os_thread::ToolExecutionRecord) -> String 
     }
 }
 
+fn format_tool_summary_value(result: &Value) -> String {
+    let tool_name = result["tool_name"].as_str().unwrap_or("?");
+    let name = friendly_tool_name(tool_name);
+    match tool_name {
+        "read_file" => {
+            let path = result["output"]["path"].as_str().unwrap_or("?");
+            format!("{name} {path}")
+        }
+        "apply_patch" => {
+            let path = result["output"]["path"].as_str().unwrap_or("?");
+            let operation = result["output"]["operation"].as_str().unwrap_or("patch");
+            format!("{name} {operation} {path}")
+        }
+        "run_command" => {
+            let exit = result["output"]["exit_code"].as_i64().unwrap_or(-1);
+            let program = result["output"]["input"]["program"].as_str().unwrap_or("?");
+            format!("{name} {program} (exit {exit})")
+        }
+        _ => name.to_string(),
+    }
+}
+
 fn friendly_tool_name(tool_name: &str) -> &str {
     match tool_name {
         "read_file" => "read",
-        "write_file" => "write",
-        "replace_text" => "edit",
-        "delete_file" => "delete",
+        "apply_patch" => "patch",
         "run_command" => "run",
         _ => tool_name,
     }

@@ -2,7 +2,7 @@
 
 Status: foundation
 
-Last updated: 2026-06-25
+Last updated: 2026-07-01
 
 ## 0. Core Thesis
 
@@ -76,8 +76,7 @@ Explorer: reads code, docs, logs, and current state
 Researcher: investigates external sources and dependency background
 Coder: creates or modifies code
 Tester: runs tests, reproduces issues, and analyzes failures
-Reviewer: independently reviews diffs, design, and risks
-Verifier: verifies evidence with tools, tests, builds, and benchmarks
+Reviewer: independently reviews diffs, design, risks, and verifies evidence with tools
 Reporter: summarizes evidence and produces final delivery
 ```
 
@@ -117,7 +116,7 @@ Parallelism must therefore be bound to dependency management, artifact managemen
 
 More agents in parallel is not automatically better. Without a dependency graph and merge mechanism, parallelism becomes a token sink.
 
-## 4. Checks and Balances: Not Debate, but the Producer-Reviewer-Verifier Loop
+## 4. Checks and Balances: Not Debate, but the Producer-Reviewer Loop
 
 Debate is one of the most overvalued mechanisms in agent collaboration.
 
@@ -134,8 +133,7 @@ A stronger mechanism is the checks-and-balances loop:
 
 ```text
 Producer creates an artifact.
-Reviewer independently reviews it.
-Verifier verifies it with tools.
+Reviewer independently reviews it and verifies evidence with tools.
 Supervisor arbitrates based on evidence.
 ```
 
@@ -144,8 +142,7 @@ In software engineering:
 ```text
 Coder writes a patch.
 Tester runs tests.
-Reviewer inspects the diff.
-Verifier checks logs, builds, tests, and benchmarks.
+Reviewer inspects the diff and checks logs, builds, tests, and benchmarks.
 Supervisor decides whether acceptance criteria are satisfied.
 ```
 
@@ -157,7 +154,7 @@ Paper Agent checks the literature.
 Implementation Agent implements the experiment.
 Experiment Agent runs the experiment.
 Analysis Agent analyzes the result.
-Reviewer Agent checks whether conclusions are supported by data.
+Reviewer Agent checks whether conclusions are supported by data and tool evidence.
 ```
 
 Core rules:
@@ -165,7 +162,7 @@ Core rules:
 ```text
 The producer cannot be the sole acceptor of its own artifact.
 The reviewer should be read-only by default.
-The verifier should prefer tools over natural-language judgment.
+The reviewer should prefer tools over natural-language judgment when evidence can be checked.
 Conflicting conclusions enter the conflict resolver.
 The final answer must be evidence-first.
 ```
@@ -284,11 +281,10 @@ A usable agent collaboration system needs this minimum loop:
 6. Execute Tools
 7. Submit Artifacts
 8. Record Evidence
-9. Review Independently
-10. Verify with Tools
-11. Resolve Conflicts
-12. Produce Final Answer
-13. Update Memory
+9. Review Independently with Tool Verification
+10. Resolve Conflicts
+11. Produce Final Answer
+12. Update Memory
 ```
 
 If any part is missing, the system degenerates:
@@ -297,7 +293,7 @@ If any part is missing, the system degenerates:
 no acceptance criteria -> no way to know when work is complete
 no task DAG -> parallel work tramples itself
 no evidence -> conclusions are not auditable
-no review -> errors flow directly into final output
+no evidence-backed review -> errors flow directly into final output
 no memory -> every task starts from zero
 no permissions -> agents can easily lose control
 ```
@@ -489,7 +485,6 @@ Worker Agents
   - Coder
   - Tester
   - Reviewer
-  - Verifier
 
 Runtime Services
   - Context Manager

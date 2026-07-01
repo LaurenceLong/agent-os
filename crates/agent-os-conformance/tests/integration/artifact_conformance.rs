@@ -245,7 +245,7 @@ fn submit_final_lifecycle_tool_records_final_submission() {
             &supervisor.agent_id,
             &fx.task.task_id,
             &supervisor.session_id,
-            supervisor_cap.capability_id,
+            supervisor_cap.capability_id.clone(),
             4,
             ToolInvokeInput {
                 tool_name: "agent_control".to_string(),
@@ -414,13 +414,12 @@ fn workspace_and_process_tools_execute_through_broker_and_attach_evidence() {
             cap.capability_id.clone(),
             4,
             ToolInvokeInput {
-                tool_name: "write_file".to_string(),
+                tool_name: "apply_patch".to_string(),
                 input: json!({
                     "workspace_root": workspace.to_string_lossy(),
-                    "path": "result.md",
-                    "content": "hello"
+                    "patch": "*** Begin Patch\n*** Add File: result.md\n+hello\n*** End Patch\n"
                 }),
-                evidence_claim: Some("workspace file was written".to_string()),
+                evidence_claim: Some("workspace file was created through apply_patch".to_string()),
             },
         )
         .unwrap();
@@ -461,13 +460,12 @@ fn workspace_and_process_tools_execute_through_broker_and_attach_evidence() {
             cap.capability_id.clone(),
             4,
             ToolInvokeInput {
-                tool_name: "write_file".to_string(),
+                tool_name: "apply_patch".to_string(),
                 input: json!({
                     "workspace_root": workspace.to_string_lossy(),
-                    "path": "result.md",
-                    "content": "hello"
+                    "patch": "*** Begin Patch\n*** Add File: result.md\n+hello\n*** End Patch\n"
                 }),
-                evidence_claim: Some("workspace file was written".to_string()),
+                evidence_claim: Some("workspace file was created through apply_patch".to_string()),
             },
         )
         .unwrap();
@@ -485,7 +483,7 @@ fn workspace_and_process_tools_execute_through_broker_and_attach_evidence() {
     );
     assert_eq!(
         std::fs::read_to_string(workspace.join("result.md")).unwrap(),
-        "hello"
+        "hello\n"
     );
 
     let read = fx
@@ -513,7 +511,7 @@ fn workspace_and_process_tools_execute_through_broker_and_attach_evidence() {
             .as_ref()
             .and_then(|output| output.get("content"))
             .and_then(|value| value.as_str()),
-        Some("hello")
+        Some("hello\n")
     );
 
     let replace = fx
@@ -525,14 +523,12 @@ fn workspace_and_process_tools_execute_through_broker_and_attach_evidence() {
             cap.capability_id.clone(),
             4,
             ToolInvokeInput {
-                tool_name: "replace_text".to_string(),
+                tool_name: "apply_patch".to_string(),
                 input: json!({
                     "workspace_root": workspace.to_string_lossy(),
-                    "path": "result.md",
-                    "old": "hello",
-                    "new": "hello from replace"
+                    "patch": "*** Begin Patch\n*** Update File: result.md\n@@\n-hello\n+hello from replace\n*** End Patch\n"
                 }),
-                evidence_claim: Some("workspace file was edited".to_string()),
+                evidence_claim: Some("workspace file was updated through apply_patch".to_string()),
             },
         )
         .unwrap();
@@ -540,7 +536,7 @@ fn workspace_and_process_tools_execute_through_broker_and_attach_evidence() {
     assert_eq!(replace.evidence_ids.len(), 1);
     assert_eq!(
         std::fs::read_to_string(workspace.join("result.md")).unwrap(),
-        "hello from replace"
+        "hello from replace\n"
     );
 
     let delete = fx
@@ -552,12 +548,12 @@ fn workspace_and_process_tools_execute_through_broker_and_attach_evidence() {
             cap.capability_id.clone(),
             4,
             ToolInvokeInput {
-                tool_name: "delete_file".to_string(),
+                tool_name: "apply_patch".to_string(),
                 input: json!({
                     "workspace_root": workspace.to_string_lossy(),
-                    "path": "result.md"
+                    "patch": "*** Begin Patch\n*** Delete File: result.md\n*** End Patch\n"
                 }),
-                evidence_claim: Some("workspace file was deleted".to_string()),
+                evidence_claim: Some("workspace file was deleted through apply_patch".to_string()),
             },
         )
         .unwrap();
@@ -601,6 +597,358 @@ fn workspace_and_process_tools_execute_through_broker_and_attach_evidence() {
 }
 
 #[test]
+fn read_file_paginates_with_offset_limit_metadata() {
+    let fx = fixture();
+    let workspace = std::env::temp_dir().join(format!(
+        "agent-os-read-page-{}-{}",
+        std::process::id(),
+        new_id("case_")
+    ));
+    let env = fx
+        .kernel
+        .create_environment(
+            BackendType::IsolatedWorktree,
+            workspace.to_string_lossy(),
+            "sbox_workspace_write",
+            ReusePolicy::TaskScoped,
+        )
+        .unwrap();
+    fx.kernel
+        .attach_environment(
+            &env.environment_id,
+            &fx.worker.agent_id,
+            &fx.worker.thread_id,
+            &fx.task.task_id,
+            AttachMode::WorkspaceWrite,
+        )
+        .unwrap();
+    std::fs::write(workspace.join("paged.txt"), "one\ntwo\nthree\nfour\n").unwrap();
+    let cap = fx
+        .kernel
+        .grant_capability(
+            &fx.worker.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            1,
+            None,
+        )
+        .unwrap();
+
+    let read = fx
+        .kernel
+        .invoke_tool(
+            &fx.worker.agent_id,
+            &fx.task.task_id,
+            &fx.worker.session_id,
+            cap.capability_id,
+            1,
+            ToolInvokeInput {
+                tool_name: "read_file".to_string(),
+                input: json!({
+                    "workspace_root": workspace.to_string_lossy(),
+                    "path": "paged.txt",
+                    "offset": 1,
+                    "limit": 2
+                }),
+                evidence_claim: Some("workspace file page was inspected".to_string()),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(read.status, ToolCallStatus::Completed);
+    let output = read.output.as_ref().unwrap();
+    assert_eq!(output["content"], json!("two\nthree\n"));
+    assert_eq!(output["offset"], json!(1));
+    assert_eq!(output["limit"], json!(2));
+    assert_eq!(output["total_lines"], json!(4));
+    assert_eq!(output["returned_lines"], json!(2));
+    assert_eq!(output["next_offset"], json!(3));
+    assert_eq!(output["truncated"], json!(true));
+    assert_eq!(output["omitted_lines"], json!(1));
+
+    let _ = std::fs::remove_dir_all(workspace);
+}
+
+#[test]
+fn long_running_command_returns_running_and_can_be_queried_by_tool_call_id() {
+    let fx = fixture();
+    let workspace = std::env::temp_dir().join(format!(
+        "agent-os-background-command-{}-{}",
+        std::process::id(),
+        new_id("case_")
+    ));
+    let supervisor = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_supervisor".to_string(),
+            owner: "tester".to_string(),
+            goal: "observe child tools".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: vec![workspace.to_string_lossy().into_owned()],
+        })
+        .unwrap();
+    let worker = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_worker".to_string(),
+            owner: supervisor.agent_id.clone(),
+            goal: "run a slow command".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: Some(supervisor.thread_id.clone()),
+            workspace_roots: vec![workspace.to_string_lossy().into_owned()],
+        })
+        .unwrap();
+    let env = fx
+        .kernel
+        .create_environment(
+            BackendType::IsolatedWorktree,
+            workspace.to_string_lossy(),
+            "sbox_workspace_write",
+            ReusePolicy::TaskScoped,
+        )
+        .unwrap();
+    fx.kernel
+        .attach_environment(
+            &env.environment_id,
+            &worker.agent_id,
+            &worker.thread_id,
+            &fx.task.task_id,
+            AttachMode::WorkspaceWrite,
+        )
+        .unwrap();
+    let command_cap = fx
+        .kernel
+        .grant_capability(
+            &worker.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            4,
+            None,
+        )
+        .unwrap();
+    let supervisor_approval = fx
+        .kernel
+        .request_approval(RequestApprovalInput {
+            goal_id: fx.goal.goal_id.clone(),
+            task_id: Some(fx.task.task_id.clone()),
+            requested_by_agent_id: supervisor.agent_id.clone(),
+            approval_type: ApprovalType::Human,
+            scope: ApprovalScope {
+                syscall_types: vec!["tool.invoke".to_string()],
+                resource_scopes: vec![json!("tool:*")],
+                risk_ceiling: 6,
+                goal_id: fx.goal.goal_id.clone(),
+                task_id: Some(fx.task.task_id.clone()),
+            },
+            risk_level: 6,
+            expires_at: None,
+        })
+        .unwrap();
+    fx.kernel
+        .record_approval(RecordApprovalInput {
+            approval_id: supervisor_approval.approval_id.clone(),
+            status: ApprovalStatus::Approved,
+            decision_by: "human".to_string(),
+            decision_reason: Some("approve supervisor tool progress inspection".to_string()),
+        })
+        .unwrap();
+    let supervisor_cap = fx
+        .kernel
+        .grant_capability(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            6,
+            Some(supervisor_approval.approval_id),
+        )
+        .unwrap();
+
+    let command = fx
+        .kernel
+        .invoke_tool(
+            &worker.agent_id,
+            &fx.task.task_id,
+            &worker.session_id,
+            command_cap.capability_id,
+            4,
+            ToolInvokeInput {
+                tool_name: "run_command".to_string(),
+                input: json!({
+                    "program": "powershell",
+                    "args": [
+                        "-NoProfile",
+                        "-Command",
+                        "Write-Output stdout-before; [Console]::Error.WriteLine('stderr-before'); Start-Sleep -Seconds 16; Write-Output stdout-after"
+                    ],
+                    "cwd": workspace.to_string_lossy()
+                }),
+                evidence_claim: Some("background command started".to_string()),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(command.status, ToolCallStatus::Running);
+    assert_eq!(
+        command
+            .output
+            .as_ref()
+            .and_then(|output| output.get("tool_call_id"))
+            .and_then(serde_json::Value::as_str),
+        Some(command.call_id.as_str())
+    );
+
+    let queried = fx
+        .kernel
+        .invoke_tool(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            &supervisor.session_id,
+            supervisor_cap.capability_id.clone(),
+            1,
+            ToolInvokeInput {
+                tool_name: "agent_control".to_string(),
+                input: json!({
+                    "action": "output",
+                    "thread_id": worker.thread_id,
+                    "payload": {
+                        "tool_call_id": command.call_id.clone()
+                    }
+                }),
+                evidence_claim: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(queried.status, ToolCallStatus::Completed);
+    assert_eq!(
+        queried
+            .output
+            .as_ref()
+            .and_then(|output| output.pointer("/output/tool_call_id"))
+            .and_then(serde_json::Value::as_str),
+        command.output.as_ref().unwrap()["tool_call_id"].as_str()
+    );
+    let queried_output = queried.output.as_ref().unwrap();
+    assert!(queried_output
+        .pointer("/output/fields/stdout/new/text")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .contains("stdout-before"));
+    assert!(queried_output
+        .pointer("/output/fields/stderr/new/text")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .contains("stderr-before"));
+    assert!(
+        queried_output
+            .pointer("/output/fields/stdout/bytes")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or_default()
+            > 0
+    );
+    let first_stdout_cursor = queried_output
+        .pointer("/output/fields/stdout/next_cursor")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap();
+    assert_eq!(
+        queried_output
+            .pointer("/output/fields/stdout/new/end_byte")
+            .and_then(serde_json::Value::as_u64),
+        Some(first_stdout_cursor)
+    );
+
+    let mut stdout_new = String::new();
+    let poll_started = std::time::Instant::now();
+    while poll_started.elapsed() < std::time::Duration::from_secs(10) {
+        let queried_new = fx
+            .kernel
+            .invoke_tool(
+                &supervisor.agent_id,
+                &fx.task.task_id,
+                &supervisor.session_id,
+                supervisor_cap.capability_id.clone(),
+                1,
+                ToolInvokeInput {
+                    tool_name: "agent_control".to_string(),
+                    input: json!({
+                        "action": "output",
+                        "thread_id": worker.thread_id,
+                        "payload": {
+                            "tool_call_id": command.call_id.clone(),
+                            "new": 200,
+                            "cursor": {
+                                "stdout": first_stdout_cursor
+                            }
+                        }
+                    }),
+                    evidence_claim: None,
+                },
+            )
+            .unwrap();
+        stdout_new = queried_new
+            .output
+            .as_ref()
+            .and_then(|output| output.pointer("/output/fields/stdout/new/text"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        if stdout_new.contains("stdout-after") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    assert!(stdout_new.contains("stdout-after"));
+    assert!(!stdout_new.contains("stdout-before"));
+
+    let queried_page = fx
+        .kernel
+        .invoke_tool(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            &supervisor.session_id,
+            supervisor_cap.capability_id,
+            1,
+            ToolInvokeInput {
+                tool_name: "agent_control".to_string(),
+                input: json!({
+                    "action": "output",
+                    "thread_id": worker.thread_id,
+                    "payload": {
+                        "tool_call_id": command.call_id.clone(),
+                        "field": "stdout",
+                        "full": true,
+                        "offset": 1,
+                        "limit": 1
+                    }
+                }),
+                evidence_claim: None,
+            },
+        )
+        .unwrap();
+    let stdout_page = queried_page.output.as_ref().unwrap();
+    assert_eq!(
+        stdout_page
+            .pointer("/output/fields/stdout/offset")
+            .and_then(serde_json::Value::as_u64),
+        Some(1)
+    );
+    assert!(stdout_page
+        .pointer("/output/fields/stdout/content")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .contains("stdout-after"));
+
+    let _ = std::fs::remove_dir_all(workspace);
+}
+
+#[test]
 fn default_tool_registry_is_minimal() {
     let fx = fixture();
     let state = fx.kernel.state_snapshot().unwrap();
@@ -612,10 +960,8 @@ fn default_tool_registry_is_minimal() {
     assert_eq!(
         tool_names,
         std::collections::BTreeSet::from([
+            "apply_patch",
             "read_file",
-            "write_file",
-            "replace_text",
-            "delete_file",
             "run_command",
             "set_goal",
             "accomplish_goal",

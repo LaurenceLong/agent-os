@@ -6,68 +6,33 @@ use agent_os_kernel::{
     CommitArtifactInput, CompleteTaskInput, Kernel, ToolInvokeInput, UpdateTaskInput,
 };
 use agent_os_sys::*;
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::path::PathBuf;
 
+#[path = "runtime/context_projection.rs"]
+mod context_projection;
 #[path = "runtime/ecosystem_projection.rs"]
 mod ecosystem_projection;
+#[path = "runtime/feedback.rs"]
+mod feedback;
+#[path = "runtime/job.rs"]
+mod job;
+#[path = "runtime/report.rs"]
+mod report;
 #[path = "runtime/tool_policy.rs"]
 mod tool_policy;
 
-const MAX_PROJECTED_TOOL_RESULTS: usize = 8;
+use context_projection::project_tool_results;
+use feedback::*;
+pub use job::{RuntimeJob, RuntimeJobRecord, RuntimeJobStatus};
+pub use report::{RuntimeConfig, RuntimeRunOverrides, RuntimeRunReport};
+
 const MAX_PROJECTED_ARTIFACTS: usize = 8;
-const MAX_PROJECTED_OLDER_TOOL_STRING_CHARS: usize = 2000;
-const RUNTIME_FEEDBACK_TOOL: &str = "runtime_feedback";
-const MAX_CONSECUTIVE_NO_ACTION_TURNS: u32 = 2;
-
-#[derive(Debug, Clone)]
-pub struct RuntimeConfig {
-    pub workspace_root: PathBuf,
-    pub attach_mode: AttachMode,
-    pub max_steps: u32,
-    pub requested_model_alias: Option<String>,
-    pub tool_risk_ceiling: u8,
-    pub auto_commit_patch_artifacts: bool,
-    pub fail_on_process_nonzero: bool,
-}
-
-impl RuntimeConfig {
-    pub fn workspace_write(workspace_root: impl Into<PathBuf>) -> Self {
-        Self {
-            workspace_root: workspace_root.into(),
-            attach_mode: AttachMode::WorkspaceWrite,
-            max_steps: 16,
-            requested_model_alias: None,
-            tool_risk_ceiling: 4,
-            auto_commit_patch_artifacts: true,
-            fail_on_process_nonzero: true,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct RuntimeRunOverrides {
-    pub sandbox_profile_id: Option<String>,
-    pub tool_approval_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RuntimeRunReport {
-    pub thread_id: String,
-    pub task_id: String,
-    pub status: ThreadStatus,
-    pub provider_stream_session_ids: Vec<String>,
-    pub tool_results: Vec<ToolExecutionRecord>,
-    pub artifacts: Vec<ArtifactRecord>,
-    pub final_submitted: bool,
-    pub events: usize,
-}
 
 pub struct ThreadRuntime<C> {
     kernel: Kernel,
     thread_id: String,
     model_client: C,
+    job: Option<RuntimeJob>,
 }
 
 impl<C: ModelClient> ThreadRuntime<C> {
@@ -76,6 +41,16 @@ impl<C: ModelClient> ThreadRuntime<C> {
             kernel,
             thread_id: thread_id.into(),
             model_client,
+            job: None,
+        }
+    }
+
+    pub fn new_for_job(kernel: Kernel, job: RuntimeJob, model_client: C) -> Self {
+        Self {
+            kernel,
+            thread_id: job.agent_thread_id.clone(),
+            model_client,
+            job: Some(job),
         }
     }
 
@@ -89,7 +64,7 @@ impl<C: ModelClient> ThreadRuntime<C> {
         overrides: RuntimeRunOverrides,
     ) -> AgentOsResult<RuntimeRunReport> {
         crate::ecosystem::import_workspace_ecosystem(&self.kernel, &config.workspace_root)?;
-        let mut acb = self.acb()?;
+        let acb = self.acb()?;
         self.kernel.update_task(UpdateTaskInput {
             task_id: acb.task.task_id.clone(),
             status: Some(TaskStatus::Running),
@@ -99,7 +74,52 @@ impl<C: ModelClient> ThreadRuntime<C> {
             description: None,
             checklist: None,
         })?;
-        acb = self.kernel.start_turn(&self.thread_id)?;
+        let acb = self.kernel.start_turn(&self.thread_id)?;
+        let job = RuntimeJob::from_active_turn(&acb)?;
+        self.run_active_job_to_completion(job, acb, config, overrides)
+    }
+
+    pub fn run_job_to_completion(
+        &mut self,
+        config: RuntimeConfig,
+    ) -> AgentOsResult<RuntimeRunReport> {
+        self.run_job_to_completion_with_overrides(config, RuntimeRunOverrides::default())
+    }
+
+    pub fn run_job_to_completion_with_overrides(
+        &mut self,
+        config: RuntimeConfig,
+        overrides: RuntimeRunOverrides,
+    ) -> AgentOsResult<RuntimeRunReport> {
+        crate::ecosystem::import_workspace_ecosystem(&self.kernel, &config.workspace_root)?;
+        let job = self.job.clone().ok_or_else(|| {
+            AgentOsError::Validation("run_job_to_completion requires RuntimeJob".to_string())
+        })?;
+        let acb = self.acb()?;
+        if let Some(interrupted) = self.runtime_job_interrupted(&job)? {
+            return self.interrupted_report(&interrupted, Vec::new(), Vec::new(), Vec::new());
+        }
+        self.validate_runtime_job(&job, &acb, &config)?;
+        self.kernel.update_task(UpdateTaskInput {
+            task_id: acb.task.task_id.clone(),
+            status: Some(TaskStatus::Running),
+            blocked_reason: None,
+            owner_agent_id: Some(acb.agent_id.clone()),
+            title: None,
+            description: None,
+            checklist: None,
+        })?;
+        self.run_active_job_to_completion(job, acb, config, overrides)
+    }
+
+    fn run_active_job_to_completion(
+        &mut self,
+        job: RuntimeJob,
+        mut acb: AgentControlBlock,
+        config: RuntimeConfig,
+        overrides: RuntimeRunOverrides,
+    ) -> AgentOsResult<RuntimeRunReport> {
+        self.validate_runtime_job(&job, &acb, &config)?;
         let env = self.kernel.create_environment(
             BackendType::IsolatedWorktree,
             config.workspace_root.to_string_lossy(),
@@ -136,8 +156,19 @@ impl<C: ModelClient> ThreadRuntime<C> {
         let mut artifacts = self.hydrated_artifacts(&acb.task.task_id)?;
         let mut final_submitted = false;
         let mut consecutive_no_action_turns = 0;
+        let mut repeated_tool_call = RepeatedToolCallTracker::default();
+        let mut finalization_feedback_sent = false;
+        let mut pre_patch_resolution_feedback_sent = false;
 
         for step_index in 0..config.max_steps {
+            if let Some(interrupted) = self.runtime_job_interrupted(&job)? {
+                return self.interrupted_report(
+                    &interrupted,
+                    provider_stream_session_ids,
+                    tool_results,
+                    artifacts,
+                );
+            }
             // Yield boundary: before model call.
             self.kernel.record_checkpoint(
                 &acb.thread_id,
@@ -192,7 +223,16 @@ impl<C: ModelClient> ThreadRuntime<C> {
                     .cmp(&right.created_at)
                     .then_with(|| left.compaction_id.cmp(&right.compaction_id))
             });
-            let ecosystem_projection = ecosystem_projection::from_state(&state);
+            let mut ecosystem_projection = ecosystem_projection::from_state(&state);
+            if finalization_feedback_sent {
+                retain_finalization_tool_descriptors(&mut ecosystem_projection.tool_descriptors);
+            } else if pre_patch_resolution_feedback_sent
+                && should_enforce_pre_patch_resolution_gate(&tool_results, &artifacts)
+            {
+                retain_pre_patch_resolution_tool_descriptors(
+                    &mut ecosystem_projection.tool_descriptors,
+                );
+            }
             let provider_profile = state
                 .provider_profiles
                 .get(&acb.config_snapshot.provider_profile_id)
@@ -273,12 +313,75 @@ impl<C: ModelClient> ThreadRuntime<C> {
                     }
                     ModelAction::ToolCall(action) => {
                         turn_had_completion_action = true;
+                        if finalization_feedback_sent && !is_finalization_allowed_tool_call(&action)
+                        {
+                            tool_results
+                                .push(finalization_gate_feedback_record(step_index, &action));
+                            self.kernel.record_checkpoint(
+                                &acb.thread_id,
+                                format!("ckpt_after_finalization_gate_{}", new_id("y_")),
+                            )?;
+                            continue;
+                        }
+                        if pre_patch_resolution_feedback_sent
+                            && should_enforce_pre_patch_resolution_gate(&tool_results, &artifacts)
+                            && !is_pre_patch_resolution_allowed_tool_call(&action)
+                        {
+                            tool_results.push(pre_patch_resolution_gate_feedback_record(
+                                step_index, &action,
+                            ));
+                            self.kernel.record_checkpoint(
+                                &acb.thread_id,
+                                format!("ckpt_after_pre_patch_resolution_gate_{}", new_id("y_")),
+                            )?;
+                            continue;
+                        }
+                        if should_guard_duplicate_tool_call(&action) {
+                            let duplicate_count = repeated_tool_call.observe(&action);
+                            if duplicate_count > MAX_CONSECUTIVE_IDENTICAL_TOOL_CALLS {
+                                tool_results.push(duplicate_tool_feedback_record(
+                                    step_index,
+                                    duplicate_count,
+                                    &action,
+                                ));
+                                self.kernel.record_checkpoint(
+                                    &acb.thread_id,
+                                    format!("ckpt_after_duplicate_tool_feedback_{}", new_id("y_")),
+                                )?;
+                                continue;
+                            }
+                        } else {
+                            repeated_tool_call.reset();
+                        }
                         let record = self.execute_tool_action(
                             &acb,
                             &stream.session_id,
                             &capability.capability_id,
                             action,
                         )?;
+                        if record.status == ToolCallStatus::Running {
+                            tool_results.push(record);
+                            self.kernel.transition_thread(
+                                &acb.thread_id,
+                                ThreadStatus::WaitingTool,
+                                Some("background tool is still running".to_string()),
+                            )?;
+                            self.kernel.record_checkpoint(
+                                &acb.thread_id,
+                                format!("ckpt_after_tool_background_{}", new_id("y_")),
+                            )?;
+                            let waiting = self.acb()?;
+                            return Ok(RuntimeRunReport {
+                                thread_id: self.thread_id.clone(),
+                                task_id: waiting.task.task_id,
+                                status: waiting.status,
+                                provider_stream_session_ids,
+                                tool_results,
+                                artifacts,
+                                final_submitted: false,
+                                events: self.kernel.events()?.len(),
+                            });
+                        }
                         if config.auto_commit_patch_artifacts {
                             if let Some(artifact) = self.commit_patch_artifact_for_tool(
                                 &acb,
@@ -295,15 +398,23 @@ impl<C: ModelClient> ThreadRuntime<C> {
                             }
                         }
                         tool_policy::enforce(&record, &config)?;
+                        let submit_final_completed = record.tool_name == "submit_final"
+                            && record.status == ToolCallStatus::Completed;
                         tool_results.push(record);
                         // Yield boundary: after tool result.
                         self.kernel.record_checkpoint(
                             &acb.thread_id,
                             format!("ckpt_after_tool_{}", new_id("y_")),
                         )?;
+                        if submit_final_completed {
+                            self.complete_after_submit_final_tool(&acb, &artifacts, &tool_results)?;
+                            final_submitted = true;
+                            break;
+                        }
                     }
                     ModelAction::Final { submission } => {
                         turn_had_completion_action = true;
+                        repeated_tool_call.reset();
                         // Yield boundary: before final submission.
                         self.kernel.record_checkpoint(
                             &acb.thread_id,
@@ -327,6 +438,39 @@ impl<C: ModelClient> ThreadRuntime<C> {
                 )?;
             } else {
                 consecutive_no_action_turns = 0;
+            }
+            if !final_submitted
+                && !finalization_feedback_sent
+                && should_project_finalization_feedback(&tool_results, &artifacts)
+            {
+                finalization_feedback_sent = true;
+                let remaining_steps = config.max_steps.saturating_sub(step_index + 1);
+                tool_results.push(finalization_feedback_record(
+                    step_index,
+                    remaining_steps,
+                    artifacts.len(),
+                ));
+                self.kernel.record_checkpoint(
+                    &acb.thread_id,
+                    format!("ckpt_after_finalization_feedback_{}", new_id("y_")),
+                )?;
+            }
+            if !final_submitted
+                && !finalization_feedback_sent
+                && !pre_patch_resolution_feedback_sent
+                && should_project_pre_patch_resolution_feedback(&tool_results, &artifacts)
+            {
+                pre_patch_resolution_feedback_sent = true;
+                let investigation_tool_results =
+                    count_pre_patch_investigation_tool_results(&tool_results);
+                tool_results.push(pre_patch_resolution_feedback_record(
+                    step_index,
+                    investigation_tool_results,
+                ));
+                self.kernel.record_checkpoint(
+                    &acb.thread_id,
+                    format!("ckpt_after_pre_patch_resolution_feedback_{}", new_id("y_")),
+                )?;
             }
             self.kernel
                 .record_provider_usage(&stream.session_id, response.usage)?;
@@ -372,6 +516,82 @@ impl<C: ModelClient> ThreadRuntime<C> {
         })
     }
 
+    fn validate_runtime_job(
+        &self,
+        job: &RuntimeJob,
+        acb: &AgentControlBlock,
+        config: &RuntimeConfig,
+    ) -> AgentOsResult<()> {
+        if job.agent_thread_id != acb.thread_id || job.client_thread_id != acb.thread_id {
+            return Err(AgentOsError::Validation(
+                "RuntimeJob thread ids do not match active thread".to_string(),
+            ));
+        }
+        if acb.active_turn.turn_id.as_deref() != Some(&job.turn_id) {
+            return Err(AgentOsError::Validation(format!(
+                "RuntimeJob turn {} is not active on thread {}",
+                job.turn_id, acb.thread_id
+            )));
+        }
+        if acb.active_turn.status != Some(TurnStatus::InProgress) {
+            return Err(AgentOsError::InvalidTransition(format!(
+                "RuntimeJob turn {} is not InProgress",
+                job.turn_id
+            )));
+        }
+        if config.workspace_root.as_os_str() != std::ffi::OsStr::new(&job.workspace) {
+            return Err(AgentOsError::Validation(
+                "RuntimeJob workspace does not match RuntimeConfig workspace".to_string(),
+            ));
+        }
+        if job.provider_profile != acb.config_snapshot.provider_profile_id {
+            return Err(AgentOsError::Validation(
+                "RuntimeJob provider profile does not match thread binding".to_string(),
+            ));
+        }
+        if job.model != acb.config_snapshot.model_id {
+            return Err(AgentOsError::Validation(
+                "RuntimeJob model does not match thread binding".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn runtime_job_interrupted(
+        &self,
+        job: &RuntimeJob,
+    ) -> AgentOsResult<Option<AgentControlBlock>> {
+        let acb = self.acb()?;
+        if acb.active_turn.turn_id.as_deref() != Some(&job.turn_id) {
+            return Ok(None);
+        }
+        if acb.status == ThreadStatus::Interrupted
+            || acb.active_turn.status == Some(TurnStatus::Interrupted)
+        {
+            return Ok(Some(acb));
+        }
+        Ok(None)
+    }
+
+    fn interrupted_report(
+        &self,
+        acb: &AgentControlBlock,
+        provider_stream_session_ids: Vec<String>,
+        tool_results: Vec<ToolExecutionRecord>,
+        artifacts: Vec<ArtifactRecord>,
+    ) -> AgentOsResult<RuntimeRunReport> {
+        Ok(RuntimeRunReport {
+            thread_id: self.thread_id.clone(),
+            task_id: acb.task.task_id.clone(),
+            status: acb.status,
+            provider_stream_session_ids,
+            tool_results,
+            artifacts,
+            final_submitted: false,
+            events: self.kernel.events()?.len(),
+        })
+    }
+
     fn block_without_final(
         &self,
         acb: &AgentControlBlock,
@@ -389,8 +609,13 @@ impl<C: ModelClient> ThreadRuntime<C> {
             description: None,
             checklist: None,
         })?;
+        let next_status = if acb.status == ThreadStatus::Completing {
+            ThreadStatus::Failed
+        } else {
+            ThreadStatus::Blocked
+        };
         self.kernel
-            .transition_thread(&acb.thread_id, ThreadStatus::Blocked, Some(reason))?;
+            .transition_thread(&acb.thread_id, next_status, Some(reason))?;
         self.kernel.record_checkpoint(
             &acb.thread_id,
             format!("ckpt_after_runtime_blocked_{}", new_id("y_")),
@@ -487,9 +712,7 @@ impl<C: ModelClient> ThreadRuntime<C> {
             return Ok(None);
         };
         let path = match record.tool_name.as_str() {
-            "write_file" => output.get("written_path").and_then(Value::as_str),
-            "replace_text" => output.get("changed_path").and_then(Value::as_str),
-            "delete_file" => output.get("deleted_path").and_then(Value::as_str),
+            "apply_patch" => output.get("path").and_then(Value::as_str),
             _ => None,
         };
         let Some(path) = path else {
@@ -541,6 +764,33 @@ impl<C: ModelClient> ThreadRuntime<C> {
         })?;
         self.kernel
             .submit_final(&acb.agent_id, &acb.task.task_id, submission)?;
+        self.kernel.transition_thread(
+            &acb.thread_id,
+            ThreadStatus::Completed,
+            Some("runtime final submitted".to_string()),
+        )?;
+        self.kernel
+            .record_checkpoint(&acb.thread_id, format!("ckpt_after_task_{}", new_id("y_")))?;
+        Ok(())
+    }
+
+    fn complete_after_submit_final_tool(
+        &self,
+        acb: &AgentControlBlock,
+        artifacts: &[ArtifactRecord],
+        tool_results: &[ToolExecutionRecord],
+    ) -> AgentOsResult<()> {
+        self.kernel.complete_task(CompleteTaskInput {
+            task_id: acb.task.task_id.clone(),
+            artifact_ids: artifacts
+                .iter()
+                .map(|artifact| artifact.artifact_id.clone())
+                .collect(),
+            evidence_ids: tool_results
+                .iter()
+                .flat_map(|result| result.evidence_ids.clone())
+                .collect(),
+        })?;
         self.kernel.transition_thread(
             &acb.thread_id,
             ThreadStatus::Completed,
@@ -674,113 +924,6 @@ impl<C: ModelClient> ThreadRuntime<C> {
                 }
             })
             .collect())
-    }
-}
-
-fn project_tool_results(tool_results: &[ToolExecutionRecord]) -> Vec<ToolExecutionRecord> {
-    let recent_start = tool_results
-        .len()
-        .saturating_sub(MAX_PROJECTED_TOOL_RESULTS);
-    tool_results
-        .iter()
-        .enumerate()
-        .filter(|(index, result)| *index >= recent_start || !result.evidence_ids.is_empty())
-        .map(|(index, result)| {
-            if index >= recent_start {
-                result.clone()
-            } else {
-                compact_tool_result(result)
-            }
-        })
-        .collect()
-}
-
-fn compact_tool_result(result: &ToolExecutionRecord) -> ToolExecutionRecord {
-    let mut compacted = result.clone();
-    if let Some(output) = &result.output {
-        let (mut value, truncated) =
-            compact_json_value(output, MAX_PROJECTED_OLDER_TOOL_STRING_CHARS);
-        if truncated {
-            if let Value::Object(map) = &mut value {
-                map.insert("projection_truncated".to_string(), Value::Bool(true));
-                map.insert(
-                    "projection_note".to_string(),
-                    Value::String(
-                        "Older evidence output was truncated for projection; rerun a narrower command if exact omitted content is needed."
-                            .to_string(),
-                    ),
-                );
-            }
-        }
-        compacted.output = Some(value);
-    }
-    compacted
-}
-
-fn compact_json_value(value: &Value, max_string_chars: usize) -> (Value, bool) {
-    match value {
-        Value::String(text) if text.chars().count() > max_string_chars => {
-            let prefix = text.chars().take(max_string_chars).collect::<String>();
-            let omitted = text.chars().count().saturating_sub(max_string_chars);
-            (
-                Value::String(format!(
-                    "{prefix}\n...[truncated for projection: {omitted} chars omitted]"
-                )),
-                true,
-            )
-        }
-        Value::String(_) | Value::Null | Value::Bool(_) | Value::Number(_) => {
-            (value.clone(), false)
-        }
-        Value::Array(items) => {
-            let mut truncated = false;
-            let values = items
-                .iter()
-                .map(|item| {
-                    let (value, item_truncated) = compact_json_value(item, max_string_chars);
-                    truncated |= item_truncated;
-                    value
-                })
-                .collect();
-            (Value::Array(values), truncated)
-        }
-        Value::Object(map) => {
-            let mut truncated = false;
-            let values = map
-                .iter()
-                .map(|(key, item)| {
-                    let (value, item_truncated) = compact_json_value(item, max_string_chars);
-                    truncated |= item_truncated;
-                    (key.clone(), value)
-                })
-                .collect();
-            (Value::Object(values), truncated)
-        }
-    }
-}
-
-fn runtime_feedback_record(
-    step_index: u32,
-    consecutive_no_action_turns: u32,
-    output_texts: &[String],
-) -> ToolExecutionRecord {
-    let text = output_texts.join("\n\n");
-    let text_excerpt = text.chars().take(1200).collect::<String>();
-    ToolExecutionRecord {
-        call_id: new_id("feedback_"),
-        tool_name: RUNTIME_FEEDBACK_TOOL.to_string(),
-        status: ToolCallStatus::Failed,
-        input: Some(json!({
-            "step_index": step_index,
-            "consecutive_no_action_turns": consecutive_no_action_turns
-        })),
-        output: Some(json!({
-            "message": "The previous model response had no tool call or final submission. On the next turn, call exactly one available tool or call submit_final if the task is complete or blocked with evidence.",
-            "max_consecutive_no_action_turns": MAX_CONSECUTIVE_NO_ACTION_TURNS,
-            "text_excerpt": text_excerpt,
-        })),
-        evidence_ids: Vec::new(),
-        evidence_claim: None,
     }
 }
 

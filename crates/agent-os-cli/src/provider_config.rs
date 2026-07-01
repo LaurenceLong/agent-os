@@ -22,10 +22,7 @@ struct ProviderEntry {
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedProvider {
     pub(crate) name: String,
-    pub(crate) api_key: String,
-    pub(crate) base_url: String,
     pub(crate) model: String,
-    pub(crate) api_style: LlmApiStyle,
 }
 
 impl GlobalProviderConfig {
@@ -57,13 +54,9 @@ impl GlobalProviderConfig {
         let provider = self.providers.get(name).ok_or_else(|| {
             AgentOsError::Validation(format!("global provider config has no provider `{name}`"))
         })?;
-        let api_style = LlmApiStyle::from_value(&provider.api_style)?;
         Ok(ResolvedProvider {
             name: name.to_string(),
-            api_key: provider.api_key.clone(),
-            base_url: provider.base_url.clone(),
             model: provider.model.clone(),
-            api_style,
         })
     }
 
@@ -147,8 +140,7 @@ mod tests {
         };
         let resolved = config.resolve(None).unwrap();
         assert_eq!(resolved.name, "default");
-        assert_eq!(resolved.api_key, "test-key");
-        assert_eq!(resolved.api_style, LlmApiStyle::OpenAiCompatible);
+        assert_eq!(resolved.model, "test-model");
     }
 
     #[test]
@@ -161,6 +153,6 @@ mod tests {
         let resolved = config.resolve(None).unwrap();
 
         assert_eq!(resolved.name, "default");
-        assert_eq!(resolved.api_key, "test-key");
+        assert_eq!(resolved.model, "test-model");
     }
 }

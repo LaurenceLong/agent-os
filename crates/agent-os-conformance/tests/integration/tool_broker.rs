@@ -54,33 +54,30 @@ fn tool_broker_integration_runs_all_model_visible_tool_families() {
     );
     tools.invoke(
         4,
-        "write_file",
+        "apply_patch",
         json!({
             "workspace_root": workspace.to_string_lossy(),
-            "path": "created.txt",
-            "content": "created through integration broker\n"
+            "patch": "*** Begin Patch\n*** Add File: created.txt\n+created through integration broker\n*** End Patch\n"
         }),
-        Some("new file was written"),
+        Some("new file was created through apply_patch"),
     );
     tools.invoke(
         4,
-        "replace_text",
+        "apply_patch",
         json!({
             "workspace_root": workspace.to_string_lossy(),
-            "path": "edit.txt",
-            "old": "old",
-            "new": "new"
+            "patch": "*** Begin Patch\n*** Update File: edit.txt\n@@\n-alpha old beta\n+alpha new beta\n*** End Patch\n"
         }),
-        Some("workspace file was edited"),
+        Some("workspace file was updated through apply_patch"),
     );
     tools.invoke(
         4,
-        "delete_file",
+        "apply_patch",
         json!({
             "workspace_root": workspace.to_string_lossy(),
-            "path": "delete.txt"
+            "patch": "*** Begin Patch\n*** Delete File: delete.txt\n*** End Patch\n"
         }),
-        Some("workspace file was deleted"),
+        Some("workspace file was deleted through apply_patch"),
     );
     let command = tools.invoke(
         4,
@@ -141,7 +138,7 @@ fn tool_broker_integration_runs_all_model_visible_tool_families() {
         None,
     );
     tools.invoke(
-        3,
+        2,
         "ask_human",
         json!({
             "question": "Confirm integration broker wiring?",
@@ -230,12 +227,11 @@ fn tool_broker_integration_runs_all_model_visible_tool_families() {
         completed_tools,
         BTreeSet::from([
             "agent_control",
+            "apply_patch",
             "ask_human",
-            "delete_file",
             "post_blackboard",
             "read_file",
             "record_evidence",
-            "replace_text",
             "request_permissions",
             "report_supervisor",
             "run_command",
@@ -243,7 +239,6 @@ fn tool_broker_integration_runs_all_model_visible_tool_families() {
             "accomplish_goal",
             "submit_final",
             "update_checklist",
-            "write_file",
         ])
     );
     assert!(state.threads.contains_key(
@@ -268,6 +263,136 @@ fn tool_broker_integration_runs_all_model_visible_tool_families() {
         replayed_state.tool_invocations.len(),
         state.tool_invocations.len()
     );
+    let _ = fs::remove_dir_all(workspace);
+}
+
+#[test]
+fn apply_patch_rejects_multiple_file_operations() {
+    let fx = fixture();
+    let workspace = temp_workspace("agent-os-integration-apply-patch-one-op");
+    fs::create_dir_all(&workspace).unwrap();
+
+    let supervisor = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_supervisor".to_string(),
+            owner: "integration-test".to_string(),
+            goal: "Exercise apply_patch one-operation contract".to_string(),
+            success_criteria: vec!["multi-operation patches are rejected".to_string()],
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: vec![workspace.to_string_lossy().to_string()],
+        })
+        .unwrap();
+    attach_workspace_for_agent(&fx.kernel, &supervisor, &fx.task.task_id, &workspace);
+    let capability = fx
+        .kernel
+        .grant_capability(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            4,
+            None,
+        )
+        .unwrap();
+
+    for patch in [
+        "*** Begin Patch\n*** Add File: created.txt\n+created\n*** Delete File: created.txt\n*** End Patch\n",
+        "*** Begin Patch\n*** Delete File: missing.txt\n*** Add File: other.txt\n+other\n*** End Patch\n",
+    ] {
+        let invocation = fx
+            .kernel
+            .invoke_tool(
+                &supervisor.agent_id,
+                &fx.task.task_id,
+                &supervisor.session_id,
+                capability.capability_id.clone(),
+                4,
+                ToolInvokeInput {
+                    tool_name: "apply_patch".to_string(),
+                    input: json!({
+                        "workspace_root": workspace.to_string_lossy(),
+                        "patch": patch
+                    }),
+                    evidence_claim: Some("multi-operation patch was rejected".to_string()),
+                },
+            )
+            .unwrap();
+        assert_eq!(invocation.status, ToolCallStatus::Failed);
+        let error = invocation.output.unwrap()["error"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            error.contains("apply_patch accepts exactly one file operation"),
+            "{error}"
+        );
+    }
+
+    let _ = fs::remove_dir_all(workspace);
+}
+
+#[test]
+fn apply_patch_accepts_plain_context_hunks_through_broker() {
+    let fx = fixture();
+    let workspace = temp_workspace("agent-os-integration-apply-patch-plain-context");
+    fs::create_dir_all(workspace.join("src")).unwrap();
+    fs::write(
+        workspace.join("src/lib.rs"),
+        "fn demo() {\n    before();\n\n    after();\n}\n",
+    )
+    .unwrap();
+
+    let supervisor = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_supervisor".to_string(),
+            owner: "integration-test".to_string(),
+            goal: "Exercise apply_patch plain context hunk contract".to_string(),
+            success_criteria: vec!["plain context hunks are accepted".to_string()],
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: vec![workspace.to_string_lossy().to_string()],
+        })
+        .unwrap();
+    attach_workspace_for_agent(&fx.kernel, &supervisor, &fx.task.task_id, &workspace);
+    let capability = fx
+        .kernel
+        .grant_capability(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            4,
+            None,
+        )
+        .unwrap();
+    let tools = ToolInvoker {
+        kernel: &fx.kernel,
+        agent: &supervisor,
+        task_id: &fx.task.task_id,
+        capability: &capability,
+    };
+
+    let invocation = tools.invoke(
+        4,
+        "apply_patch",
+        json!({
+            "workspace_root": workspace.to_string_lossy(),
+            "patch": "*** Begin Patch\n*** Update File: src/lib.rs\n@@\nfn demo() {\n    before();\n\n+    inserted();\n    after();\n}\n*** End Patch\n"
+        }),
+        Some("workspace file was updated through a plain-context apply_patch hunk"),
+    );
+
+    assert_eq!(invocation.status, ToolCallStatus::Completed);
+    assert_eq!(
+        fs::read_to_string(workspace.join("src/lib.rs")).unwrap(),
+        "fn demo() {\n    before();\n\n    inserted();\n    after();\n}\n"
+    );
+
     let _ = fs::remove_dir_all(workspace);
 }
 

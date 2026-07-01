@@ -6,40 +6,8 @@ use rusqlite::params;
 
 impl EventStore for SqliteStore {
     fn append(&self, event: EventEnvelope) -> AgentOsResult<()> {
-        let event_json = serde_json::to_string(&event)?;
         let conn = self.lock()?;
-        conn.execute(
-            "
-            INSERT INTO events(
-                event_id,
-                event_type,
-                abi_version,
-                aggregate_type,
-                aggregate_id,
-                agent_id,
-                task_id,
-                causation_id,
-                correlation_id,
-                event_json,
-                created_at
-            )
-            VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
-            ",
-            params![
-                event.event_id,
-                event.event_type,
-                event.abi_version,
-                event.aggregate_type,
-                event.aggregate_id,
-                event.agent_id,
-                event.task_id,
-                event.causation_id,
-                event.correlation_id,
-                event_json,
-                event.created_at
-            ],
-        )
-        .map_err(sqlite_error)?;
+        insert_event_row(&conn, &event)?;
         Ok(())
     }
 
@@ -58,6 +26,58 @@ impl EventStore for SqliteStore {
             .map_err(sqlite_error)?;
         read_event_rows(&mut stmt, params![aggregate_id])
     }
+
+    fn event_ordinal(&self, event_id: &str) -> AgentOsResult<u64> {
+        let conn = self.lock()?;
+        let ordinal: i64 = conn
+            .query_row(
+                "SELECT ordinal FROM events WHERE event_id = ?1",
+                params![event_id],
+                |row| row.get(0),
+            )
+            .map_err(sqlite_error)?;
+        Ok(ordinal as u64)
+    }
+}
+
+pub(crate) fn insert_event_row(
+    conn: &rusqlite::Connection,
+    event: &EventEnvelope,
+) -> AgentOsResult<u64> {
+    let event_json = serde_json::to_string(event)?;
+    conn.execute(
+        "
+        INSERT INTO events(
+            event_id,
+            event_type,
+            abi_version,
+            aggregate_type,
+            aggregate_id,
+            agent_id,
+            task_id,
+            causation_id,
+            correlation_id,
+            event_json,
+            created_at
+        )
+        VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+        ",
+        params![
+            &event.event_id,
+            &event.event_type,
+            &event.abi_version,
+            &event.aggregate_type,
+            &event.aggregate_id,
+            &event.agent_id,
+            &event.task_id,
+            &event.causation_id,
+            &event.correlation_id,
+            event_json,
+            &event.created_at
+        ],
+    )
+    .map_err(sqlite_error)?;
+    Ok(conn.last_insert_rowid() as u64)
 }
 
 fn read_event_rows<P>(

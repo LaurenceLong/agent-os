@@ -1,10 +1,10 @@
-mod agent_control;
-mod communication;
-mod ecosystem;
-mod permission;
-mod session;
-mod work_state;
-mod workspace;
+pub(super) mod agent_control;
+pub(super) mod communication;
+pub(super) mod ecosystem;
+pub(super) mod permission;
+pub(super) mod session;
+pub(super) mod work_state;
+pub(super) mod workspace;
 
 use crate::*;
 use agent_os_sys::*;
@@ -14,40 +14,21 @@ pub(super) fn run_tool_driver(
     kernel: &Kernel,
     syscall: &SyscallEnvelope,
     descriptor: &ToolDescriptor,
+    tool_call_id: &str,
     input: &Value,
 ) -> AgentOsResult<Value> {
     if descriptor.driver_class == ToolDriverClass::Mcp {
         return ecosystem::run_mcp_tool(descriptor, input);
     }
-    match descriptor.name.as_str() {
-        "write_file" => workspace::run_workspace_write_file(kernel, syscall, descriptor, input),
-        "read_file" => workspace::run_workspace_read_file(kernel, syscall, descriptor, input),
-        "delete_file" => workspace::run_workspace_delete_file(kernel, syscall, descriptor, input),
-        "replace_text" => workspace::run_workspace_replace_text(kernel, syscall, descriptor, input),
-        "run_command" => workspace::run_process(kernel, syscall, descriptor, input),
-        "set_goal" => work_state::run_set_goal(kernel, syscall, descriptor, input),
-        "accomplish_goal" => work_state::run_accomplish_goal(kernel, syscall, descriptor, input),
-        "update_checklist" => work_state::run_update_checklist(kernel, syscall, descriptor, input),
-        "record_evidence" => work_state::run_record_evidence(kernel, syscall, descriptor, input),
-        "report_supervisor" => {
-            communication::run_report_supervisor(kernel, syscall, descriptor, input)
-        }
-        "post_blackboard" => communication::run_post_blackboard(kernel, syscall, descriptor, input),
-        "ask_human" => communication::run_ask_human(kernel, syscall, descriptor, input),
-        "request_permissions" => {
-            permission::run_request_permissions(kernel, syscall, descriptor, input)
-        }
-        "load_skill" => ecosystem::run_load_skill(kernel, descriptor, input),
-        "read_skill_resource" => ecosystem::run_read_skill_resource(kernel, descriptor, input),
-        "agent_control" => agent_control::run_agent_control(kernel, syscall, descriptor, input),
-        "submit_final" => session::run_submit_final(kernel, syscall, descriptor, input),
-        _ => Ok(json!({
-            "tool": descriptor.name.clone(),
-            "status": "ok",
-            "input": input.clone(),
-            "driver_class": descriptor.driver_class,
-        })),
+    if let Some(tool) = super::builtin::tool(&descriptor.name) {
+        return (tool.execute)(kernel, syscall, descriptor, tool_call_id, input);
     }
+    Ok(json!({
+        "tool": descriptor.name.clone(),
+        "status": "ok",
+        "input": input.clone(),
+        "driver_class": descriptor.driver_class,
+    }))
 }
 
 fn string_array(value: &Value, field: &str) -> AgentOsResult<Vec<String>> {

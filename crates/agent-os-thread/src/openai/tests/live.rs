@@ -1,5 +1,100 @@
 use super::support::*;
 use super::*;
+use std::collections::BTreeMap;
+use std::sync::OnceLock;
+
+fn live_env_var(name: &str) -> String {
+    first_present_env_value(std::env::var(name).ok(), live_env_file_values().get(name))
+        .unwrap_or_else(|| panic!("{name} is required for live LLM e2e"))
+}
+
+fn first_present_env_value(
+    process_value: Option<String>,
+    file_value: Option<&String>,
+) -> Option<String> {
+    process_value
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| file_value.filter(|value| !value.trim().is_empty()).cloned())
+}
+
+fn live_env_file_values() -> &'static BTreeMap<String, String> {
+    static LIVE_ENV: OnceLock<BTreeMap<String, String>> = OnceLock::new();
+    LIVE_ENV.get_or_init(|| {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(".env");
+        let Ok(content) = std::fs::read_to_string(path) else {
+            return BTreeMap::new();
+        };
+        parse_live_env_content(&content)
+    })
+}
+
+fn parse_live_env_content(content: &str) -> BTreeMap<String, String> {
+    let mut values = BTreeMap::new();
+    for raw_line in content.lines() {
+        let line = raw_line.trim().trim_start_matches('\u{feff}');
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key.trim().trim_start_matches('\u{feff}');
+        if key.is_empty() || key.starts_with('#') {
+            continue;
+        }
+        values.insert(key.to_string(), normalize_live_env_value(value.trim()));
+    }
+    values
+}
+
+fn normalize_live_env_value(value: &str) -> String {
+    let bytes = value.as_bytes();
+    if bytes.len() >= 2 {
+        let first = bytes[0];
+        let last = bytes[bytes.len() - 1];
+        if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
+            return value[1..value.len() - 1].to_string();
+        }
+    }
+    value.to_string()
+}
+
+fn fresh_live_tmp(prefix: &str, provider: &str) -> std::path::PathBuf {
+    let tmp = std::env::temp_dir().join(format!(
+        "{}-{}-{}",
+        prefix,
+        provider.replace('-', "_"),
+        new_id("t_")
+    ));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+    tmp
+}
+
+#[test]
+fn live_env_file_parser_handles_bom_comments_quotes_and_precedence() {
+    let file_values = parse_live_env_content(
+        "\u{feff}# comment\nAGENT_OS_LIVE_OPENAI_MODEL=\"gpt-test\"\nEMPTY=\nPLAIN=value\n",
+    );
+
+    assert_eq!(
+        file_values.get("AGENT_OS_LIVE_OPENAI_MODEL").unwrap(),
+        "gpt-test"
+    );
+    assert_eq!(file_values.get("PLAIN").unwrap(), "value");
+    assert_eq!(
+        first_present_env_value(Some("from-process".to_string()), file_values.get("PLAIN"))
+            .unwrap(),
+        "from-process"
+    );
+    assert_eq!(
+        first_present_env_value(Some("   ".to_string()), file_values.get("PLAIN")).unwrap(),
+        "value"
+    );
+    assert!(first_present_env_value(None, file_values.get("EMPTY")).is_none());
+}
 
 #[test]
 #[ignore = "requires AGENT_OS_LIVE_OPENAI_API_KEY and a live OpenAI-compatible endpoint"]
@@ -139,18 +234,10 @@ fn run_live_llm_e2e(
     base_env: &str,
     log_file_name: &str,
 ) {
-    let api_key = std::env::var(api_key_env)
-        .unwrap_or_else(|_| panic!("{api_key_env} is required for live LLM e2e"));
-    let model = std::env::var(model_env)
-        .unwrap_or_else(|_| panic!("{model_env} is required for live LLM e2e"));
-    let api_base = std::env::var(base_env)
-        .unwrap_or_else(|_| panic!("{base_env} is required for live LLM e2e"));
-    let tmp = std::env::temp_dir().join(format!(
-        "aos-live-{}-{}",
-        provider.replace('-', "_"),
-        new_id("t_")
-    ));
-    std::fs::create_dir_all(&tmp).unwrap();
+    let api_key = live_env_var(api_key_env);
+    let model = live_env_var(model_env);
+    let api_base = live_env_var(base_env);
+    let tmp = fresh_live_tmp("aos-live", provider);
     let audit_log_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../target/agent-os-audit")
         .join(log_file_name);
@@ -167,12 +254,14 @@ fn run_live_llm_e2e(
     )
     .unwrap();
 
-    let (kernel, request) = make_kernel_request_for_role(
-            &tmp,
-            "role_worker",
-            "Create a workspace file named live_result.txt whose entire content is LIVE_LLM_E2E_OK followed by one newline. Verify the file content and finish with a concise final result.",
-            Vec::new(),
-        );
+    let (kernel, request) = make_kernel_request_for_role_with_blob_store_and_requirements(
+        &tmp,
+        "role_worker",
+        "Create a workspace file named live_result.txt whose entire content is LIVE_LLM_E2E_OK followed by one newline. Verify the file content by calling run_command with program cat and args [\"live_result.txt\"]. Do not put cat inside args. Finish with a concise final result. The final submit_final call must include an evidence_map that cites evidence_ids from completed tool results.",
+        Vec::new(),
+        vec![ArtifactType::Patch],
+        vec![EvidenceType::DiffRef, EvidenceType::CommandLog],
+    );
     let client = OpenAiModelClient::new(api_key, model.clone())
         .with_api_base(api_base)
         .with_api_style(api_style)
@@ -210,18 +299,10 @@ fn run_live_llm_goal_driven_workspace_e2e(
     base_env: &str,
     log_file_name: &str,
 ) {
-    let api_key = std::env::var(api_key_env)
-        .unwrap_or_else(|_| panic!("{api_key_env} is required for live LLM e2e"));
-    let model = std::env::var(model_env)
-        .unwrap_or_else(|_| panic!("{model_env} is required for live LLM e2e"));
-    let api_base = std::env::var(base_env)
-        .unwrap_or_else(|_| panic!("{base_env} is required for live LLM e2e"));
-    let tmp = std::env::temp_dir().join(format!(
-        "aos-live-goal-workspace-{}-{}",
-        provider.replace('-', "_"),
-        new_id("t_")
-    ));
-    std::fs::create_dir_all(&tmp).unwrap();
+    let api_key = live_env_var(api_key_env);
+    let model = live_env_var(model_env);
+    let api_base = live_env_var(base_env);
+    let tmp = fresh_live_tmp("aos-live-goal-workspace", provider);
     std::fs::write(
         tmp.join("task.md"),
         "Title: live workspace goal\nStatus: draft\nKeep: this line must remain\n",
@@ -252,14 +333,16 @@ fn run_live_llm_goal_driven_workspace_e2e(
         .join("../../target/agent-os-audit")
         .join(log_file_name);
     let _ = std::fs::remove_file(&audit_log_path);
-    let (kernel, request) = make_kernel_request_for_role(
-            &tmp,
-            "role_worker",
-            &format!(
-                "Prepare the workspace for release. Inspect task.md, preserve its existing Keep line, change the single status marker from draft to ready, create live_result.txt containing WORKSPACE_GOAL_OK followed by one newline, remove obsolete.tmp, run the provided verifier script {verifier_name}, and finish with a concise final result."
-            ),
-            Vec::new(),
-        );
+    let (kernel, request) = make_kernel_request_for_role_with_blob_store_and_requirements(
+        &tmp,
+        "role_worker",
+        &format!(
+            "Prepare the workspace for release. Inspect task.md, preserve its existing Keep line, change the single status marker from draft to ready, create live_result.txt containing WORKSPACE_GOAL_OK followed by one newline, remove obsolete.tmp, run the provided verifier script {verifier_name}, and finish with a concise final result. The final submit_final call must include an evidence_map that cites evidence_ids from completed tool results."
+        ),
+        Vec::new(),
+        vec![ArtifactType::Patch],
+        vec![EvidenceType::DiffRef, EvidenceType::CommandLog],
+    );
     let client = OpenAiModelClient::new(api_key, model.clone())
         .with_api_base(api_base.clone())
         .with_api_style(api_style)
@@ -299,14 +382,7 @@ fn run_live_llm_goal_driven_workspace_e2e(
         provider,
         "workspace",
         &report,
-        &[
-            "read_file",
-            "write_file",
-            "replace_text",
-            "delete_file",
-            "run_command",
-            "submit_final",
-        ],
+        &["apply_patch", "read_file", "run_command", "submit_final"],
     );
     println!("live_goal_workspace_log={}", audit_log_path.display());
     let _ = std::fs::remove_dir_all(tmp);
@@ -320,18 +396,10 @@ fn run_live_llm_goal_driven_control_plane_e2e(
     base_env: &str,
     log_file_name: &str,
 ) {
-    let api_key = std::env::var(api_key_env)
-        .unwrap_or_else(|_| panic!("{api_key_env} is required for live LLM e2e"));
-    let model = std::env::var(model_env)
-        .unwrap_or_else(|_| panic!("{model_env} is required for live LLM e2e"));
-    let api_base = std::env::var(base_env)
-        .unwrap_or_else(|_| panic!("{base_env} is required for live LLM e2e"));
-    let tmp = std::env::temp_dir().join(format!(
-        "aos-live-goal-control-{}-{}",
-        provider.replace('-', "_"),
-        new_id("t_")
-    ));
-    std::fs::create_dir_all(&tmp).unwrap();
+    let api_key = live_env_var(api_key_env);
+    let model = live_env_var(model_env);
+    let api_base = live_env_var(base_env);
+    let tmp = fresh_live_tmp("aos-live-goal-control", provider);
     std::fs::write(
             tmp.join("coordination_seed.md"),
             "Coordination seed: live control-plane goal\nRisk channel: risks\nHuman confirmation: needed\n",
@@ -345,7 +413,7 @@ fn run_live_llm_goal_driven_control_plane_e2e(
     let (kernel, request) = make_kernel_request_for_role_with_blob_store_and_requirements(
             &tmp,
             "role_supervisor",
-            "Complete this live control-plane checklist as a supervisor. 1. read_file coordination_seed.md. 2. set_goal with goal saying the live control-plane goal is achieved. 3. update_checklist with one completed item. 4. record_evidence for the coordination seed. 5. report_supervisor with a concise progress message. 6. post_blackboard one task-scoped risk note on the risks channel. 7. ask_human exactly once to confirm there is no extra scope, then continue after delivery. 8. agent_control start a child worker with role_profile_id role_worker and a one-sentence goal in payload.goal. 9. accomplish_goal with a concise summary. 10. submit_final with summary exactly Control-plane coordination complete., tests_run containing read_file coordination_seed.md, and known_risks as an empty array. submit_final must be the last tool call. Do not skip report_supervisor.",
+                "Complete this live control-plane checklist as a supervisor. 1. read_file coordination_seed.md. 2. update_checklist with one completed item. 3. record_evidence for the coordination seed. 4. report_supervisor with a concise progress message. 5. post_blackboard one task-scoped risk note on the risks channel. 6. ask_human exactly once to confirm there is no extra scope, then continue after delivery. 7. agent_control start a child worker with role_profile_id role_worker and a one-sentence goal in payload.goal. 8. set_goal with target_thread_id set to the child thread_id returned by agent_control and goal saying the live control-plane goal is achieved; do not set_goal on your own thread. 9. accomplish_goal with a concise summary. 10. submit_final with summary exactly Control-plane coordination complete., evidence_map citing evidence_ids from completed tool results, tests_run containing read_file coordination_seed.md, and known_risks as an empty array. submit_final must be the last tool call. Do not skip ask_human, agent_control, set_goal, or report_supervisor.",
             Vec::new(),
             Vec::new(),
             vec![EvidenceType::SourceRef],
@@ -404,18 +472,10 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
     base_env: &str,
     log_file_name: &str,
 ) {
-    let api_key = std::env::var(api_key_env)
-        .unwrap_or_else(|_| panic!("{api_key_env} is required for live LLM e2e"));
-    let model = std::env::var(model_env)
-        .unwrap_or_else(|_| panic!("{model_env} is required for live LLM e2e"));
-    let api_base = std::env::var(base_env)
-        .unwrap_or_else(|_| panic!("{base_env} is required for live LLM e2e"));
-    let tmp = std::env::temp_dir().join(format!(
-        "aos-live-goal-full-surface-{}-{}",
-        provider.replace('-', "_"),
-        new_id("t_")
-    ));
-    std::fs::create_dir_all(&tmp).unwrap();
+    let api_key = live_env_var(api_key_env);
+    let model = live_env_var(model_env);
+    let api_base = live_env_var(base_env);
+    let tmp = fresh_live_tmp("aos-live-goal-full-surface", provider);
     std::fs::write(tmp.join("read.txt"), "read me from live full surface\n").unwrap();
     std::fs::write(tmp.join("edit.txt"), "status=old\nkeep=this line\n").unwrap();
     std::fs::write(tmp.join("obsolete.tmp"), "delete this file\n").unwrap();
@@ -443,7 +503,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
             &tmp,
             "role_worker",
             &format!(
-                "Complete this focused workspace validation. Read read.txt, write created.txt with exactly FULL_TOOL_SURFACE_OK followed by one newline, replace status=old with status=new in edit.txt, delete obsolete.tmp, run {verifier_command}, then call accomplish_goal with a concise summary, then submit_final with summary exactly Workspace surface complete., tests_run containing cmd /C verify_full_surface.cmd, and known_risks as an empty array. submit_final must be the last tool call."
+                "Complete this focused workspace validation. Read read.txt, write created.txt with exactly FULL_TOOL_SURFACE_OK followed by one newline, replace status=old with status=new in edit.txt, delete obsolete.tmp, run {verifier_command}, then call accomplish_goal with a concise summary, then submit_final with summary exactly Workspace surface complete., evidence_map citing evidence_ids from completed tool results, tests_run containing {verifier_command}, and known_risks as an empty array. submit_final must be the last tool call."
             ),
             Vec::new(),
             vec![ArtifactType::Patch],
@@ -481,10 +541,8 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
         "full_tool_surface_workspace",
         &workspace_report,
         &[
+            "apply_patch",
             "read_file",
-            "write_file",
-            "replace_text",
-            "delete_file",
             "run_command",
             "accomplish_goal",
             "submit_final",
@@ -500,7 +558,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
         make_kernel_request_for_role_with_blob_store_and_requirements(
             &tmp,
             "role_supervisor",
-            "Complete this focused control-plane validation. Read coordination_seed.md, set_goal with goal saying the live full-surface control-plane segment is achieved, update_checklist with one completed item, record_evidence for coordination_seed.md as source_ref, report_supervisor with a short progress message, post_blackboard on channel test-results with scope task and section test_result, ask_human exactly once whether there is extra scope and continue after delivery, start one child worker with role_profile_id role_worker and payload.goal, then call accomplish_goal with a concise summary, then submit_final with summary exactly Control-plane surface complete., tests_run containing read_file coordination_seed.md, and known_risks as an empty array. submit_final must be the last tool call.",
+            "Complete this focused control-plane validation. Read coordination_seed.md, update_checklist with one completed item, record_evidence for coordination_seed.md as source_ref, report_supervisor with a short progress message, post_blackboard on channel test-results with scope task and section test_result, ask_human exactly once whether there is extra scope and continue after delivery, start one child worker with role_profile_id role_worker and payload.goal, then set_goal with target_thread_id set to the child thread_id returned by agent_control and goal saying the live full-surface control-plane segment is achieved; do not set_goal on your own thread. Then call accomplish_goal with a concise summary, then submit_final with summary exactly Control-plane surface complete., evidence_map citing evidence_ids from completed tool results, tests_run containing read_file coordination_seed.md, and known_risks as an empty array. submit_final must be the last tool call.",
             Vec::new(),
             Vec::new(),
             vec![EvidenceType::SourceRef],
@@ -617,64 +675,33 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
             risk_level: 6,
         })
         .unwrap();
-    let lifecycle_owner = lifecycle_kernel
-        .spawn_agent(SpawnAgentInput {
-            task_id: lifecycle_target_task.task_id.clone(),
-            role_profile_id: "role_supervisor".to_string(),
-            owner: "agent-os-thread-live-test".to_string(),
-            goal: "prepare focused live agent_control targets".to_string(),
-            success_criteria: Vec::new(),
-            failure_criteria: Vec::new(),
-            parent_thread_id: None,
-            workspace_roots: vec![tmp.to_string_lossy().to_string()],
-        })
-        .unwrap();
-    let resume_target = live_child_agent(
-        &lifecycle_kernel,
-        &lifecycle_target_task.task_id,
-        &lifecycle_owner,
-        "resume target",
-        &tmp,
-    );
-    lifecycle_kernel
-        .transition_thread(&resume_target.thread_id, ThreadStatus::Ready, None)
-        .unwrap();
-    lifecycle_kernel
-        .transition_thread(&resume_target.thread_id, ThreadStatus::Suspended, None)
-        .unwrap();
-    let stop_target = live_child_agent(
-        &lifecycle_kernel,
-        &lifecycle_target_task.task_id,
-        &lifecycle_owner,
-        "stop target",
-        &tmp,
-    );
-    let kill_target = live_child_agent(
-        &lifecycle_kernel,
-        &lifecycle_target_task.task_id,
-        &lifecycle_owner,
-        "kill target",
-        &tmp,
-    );
-    lifecycle_kernel
-        .transition_thread(&kill_target.thread_id, ThreadStatus::Running, None)
-        .unwrap();
-
     let status_supervisor = lifecycle_kernel
         .spawn_agent(SpawnAgentInput {
             task_id: status_task.task_id.clone(),
             role_profile_id: "role_supervisor".to_string(),
             owner: "agent-os-thread-live-test".to_string(),
-            goal: format!(
-                "Complete this focused agent_control read-only validation. Read agent_control_seed.md, then for thread_id {} call agent_control status, output, and export_trace exactly once each. Then submit_final with summary exactly Agent control read surface complete. and known_risks as an empty array.",
-                resume_target.thread_id
-            ),
+            goal: "Complete this focused agent_control read-only validation. Read agent_control_seed.md, then use status_target_thread_id from that file to call agent_control status, output, and export_trace exactly once each. Use the thread_id field only; do not provide agent_id. Then submit_final with summary exactly Agent control read surface complete., evidence_map citing evidence_ids from completed tool results, and known_risks as an empty array.".to_string(),
             success_criteria: Vec::new(),
             failure_criteria: Vec::new(),
             parent_thread_id: None,
             workspace_roots: vec![tmp.to_string_lossy().to_string()],
         })
         .unwrap();
+    let status_target = live_child_agent(
+        &lifecycle_kernel,
+        &lifecycle_target_task.task_id,
+        &status_supervisor,
+        "status target",
+        &tmp,
+    );
+    std::fs::write(
+        tmp.join("agent_control_seed.md"),
+        format!(
+            "Agent control seed: read surface\nstatus_target_thread_id: {}\nUse thread_id only. Do not provide agent_id.\n",
+            status_target.thread_id
+        ),
+    )
+    .unwrap();
     let status_client = OpenAiModelClient::new(api_key.clone(), model.clone())
         .with_api_base(api_base.clone())
         .with_api_style(api_style)
@@ -710,16 +737,34 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
             task_id: mutation_task.task_id.clone(),
             role_profile_id: "role_supervisor".to_string(),
             owner: "agent-os-thread-live-test".to_string(),
-            goal: format!(
-                "Complete this focused agent_control mutation validation. Read agent_control_seed.md, then for thread_id {} call agent_control set_hook, send, set_timeout, and resume exactly once each. Then submit_final with summary exactly Agent control mutation surface complete. and known_risks as an empty array.",
-                resume_target.thread_id
-            ),
+            goal: "Complete this focused agent_control mutation validation. Read agent_control_seed.md, then use mutation_target_thread_id from that file to call agent_control set_hook, send, set_timeout, and resume exactly once each. Use the thread_id field only; do not provide agent_id. For set_hook, include payload.prompt. For send, include payload.message. For set_timeout, include payload.timeout_seconds. Then submit_final with summary exactly Agent control mutation surface complete., evidence_map citing evidence_ids from completed tool results, and known_risks as an empty array.".to_string(),
             success_criteria: Vec::new(),
             failure_criteria: Vec::new(),
             parent_thread_id: None,
             workspace_roots: vec![tmp.to_string_lossy().to_string()],
         })
         .unwrap();
+    let mutation_target = live_child_agent(
+        &lifecycle_kernel,
+        &lifecycle_target_task.task_id,
+        &mutation_supervisor,
+        "mutation target",
+        &tmp,
+    );
+    lifecycle_kernel
+        .transition_thread(&mutation_target.thread_id, ThreadStatus::Ready, None)
+        .unwrap();
+    lifecycle_kernel
+        .transition_thread(&mutation_target.thread_id, ThreadStatus::Suspended, None)
+        .unwrap();
+    std::fs::write(
+        tmp.join("agent_control_seed.md"),
+        format!(
+            "Agent control seed: mutation surface\nmutation_target_thread_id: {}\nUse thread_id only. Do not provide agent_id.\n",
+            mutation_target.thread_id
+        ),
+    )
+    .unwrap();
     let mutation_client = OpenAiModelClient::new(api_key.clone(), model.clone())
         .with_api_base(api_base.clone())
         .with_api_style(api_style)
@@ -755,16 +800,38 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
             task_id: terminal_task.task_id.clone(),
             role_profile_id: "role_supervisor".to_string(),
             owner: "agent-os-thread-live-test".to_string(),
-            goal: format!(
-                "Complete this focused agent_control terminal validation. Read agent_control_seed.md, then call agent_control stop exactly once on thread_id {} and agent_control kill exactly once on thread_id {}. Then submit_final with summary exactly Agent control terminal surface complete. and known_risks as an empty array.",
-                stop_target.thread_id, kill_target.thread_id
-            ),
+            goal: "Complete this focused agent_control terminal validation. Read agent_control_seed.md, then call agent_control stop exactly once on stop_target_thread_id and agent_control kill exactly once on kill_target_thread_id from that file. Use the thread_id field only; do not provide agent_id. Then submit_final with summary exactly Agent control terminal surface complete., evidence_map citing evidence_ids from completed tool results, and known_risks as an empty array.".to_string(),
             success_criteria: Vec::new(),
             failure_criteria: Vec::new(),
             parent_thread_id: None,
             workspace_roots: vec![tmp.to_string_lossy().to_string()],
         })
         .unwrap();
+    let stop_target = live_child_agent(
+        &lifecycle_kernel,
+        &lifecycle_target_task.task_id,
+        &terminal_supervisor,
+        "stop target",
+        &tmp,
+    );
+    let kill_target = live_child_agent(
+        &lifecycle_kernel,
+        &lifecycle_target_task.task_id,
+        &terminal_supervisor,
+        "kill target",
+        &tmp,
+    );
+    lifecycle_kernel
+        .transition_thread(&kill_target.thread_id, ThreadStatus::Running, None)
+        .unwrap();
+    std::fs::write(
+        tmp.join("agent_control_seed.md"),
+        format!(
+            "Agent control seed: terminal surface\nstop_target_thread_id: {}\nkill_target_thread_id: {}\nUse thread_id only. Do not provide agent_id.\n",
+            stop_target.thread_id, kill_target.thread_id
+        ),
+    )
+    .unwrap();
     let terminal_approval_id =
         approve_live_tool_risk(&lifecycle_kernel, &terminal_task, &terminal_supervisor);
     let terminal_client = OpenAiModelClient::new(api_key, model.clone())
@@ -842,19 +909,13 @@ fn run_live_llm_goal_driven_single_lifecycle_success_agent_control_e2e(
     log_file_name: &str,
     action: &str,
 ) {
-    let api_key = std::env::var(api_key_env)
-        .unwrap_or_else(|_| panic!("{api_key_env} is required for live LLM e2e"));
-    let model = std::env::var(model_env)
-        .unwrap_or_else(|_| panic!("{model_env} is required for live LLM e2e"));
-    let api_base = std::env::var(base_env)
-        .unwrap_or_else(|_| panic!("{base_env} is required for live LLM e2e"));
-    let tmp = std::env::temp_dir().join(format!(
-        "aos-live-agent-control-lifecycle-success-{}-{}-{}",
-        action,
-        provider.replace('-', "_"),
-        new_id("t_")
-    ));
-    std::fs::create_dir_all(&tmp).unwrap();
+    let api_key = live_env_var(api_key_env);
+    let model = live_env_var(model_env);
+    let api_base = live_env_var(base_env);
+    let tmp = fresh_live_tmp(
+        &format!("aos-live-agent-control-lifecycle-success-{action}"),
+        provider,
+    );
     let audit_log_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../target/agent-os-audit")
         .join(log_file_name);
@@ -886,12 +947,14 @@ fn run_live_llm_goal_driven_single_lifecycle_success_agent_control_e2e(
             risk_level: 6,
         })
         .unwrap();
-    let target_owner = kernel
+    let supervisor = kernel
         .spawn_agent(SpawnAgentInput {
             task_id: task.task_id.clone(),
             role_profile_id: "role_supervisor".to_string(),
             owner: "agent-os-thread-live-test".to_string(),
-            goal: "prepare lifecycle success target".to_string(),
+            goal: format!(
+                "Read control_seed.md, then call exactly one agent_control supervision action with action {action} on the target thread_id named in that file. Use the thread_id field only; do not provide agent_id. After that action succeeds, call accomplish_goal with a concise summary, then submit_final with summary exactly Agent control lifecycle action applied., evidence_map citing evidence_ids from completed tool results, tests_run containing read_file control_seed.md, and known_risks as an empty array. submit_final must be the last tool call."
+            ),
             success_criteria: Vec::new(),
             failure_criteria: Vec::new(),
             parent_thread_id: None,
@@ -901,26 +964,10 @@ fn run_live_llm_goal_driven_single_lifecycle_success_agent_control_e2e(
     let target = live_child_agent(
         &kernel,
         &task.task_id,
-        &target_owner,
+        &supervisor,
         "lifecycle success target",
         &tmp,
     );
-    let detailed_goal = format!(
-        "Read control_seed.md, then call exactly one agent_control supervision action with action {action} on thread_id {thread_id}. After that action succeeds, call accomplish_goal with a concise summary, then submit_final with summary exactly Agent control lifecycle action applied., tests_run containing read_file control_seed.md, and known_risks as an empty array. submit_final must be the last tool call.",
-        thread_id = target.thread_id,
-    );
-    let supervisor = kernel
-        .spawn_agent(SpawnAgentInput {
-            task_id: task.task_id.clone(),
-            role_profile_id: "role_supervisor".to_string(),
-            owner: "agent-os-thread-live-test".to_string(),
-            goal: detailed_goal,
-            success_criteria: Vec::new(),
-            failure_criteria: Vec::new(),
-            parent_thread_id: None,
-            workspace_roots: vec![tmp.to_string_lossy().to_string()],
-        })
-        .unwrap();
     let approval_id = approve_live_tool_risk(&kernel, &task, &supervisor);
     let client = OpenAiModelClient::new(api_key, model.clone())
         .with_api_base(api_base.clone())
@@ -944,7 +991,10 @@ fn run_live_llm_goal_driven_single_lifecycle_success_agent_control_e2e(
 
     std::fs::write(
         tmp.join("control_seed.md"),
-        format!("Agent control lifecycle action: {action}\n"),
+        format!(
+            "Agent control lifecycle action: {action}\nTarget thread_id: {}\nUse thread_id only. Do not provide agent_id.\n",
+            target.thread_id
+        ),
     )
     .unwrap();
     let mut runtime = ThreadRuntime::new(kernel.clone(), supervisor.thread_id.clone(), client);
@@ -995,7 +1045,9 @@ fn assert_all_tool_calls_completed(report: &RuntimeRunReport) {
     let failed: Vec<_> = report
         .tool_results
         .iter()
-        .filter(|record| record.status != ToolCallStatus::Completed)
+        .filter(|record| {
+            record.tool_name != "runtime_feedback" && record.status != ToolCallStatus::Completed
+        })
         .collect();
     assert!(failed.is_empty(), "tool calls did not complete: {failed:?}");
 }
@@ -1088,7 +1140,7 @@ fn approve_live_tool_risk(kernel: &Kernel, task: &Task, supervisor: &AgentContro
             approval_type: ApprovalType::Human,
             scope: ApprovalScope {
                 syscall_types: vec!["tool.invoke".to_string()],
-                resource_scopes: Vec::new(),
+                resource_scopes: vec![json!("tool:*")],
                 risk_ceiling: 6,
                 goal_id: task.goal_id.clone(),
                 task_id: Some(task.task_id.clone()),

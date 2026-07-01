@@ -1,4 +1,4 @@
-# Long-Running Kernel and App Server Gap Analysis
+# Long-Running Kernel and App Server Gap Study
 
 Status: transitional design record
 Created: 2026-06-30

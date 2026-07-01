@@ -15,7 +15,7 @@ pub(super) fn apply_lifecycle_action(
     payload: &Value,
 ) -> AgentOsResult<AgentControlActionResult> {
     match action {
-        AgentControlAction::Output => output_for_target(kernel, target),
+        AgentControlAction::Output => output_for_target(kernel, target, payload),
         AgentControlAction::Send => Ok(AgentControlActionResult {
             thread_status: target.status,
             output: json!({
@@ -54,7 +54,7 @@ pub(super) fn apply_lifecycle_action(
                 }),
             })
         }
-        AgentControlAction::ExportTrace => export_trace_for_target(kernel, target),
+        AgentControlAction::ExportTrace => export_trace_for_target(kernel, target, payload),
         AgentControlAction::Kill => {
             let acb = terminate_target(
                 kernel,
@@ -102,8 +102,43 @@ pub(super) fn apply_lifecycle_action(
 fn output_for_target(
     kernel: &Kernel,
     target: &AgentControlBlock,
+    payload: &Value,
 ) -> AgentOsResult<AgentControlActionResult> {
     let state = kernel.read_state()?;
+    if let Some(tool_call_id) = payload.get("tool_call_id").and_then(Value::as_str) {
+        let invocation = state
+            .tool_invocations
+            .get(tool_call_id)
+            .filter(|invocation| {
+                invocation.agent_id == target.agent_id || invocation.task_id == target.task.task_id
+            })
+            .cloned()
+            .ok_or_else(|| AgentOsError::NotFound(format!("tool call {tool_call_id}")))?;
+        let worker = kernel
+            .tool_workers
+            .lock()
+            .ok()
+            .and_then(|workers| workers.get(tool_call_id).cloned());
+        return Ok(AgentControlActionResult {
+            thread_status: target.status,
+            output: super::super::super::output::query_tool_output(
+                &invocation,
+                worker.as_ref(),
+                payload,
+            )?,
+        });
+    }
+    let cursor = payload
+        .get("cursor")
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or(0);
+    let limit = payload
+        .get("limit")
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or(20)
+        .clamp(1, 100);
     let mut output: Vec<Value> = state
         .provider_stream_sessions
         .values()
@@ -126,15 +161,30 @@ fn output_for_target(
             .unwrap_or_default()
             .cmp(right["created_at"].as_str().unwrap_or_default())
     });
+    let total = output.len();
+    let items = output
+        .into_iter()
+        .skip(cursor)
+        .take(limit)
+        .collect::<Vec<_>>();
+    let next_cursor = (cursor + items.len() < total).then_some(cursor + items.len());
     Ok(AgentControlActionResult {
         thread_status: target.status,
-        output: json!(output),
+        output: json!({
+            "items": items,
+            "cursor": cursor,
+            "limit": limit,
+            "total_items": total,
+            "next_cursor": next_cursor,
+            "truncated": next_cursor.is_some()
+        }),
     })
 }
 
 fn export_trace_for_target(
     kernel: &Kernel,
     target: &AgentControlBlock,
+    payload: &Value,
 ) -> AgentOsResult<AgentControlActionResult> {
     let events = kernel
         .events()?
@@ -146,7 +196,12 @@ fn export_trace_for_target(
         })
         .collect::<Vec<_>>();
     let event_count = events.len();
-    let preview_event_limit = 5usize;
+    let preview_event_limit = payload
+        .get("limit")
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or(5)
+        .clamp(1, 100);
     let preview_events = events
         .iter()
         .take(preview_event_limit)

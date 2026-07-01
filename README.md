@@ -22,7 +22,7 @@ crates/
   agent-os-store/        # append-only store traits and in-memory driver
   agent-os-store-sqlite/ # SQLite event/idempotency store driver
   agent-os-kernel/       # single-node microkernel services
-  agent-os-thread/       # Agent Thread Runtime loop, model adapters, and workflow examples
+  agent-os-thread/       # Agent Thread Runtime loop, model adapters, and workflow prompt builders
   agent-os-conformance/  # conformance tests for the normative docs
   agent-os-cli/          # lifecycle demo and deterministic e2e task runner
 ```
@@ -47,9 +47,9 @@ Implemented kernel surfaces include:
 - review independence, verification independence, and final evidence-map checks
 - provider stream sessions, usage accounting, override policy checks, and durable failover events
 - deterministic CLI e2e task execution that writes a workspace output file and closes with evidence, artifact, replay, and final submission
-- Agent Thread Runtime loop that consumes provider-neutral model actions, records provider stream events, executes tool proposals through Tool Broker, auto-commits patch artifacts from diff evidence, blocks nonzero process checks, submits evidence-backed final output, checkpoints, and replays
+- Agent Thread Runtime loop that consumes provider-neutral model actions, records provider stream events, bounds provider requests with a hard client timeout, executes tool proposals through Tool Broker, yields on background-running tools, bounds pre-patch investigation loops, auto-commits patch artifacts from diff evidence, blocks nonzero process checks, submits evidence-backed final output through the broker, checkpoints, and replays
 - external process model adapter for `ModelTurnRequest` JSON over stdin and `ModelTurnResponse` JSON over stdout, so real provider wrappers can drive the same runtime without linking provider SDKs into the kernel
-- a converged v0.1 Host OS tool target of `read_file`, `write_file`, `replace_text`, `delete_file`, and `run_command`
+- a converged v0.2 Host OS tool surface of `read_file`, `apply_patch`, and `run_command`, with each built-in tool owned by its own kernel Rust module and descriptor
 - Agent-OS control-plane tools for objective/checklist state, Supervisor communication, scoped blackboard posts, human asks, evidence records, supervised child agents, and final session submission
 - a Supervisor-led workflow model where concrete distributions provide prompts, examples, and policy packs instead of hard-coded kernel pipelines
 - Supervisor hierarchy semantics: the top Supervisor is `S0`, delegated Supervisors increment the level (`S1`, `S2`, ...), and every delegation records a durable invocation edge for replay and audit
@@ -62,9 +62,7 @@ Agent-OS v0.2.0 separates three surfaces that must not be conflated:
 ```text
 Host OS tools:
   read_file
-  write_file
-  replace_text
-  delete_file
+  apply_patch
   run_command
 
 Agent-OS control-plane tools:
@@ -85,6 +83,10 @@ The core roles are `SupervisorAgent`, `WorkerAgent`, and `ReviewerAgent`. Testin
 Security levels are part of the control plane. Human authority is implicit `S0`; every persisted root agent starts at `S1`, and each nested child increments the parent level. The kernel records each delegation as an invocation edge with caller, callee, security level, child goal, task/goal scope, and capability/profile snapshots. `agent_control` and `set_goal` require `security_level <= 1` plus matching tool permission.
 
 Child agents are supervised, not fire-and-forget. `agent_control(action=start)` creates durable agent state and an invocation edge with `payload.goal`; the same call can set timeout, output policy, success/failure criteria, initial hooks, and a child permission subset. `request_permissions` lets a child ask its direct parent for a turn- or session-scoped permission grant. `set_goal` is Supervisor-only retargeting for an existing Supervisor thread or direct child. Execution agents call `accomplish_goal` before `submit_final`; `submit_final` remains the last tool call in the session. `agent_control(action=set_hook)` can register periodic progress-report prompt injection so a child reports concise progress back to Supervisor without relying on done markers or a blocking wait tool.
+
+Built-in tools define their own `ToolDescriptor`, model schema, runtime input policy, timeout policy, parameter parsing, execution entry, and focused unit tests under `crates/agent-os-kernel/src/tools/builtin/`. File-like outputs use `offset` and `limit` metadata where applicable. Long-running tool calls have a 15 second foreground wait cap; when work continues in the background, the invocation returns `Running` with `tool_call_id` equal to the tool call id. Every tool result is attached to the unified tool-output manager when it contains managed text fields. `agent_control(action=output, payload.tool_call_id=...)` reads that managed output: by default it returns `payload.new=200` lines from the supplied cursor; callers can request `payload.head` or `payload.tail`, or set `payload.full=true` with `payload.offset` and `payload.limit` for line paging over the complete spooled field. Hard byte caps still apply to each returned window. Tools that produce final-claim support attach evidence directly from their descriptor: file reads produce `source_ref`, patches produce `diff_ref`, commands produce `command_log`, control-plane state changes produce `runtime_trace`, and permission requests produce `approval_record`.
+
+The runtime also narrows the model-visible tool surface when the loop has enough evidence to move forward. A pre-patch investigation gate first emits soft feedback after a bounded sequence of read/command investigation results without any `apply_patch` attempt, then temporarily exposes only `apply_patch`, `submit_final`, and `accomplish_goal` if investigation continues past the hard gate. After a patch has post-patch command evidence, the finalization gate exposes only `submit_final` and `accomplish_goal`.
 
 ## Provider Configuration
 
@@ -128,6 +130,9 @@ cargo test --workspace
 
 Run the live goal-driven LLM coverage suite with real provider responses:
 
+The ignored live tests read provider values from the process environment first
+and then from the repository-root `.env` file.
+
 ```sh
 AGENT_OS_LIVE_OPENAI_API_KEY=... \
 AGENT_OS_LIVE_OPENAI_BASE_URL=https://api.openai.com/v1 \
@@ -142,7 +147,7 @@ AGENT_OS_LIVE_ANTHROPIC_MODEL=claude-sonnet-4-20250514 \
 cargo test -p agent-os-thread live_anthropic_compatible_llm_goal_driven -- --ignored --nocapture
 ```
 
-These ignored tests use the normal system prompt and normal Agent Thread Runtime loop. They do not mock model responses and do not inject per-tool forcing prompts. The workspace scenario covers `read_file`, `write_file`, `replace_text`, `delete_file`, `run_command`, `accomplish_goal`, and `submit_final`. The control-plane scenario covers `set_goal`, `accomplish_goal`, `update_checklist`, `record_evidence`, `report_supervisor`, `post_blackboard`, `ask_human`, `agent_control`, `read_file`, and `submit_final`.
+These ignored tests use the normal system prompt and normal Agent Thread Runtime loop. They do not mock model responses and do not inject per-tool forcing prompts. The workspace scenario covers `read_file`, `apply_patch`, `run_command`, `accomplish_goal`, and `submit_final`. The control-plane scenario covers `set_goal`, `accomplish_goal`, `update_checklist`, `record_evidence`, `report_supervisor`, `post_blackboard`, `ask_human`, `agent_control`, `read_file`, and `submit_final`.
 
 Inspectable interaction logs are written under `target/agent-os-audit/`:
 
@@ -204,7 +209,7 @@ cargo run -p agent-os-cli -- run \
   --model-arg local
 ```
 
-The model command is executed once per turn. It receives compact `ModelTurnRequest` JSON on stdin and must emit `ModelTurnResponse` JSON on stdout, using actions such as `output_text`, `tool_call`, and `final`. Tool calls still execute only through the Agent-OS Tool Broker with capability checks, evidence capture, artifact commit, and replay.
+The model command is executed once per turn. It receives compact `ModelTurnRequest` JSON on stdin and must emit `ModelTurnResponse` JSON on stdout, using actions such as `output_text` and `tool_call`. `submit_final` is a normal tool call and must be the last call in the session. Tool calls still execute only through the Agent-OS Tool Broker with capability checks, evidence capture, artifact commit, and replay.
 
 Run a repository edit and test command through the same control plane:
 
@@ -218,7 +223,7 @@ cargo run -p agent-os-cli -- code \
   --test-arg test
 ```
 
-The `code` command is an implementation helper for a software-engineering workflow example. In task-only mode it derives one safe exact edit from phrasing like `from X to Y`; if it cannot prove a single edit, it fails closed and requires `--file`, `--old`, and `--new`. This helper demonstrates the Agent-OS control plane, but the kernel design target is Supervisor-led workflow prompts and examples rather than a mandatory built-in pipeline. Failed tests block completion; review findings can trigger a revision pass. `--bundle-output` exports the task subtree, including child tasks, artifacts, evidence, reviews, verifications, finals, profile snapshots, and replay events.
+The `code` command is an implementation helper that builds a software-engineering distro prompt and then runs the normal Agent Thread Runtime loop through `agent-os-kerneld`. In task-only mode it derives one safe exact edit from phrasing like `from X to Y`; if it cannot prove a single edit, it fails closed and requires `--file`, `--old`, and `--new`. The distro prompt gives the Supervisor flexible workflow labels mapped onto core Agent-OS roles rather than a mandatory built-in pipeline. `--bundle-output` exports the task subtree, including child tasks, artifacts, evidence, reviews, verifications, finals, profile snapshots, and replay events.
 
 Exact edit mode is still available:
 

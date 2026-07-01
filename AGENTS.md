@@ -124,9 +124,19 @@ forward-only system design.
   into broad fixture files.
 - Run the relevant test suite and `cargo clippy --workspace --all-targets -- -D
   warnings` before handing off when feasible.
+- Use the project validation gate in strict order for changes that can affect
+  model-visible behavior, runtime behavior, tool behavior, prompts, provider
+  adapters, storage/replay, or benchmark behavior: unit tests first, then
+  integration/conformance tests, then live LLM e2e tests, then private
+  benchmarks. Do not start benchmark runs until the live e2e gate passes.
 - For benchmark regressions, acceptance must include one-by-one reruns of the
   original failing benchmark instances. Do not accept a fix only from synthetic
   tests when a concrete benchmark failure is available.
+- For SWE-bench benchmark gates, Agent-OS `exit=0` only means the agent run
+  completed. After patches are produced, generate predictions for exactly the
+  evaluated instance ids and run the official SWE-bench harness from the WSL
+  venv at `/root/agent-os-swebench-venv`. Treat the benchmark as passed only
+  when the harness reports the intended instances as resolved.
 - Report code changes, test changes, commands run, and command results in the
   handoff.
 
@@ -134,8 +144,8 @@ forward-only system design.
 
 - For design or implementation audits that lead to code changes, use the
   workflow `audit -> document -> fix -> document`.
-- Store audit records under `docs/audit/`. Create the directory when it is
-  missing.
+- Store audit records under the local-only ignored directory `docs/audit/`.
+  Create the directory when it is missing and do not add it to Git tracking.
 - Before editing code, write a pre-fix audit document that records the current
   Git `HEAD`, Git tree hash, worktree status, audit scope, findings, validation
   already run, and the intended fix scope.

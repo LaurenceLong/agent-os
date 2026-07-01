@@ -5,8 +5,10 @@
 //! share these contracts.
 
 mod abi;
+mod app;
 mod artifacts;
 mod audit;
+mod automation;
 mod communication;
 mod context;
 mod core;
@@ -21,8 +23,10 @@ mod resources;
 mod tools;
 
 pub use abi::*;
+pub use app::*;
 pub use artifacts::*;
 pub use audit::*;
+pub use automation::*;
 pub use communication::*;
 pub use context::*;
 pub use core::*;

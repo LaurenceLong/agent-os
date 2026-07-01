@@ -5,8 +5,10 @@
 
 mod blob;
 mod memory;
+mod projection;
 mod traits;
 
 pub use blob::*;
 pub use memory::*;
+pub use projection::*;
 pub use traits::*;

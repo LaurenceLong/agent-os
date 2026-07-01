@@ -5,6 +5,8 @@ members = [
     "crates/agent-os-store-sqlite",
     "crates/agent-os-kernel",
     "crates/agent-os-thread",
+    "crates/agent-os-app-server",
+    "crates/agent-os-kerneld",
     "crates/agent-os-cli",
     "crates/agent-os-conformance",
 ]
@@ -21,6 +23,8 @@ agent-os-store = { path = "crates/agent-os-store" }
 agent-os-store-sqlite = { path = "crates/agent-os-store-sqlite" }
 agent-os-kernel = { path = "crates/agent-os-kernel" }
 agent-os-thread = { path = "crates/agent-os-thread" }
+agent-os-app-server = { path = "crates/agent-os-app-server" }
+agent-os-kerneld = { path = "crates/agent-os-kerneld" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "1.0"

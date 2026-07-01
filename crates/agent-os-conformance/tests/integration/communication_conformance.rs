@@ -298,7 +298,7 @@ fn control_plane_tools_execute_through_tool_broker() {
             &fx.task.task_id,
             &supervisor.session_id,
             supervisor_cap.capability_id,
-            3,
+            2,
             ToolInvokeInput {
                 tool_name: "ask_human".to_string(),
                 input: json!({"question": "confirm control-plane conformance?"}),

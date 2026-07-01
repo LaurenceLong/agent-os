@@ -7,7 +7,7 @@ use crate::*;
 use agent_os_sys::*;
 use serde_json::{json, Value};
 
-pub(super) fn run_report_supervisor(
+pub(in crate::tools) fn run_report_supervisor(
     kernel: &Kernel,
     syscall: &SyscallEnvelope,
     descriptor: &ToolDescriptor,
@@ -22,7 +22,7 @@ pub(super) fn run_report_supervisor(
             route: MessageRoute::Supervisor,
             message_type: optional_string(input, "message_type")
                 .unwrap_or_else(|| "StatusUpdate".to_string()),
-            payload: json!({"message": required_string(input, "message")?}),
+            payload: json!({"message": bounded_required_string(input, "message")?}),
             channel_id: None,
             artifact_refs: string_array(input, "artifact_refs")?,
             evidence_refs: string_array(input, "evidence_refs")?,
@@ -31,7 +31,7 @@ pub(super) fn run_report_supervisor(
     message_output(descriptor, input, &message)
 }
 
-pub(super) fn run_post_blackboard(
+pub(in crate::tools) fn run_post_blackboard(
     kernel: &Kernel,
     syscall: &SyscallEnvelope,
     descriptor: &ToolDescriptor,
@@ -97,7 +97,7 @@ pub(super) fn run_post_blackboard(
     }))
 }
 
-pub(super) fn run_ask_human(
+pub(in crate::tools) fn run_ask_human(
     kernel: &Kernel,
     syscall: &SyscallEnvelope,
     descriptor: &ToolDescriptor,
@@ -105,7 +105,7 @@ pub(super) fn run_ask_human(
 ) -> AgentOsResult<Value> {
     let acb = current_agent(kernel, syscall)?;
     let payload = json!({
-        "question": required_string(input, "question")?,
+        "question": bounded_required_string(input, "question")?,
         "context": input.get("context").cloned().unwrap_or_else(|| json!({})),
     });
     let message = send_control_message(
@@ -123,4 +123,14 @@ pub(super) fn run_ask_human(
         },
     )?;
     message_output(descriptor, input, &message)
+}
+
+fn bounded_required_string(input: &Value, field: &str) -> AgentOsResult<String> {
+    let value = required_string(input, field)?;
+    if value.len() > 8_000 {
+        return Err(AgentOsError::Validation(format!(
+            "{field} must be 8000 bytes or less"
+        )));
+    }
+    Ok(value)
 }

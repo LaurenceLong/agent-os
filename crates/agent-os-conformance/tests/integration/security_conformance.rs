@@ -461,7 +461,7 @@ fn parent_approved_session_permission_enables_child_tool_call() {
                 input: json!({
                     "reason": "write the reviewed file after parent approval",
                     "scope": "session",
-                    "permissions": write_file_permission()
+                    "permissions": apply_patch_permission()
                 }),
                 evidence_claim: None,
             },
@@ -471,7 +471,7 @@ fn parent_approved_session_permission_enables_child_tool_call() {
         .as_str()
         .unwrap();
 
-    approve_permission_request(&fx, &supervisor, request_id, write_file_permission());
+    approve_permission_request(&fx, &supervisor, request_id, apply_patch_permission());
     let elevated_cap = fx
         .kernel
         .grant_capability(
@@ -492,13 +492,12 @@ fn parent_approved_session_permission_enables_child_tool_call() {
             elevated_cap.capability_id,
             4,
             ToolInvokeInput {
-                tool_name: "write_file".to_string(),
+                tool_name: "apply_patch".to_string(),
                 input: json!({
                     "workspace_root": workspace.to_string_lossy(),
-                    "path": "approved.txt",
-                    "content": "approved\n"
+                    "patch": "*** Begin Patch\n*** Add File: approved.txt\n+approved\n*** End Patch\n"
                 }),
-                evidence_claim: Some("approved child write succeeded".to_string()),
+                evidence_claim: Some("approved child apply_patch succeeded".to_string()),
             },
         )
         .unwrap();
@@ -544,7 +543,7 @@ fn denied_permission_request_does_not_change_child_authority() {
                 input: json!({
                     "reason": "try to write without approval",
                     "scope": "session",
-                    "permissions": write_file_permission()
+                    "permissions": apply_patch_permission()
                 }),
                 evidence_claim: None,
             },
@@ -607,7 +606,7 @@ fn turn_scoped_permission_grant_expires_after_turn_completes() {
                 input: json!({
                     "reason": "temporary write during this turn",
                     "scope": "turn",
-                    "permissions": write_file_permission()
+                    "permissions": apply_patch_permission()
                 }),
                 evidence_claim: None,
             },
@@ -616,7 +615,7 @@ fn turn_scoped_permission_grant_expires_after_turn_completes() {
     let request_id = request.output.as_ref().unwrap()["permission_request_id"]
         .as_str()
         .unwrap();
-    approve_permission_request(&fx, &supervisor, request_id, write_file_permission());
+    approve_permission_request(&fx, &supervisor, request_id, apply_patch_permission());
     fx.kernel
         .grant_capability(
             &child.agent_id,
@@ -777,12 +776,12 @@ fn attach_workspace_for_agent(
         .unwrap();
 }
 
-fn write_file_permission() -> serde_json::Value {
+fn apply_patch_permission() -> serde_json::Value {
     json!({
         "max_risk_level": 4,
         "allowed_syscalls": ["tool.invoke"],
         "resource_scopes": ["tool:*"],
-        "allowed_tool_names": ["write_file"],
+        "allowed_tool_names": ["apply_patch"],
         "allowed_tool_driver_classes": ["filesystem"],
         "approval_required_above": 4,
         "requires_evidence_for": []

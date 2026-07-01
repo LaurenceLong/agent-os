@@ -26,27 +26,27 @@ fn goal_driven_runtime_integration_covers_tools_and_agent_control_actions() {
             1,
         ),
         tool(
-            "write_file",
+            "apply_patch",
             json!({
                 "workspace_root": workspace_root.clone(),
-                "path": "created.txt",
-                "content": "created through goal-driven integration\n"
+                "patch": "*** Begin Patch\n*** Add File: created.txt\n+created through goal-driven integration\n*** End Patch\n"
             }),
             4,
         ),
         tool(
-            "replace_text",
+            "apply_patch",
             json!({
                 "workspace_root": workspace_root.clone(),
-                "path": "edit.txt",
-                "old": "old",
-                "new": "new"
+                "patch": "*** Begin Patch\n*** Update File: edit.txt\n@@\n-alpha old beta\n+alpha new beta\n*** End Patch\n"
             }),
             4,
         ),
         tool(
-            "delete_file",
-            json!({"workspace_root": workspace_root.clone(), "path": "delete.txt"}),
+            "apply_patch",
+            json!({
+                "workspace_root": workspace_root.clone(),
+                "patch": "*** Begin Patch\n*** Delete File: delete.txt\n*** End Patch\n"
+            }),
             4,
         ),
         tool(
@@ -101,7 +101,7 @@ fn goal_driven_runtime_integration_covers_tools_and_agent_control_actions() {
                 "question": "Confirm goal-driven integration human route wiring?",
                 "context": {"test": "goal_driven_runtime_integration"}
             }),
-            3,
+            2,
         ),
         agent_control(
             "start",
@@ -209,18 +209,16 @@ fn goal_driven_runtime_integration_covers_tools_and_agent_control_actions() {
         observed_tools,
         BTreeSet::from([
             "agent_control",
+            "apply_patch",
             "ask_human",
-            "delete_file",
             "post_blackboard",
             "read_file",
             "record_evidence",
-            "replace_text",
             "report_supervisor",
             "run_command",
             "set_goal",
             "accomplish_goal",
             "update_checklist",
-            "write_file",
         ])
     );
 
@@ -329,7 +327,7 @@ fn goal_driven_runtime_integration_rejects_understated_privileged_agent_control_
                 .context
                 .tool_results
                 .iter()
-                .find(|result| result.tool_name == "write_file");
+                .find(|result| result.tool_name == "apply_patch");
             let command_result = request
                 .context
                 .tool_results
@@ -375,11 +373,10 @@ fn goal_driven_runtime_integration_rejects_understated_privileged_agent_control_
                     assert_eq!(failed.status, ToolCallStatus::Failed);
                     Ok(ModelTurnResponse::single(ModelAction::ToolCall(
                         ToolAction::new(
-                            "write_file",
+                            "apply_patch",
                             json!({
                                 "workspace_root": self.workspace_root.clone(),
-                                "path": "risk_diff.txt",
-                                "content": "understated privileged action failed as a tool result\n"
+                                "patch": "*** Begin Patch\n*** Add File: risk_diff.txt\n+understated privileged action failed as a tool result\n*** End Patch\n"
                             }),
                             4,
                             Some("understated privileged action failure was written".to_string()),

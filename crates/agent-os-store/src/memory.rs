@@ -1,5 +1,10 @@
-use crate::{EventStore, IdempotencyStore, ProjectionStore};
-use agent_os_sys::{AgentOsError, AgentOsResult, EventEnvelope, SyscallResult};
+use crate::{EventStore, IdempotencyStore, ProjectionState, ProjectionStore};
+use agent_os_sys::{
+    AgentOsError, AgentOsResult, ApprovalQueueProjection, ArtifactIndexProjection,
+    AutomationRunProjection, AutomationScheduleProjection, ClientThread, EventEnvelope,
+    EvidenceIndexProjection, ProjectionCheckpoint, ResourceSessionProjection, StatsQuery,
+    StatsSnapshot, SyscallResult, TimelineItem, TurnRecord,
+};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
@@ -7,6 +12,7 @@ use std::sync::{Arc, RwLock};
 struct InMemoryStoreInner {
     events: Vec<EventEnvelope>,
     idempotency: HashMap<String, SyscallResult>,
+    projections: ProjectionState,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -59,6 +65,15 @@ impl EventStore for InMemoryStore {
             .cloned()
             .collect())
     }
+
+    fn event_ordinal(&self, event_id: &str) -> AgentOsResult<u64> {
+        self.read()?
+            .events
+            .iter()
+            .position(|event| event.event_id == event_id)
+            .map(|index| index as u64 + 1)
+            .ok_or_else(|| AgentOsError::NotFound(format!("event {event_id}")))
+    }
 }
 
 impl IdempotencyStore for InMemoryStore {
@@ -92,6 +107,128 @@ impl ProjectionStore for InMemoryStore {
             .filter(|event| event.aggregate_type == aggregate_type)
             .cloned()
             .collect())
+    }
+
+    fn clear_projections(&self) -> AgentOsResult<()> {
+        self.write()?.projections = ProjectionState::default();
+        Ok(())
+    }
+
+    fn append_projected(&self, event: EventEnvelope) -> AgentOsResult<u64> {
+        let mut inner = self.write()?;
+        inner.events.push(event.clone());
+        let ordinal = inner.events.len() as u64;
+        inner.projections.apply_event(ordinal, &event)?;
+        Ok(ordinal)
+    }
+
+    fn project_event(&self, ordinal: u64, event: &EventEnvelope) -> AgentOsResult<()> {
+        self.write()?.projections.apply_event(ordinal, event)
+    }
+
+    fn rebuild_projections(&self) -> AgentOsResult<()> {
+        let events = self.read()?.events.clone();
+        self.write()?.projections = ProjectionState::rebuild(&events)?;
+        Ok(())
+    }
+
+    fn thread_summaries(&self) -> AgentOsResult<Vec<ClientThread>> {
+        Ok(self.read()?.projections.threads.values().cloned().collect())
+    }
+
+    fn turn_summaries(&self) -> AgentOsResult<Vec<TurnRecord>> {
+        Ok(self.read()?.projections.turns.values().cloned().collect())
+    }
+
+    fn timeline_items(&self, client_thread_id: Option<&str>) -> AgentOsResult<Vec<TimelineItem>> {
+        Ok(self
+            .read()?
+            .projections
+            .timeline_items
+            .iter()
+            .filter(|item| {
+                client_thread_id
+                    .map(|thread_id| item.client_thread_id.as_deref() == Some(thread_id))
+                    .unwrap_or(true)
+            })
+            .cloned()
+            .collect())
+    }
+
+    fn stats_snapshot(&self, _query: StatsQuery) -> AgentOsResult<StatsSnapshot> {
+        Ok(self.read()?.projections.stats.clone())
+    }
+
+    fn approval_queue(&self) -> AgentOsResult<Vec<ApprovalQueueProjection>> {
+        Ok(self
+            .read()?
+            .projections
+            .approvals
+            .values()
+            .cloned()
+            .collect())
+    }
+
+    fn resource_sessions(&self) -> AgentOsResult<Vec<ResourceSessionProjection>> {
+        Ok(self
+            .read()?
+            .projections
+            .resources
+            .values()
+            .cloned()
+            .collect())
+    }
+
+    fn automation_schedules(&self) -> AgentOsResult<Vec<AutomationScheduleProjection>> {
+        Ok(self
+            .read()?
+            .projections
+            .automation_schedules
+            .values()
+            .cloned()
+            .collect())
+    }
+
+    fn automation_runs(&self) -> AgentOsResult<Vec<AutomationRunProjection>> {
+        Ok(self
+            .read()?
+            .projections
+            .automation_runs
+            .values()
+            .cloned()
+            .collect())
+    }
+
+    fn artifact_index(&self) -> AgentOsResult<Vec<ArtifactIndexProjection>> {
+        Ok(self
+            .read()?
+            .projections
+            .artifacts
+            .values()
+            .cloned()
+            .collect())
+    }
+
+    fn evidence_index(&self) -> AgentOsResult<Vec<EvidenceIndexProjection>> {
+        Ok(self
+            .read()?
+            .projections
+            .evidence
+            .values()
+            .cloned()
+            .collect())
+    }
+
+    fn projection_checkpoint(
+        &self,
+        projection_name: &str,
+    ) -> AgentOsResult<Option<ProjectionCheckpoint>> {
+        Ok(self
+            .read()?
+            .projections
+            .checkpoints
+            .get(projection_name)
+            .cloned())
     }
 }
 

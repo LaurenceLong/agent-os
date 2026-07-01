@@ -25,6 +25,8 @@ pub(crate) struct CodeOptions {
     pub(crate) test_args: Vec<String>,
     pub(crate) bundle_output: Option<PathBuf>,
     pub(crate) state_db: Option<PathBuf>,
+    pub(crate) model_command: Option<PathBuf>,
+    pub(crate) model_args: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -50,6 +52,7 @@ pub(crate) struct ChatOptions {
     pub(crate) task_file: Option<PathBuf>,
     pub(crate) provider: Option<String>,
     pub(crate) max_steps: u32,
+    pub(crate) runtime_timeout_seconds: u64,
     pub(crate) max_tokens: Option<u64>,
     pub(crate) temperature: Option<f64>,
     pub(crate) state_db: Option<PathBuf>,
@@ -136,6 +139,8 @@ impl CodeOptions {
         let mut test_args = Vec::new();
         let mut bundle_output = None;
         let mut state_db = None;
+        let mut model_command = None;
+        let mut model_args = Vec::new();
         let mut index = 0;
         while index < args.len() {
             match args[index].as_str() {
@@ -179,6 +184,15 @@ impl CodeOptions {
                     index += 1;
                     state_db = Some(PathBuf::from(required_arg(args, index, "--state-db")?));
                 }
+                "--model-command" => {
+                    index += 1;
+                    model_command =
+                        Some(PathBuf::from(required_arg(args, index, "--model-command")?));
+                }
+                "--model-arg" => {
+                    index += 1;
+                    model_args.push(required_arg(args, index, "--model-arg")?.to_string());
+                }
                 "--help" | "-h" => {
                     return Err(AgentOsError::Validation(
                         serde_json::to_string(&usage_json()).unwrap_or_default(),
@@ -221,6 +235,8 @@ impl CodeOptions {
             test_args,
             bundle_output,
             state_db,
+            model_command,
+            model_args,
         })
     }
 }
@@ -361,6 +377,7 @@ impl ChatOptions {
         let mut task_file = None;
         let mut provider = None;
         let mut max_steps = 32u32;
+        let mut runtime_timeout_seconds = 120u64;
         let mut max_tokens = None;
         let mut temperature = None;
         let mut state_db = None;
@@ -393,6 +410,17 @@ impl ChatOptions {
                             .parse()
                             .map_err(|_| {
                                 AgentOsError::Validation("--max-steps must be a number".to_string())
+                            })?;
+                }
+                "--runtime-timeout-seconds" => {
+                    index += 1;
+                    runtime_timeout_seconds =
+                        required_arg(args, index, "--runtime-timeout-seconds")?
+                            .parse()
+                            .map_err(|_| {
+                                AgentOsError::Validation(
+                                    "--runtime-timeout-seconds must be a number".to_string(),
+                                )
                             })?;
                 }
                 "--max-tokens" => {
@@ -451,6 +479,7 @@ impl ChatOptions {
             task_file,
             provider,
             max_steps,
+            runtime_timeout_seconds,
             max_tokens,
             temperature,
             state_db,
@@ -475,10 +504,11 @@ pub(crate) fn usage_json() -> Value {
             "--task-file": "Read initial batch task text from a UTF-8 file before exiting.",
             "--provider, -p": "Provider name from the global Agent-OS provider config. Defaults to default_provider.",
             "--max-steps": "Maximum agent steps per task. Default: 32",
+            "--runtime-timeout-seconds": "Maximum wall-clock seconds to wait for the runtime job. Default: 120",
             "--max-tokens": "Maximum output tokens per model call.",
             "--temperature": "Model temperature (0.0 = deterministic). Default: 0.0",
             "--state-db": "Optional SQLite event store path for durable replay.",
-            "--bundle-output": "Optional relative path for task bundle JSON.",
+            "--bundle-output": "Optional relative path for selected task bundle JSON inside workspace.",
             "<task>": "Positional: initial batch task text."
         },
         "run_options": {
@@ -499,7 +529,9 @@ pub(crate) fn usage_json() -> Value {
             "--test-program": "Test executable. Default: current agent-os executable.",
             "--test-arg": "One argument for the test executable. Repeatable. Default: --help",
             "--bundle-output": "Optional relative path for selected task bundle JSON inside workspace.",
-            "--state-db": "Optional SQLite event store path for durable replay across process restarts."
+            "--state-db": "Optional SQLite event store path for durable replay across process restarts.",
+            "--model-command": "Required external model action process. It receives ModelTurnRequest JSON on stdin and emits ModelTurnResponse JSON on stdout.",
+            "--model-arg": "One argument for the external model action process. Repeatable."
         },
         "status_options": {
             "--state-db": "Required SQLite event store path.",
@@ -555,6 +587,13 @@ mod tests {
 
         assert_eq!(options.task_file, Some(PathBuf::from("SWE_BENCH_TASK.md")));
         assert_eq!(options.task, None);
+    }
+
+    #[test]
+    fn chat_runtime_timeout_seconds_is_configurable() {
+        let options = ChatOptions::parse(&argv(&["--runtime-timeout-seconds", "3600"])).unwrap();
+
+        assert_eq!(options.runtime_timeout_seconds, 3600);
     }
 
     #[test]

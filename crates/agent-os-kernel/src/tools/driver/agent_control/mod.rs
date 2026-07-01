@@ -20,7 +20,7 @@ use crate::*;
 use agent_os_sys::*;
 use serde_json::{json, Value};
 
-pub(super) fn run_agent_control(
+pub(in crate::tools) fn run_agent_control(
     kernel: &Kernel,
     syscall: &SyscallEnvelope,
     descriptor: &ToolDescriptor,

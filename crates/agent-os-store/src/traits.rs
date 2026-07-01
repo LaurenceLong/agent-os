@@ -1,9 +1,15 @@
-use agent_os_sys::{AgentOsResult, EventEnvelope, SyscallResult};
+use agent_os_sys::{
+    AgentOsResult, ApprovalQueueProjection, ArtifactIndexProjection, AutomationRunProjection,
+    AutomationScheduleProjection, ClientThread, EventEnvelope, EvidenceIndexProjection,
+    ProjectionCheckpoint, ResourceSessionProjection, StatsQuery, StatsSnapshot, SyscallResult,
+    TimelineItem, TurnRecord,
+};
 
 pub trait EventStore: Send + Sync {
     fn append(&self, event: EventEnvelope) -> AgentOsResult<()>;
     fn all_events(&self) -> AgentOsResult<Vec<EventEnvelope>>;
     fn events_by_aggregate(&self, aggregate_id: &str) -> AgentOsResult<Vec<EventEnvelope>>;
+    fn event_ordinal(&self, event_id: &str) -> AgentOsResult<u64>;
 }
 
 pub trait IdempotencyStore: Send + Sync {
@@ -53,6 +59,25 @@ pub trait ProjectionStore: EventStore {
             .filter(|event| event.aggregate_type == aggregate_type)
             .collect())
     }
+
+    fn clear_projections(&self) -> AgentOsResult<()>;
+    fn append_projected(&self, event: EventEnvelope) -> AgentOsResult<u64>;
+    fn project_event(&self, ordinal: u64, event: &EventEnvelope) -> AgentOsResult<()>;
+    fn rebuild_projections(&self) -> AgentOsResult<()>;
+    fn thread_summaries(&self) -> AgentOsResult<Vec<ClientThread>>;
+    fn turn_summaries(&self) -> AgentOsResult<Vec<TurnRecord>>;
+    fn timeline_items(&self, client_thread_id: Option<&str>) -> AgentOsResult<Vec<TimelineItem>>;
+    fn stats_snapshot(&self, query: StatsQuery) -> AgentOsResult<StatsSnapshot>;
+    fn approval_queue(&self) -> AgentOsResult<Vec<ApprovalQueueProjection>>;
+    fn resource_sessions(&self) -> AgentOsResult<Vec<ResourceSessionProjection>>;
+    fn automation_schedules(&self) -> AgentOsResult<Vec<AutomationScheduleProjection>>;
+    fn automation_runs(&self) -> AgentOsResult<Vec<AutomationRunProjection>>;
+    fn artifact_index(&self) -> AgentOsResult<Vec<ArtifactIndexProjection>>;
+    fn evidence_index(&self) -> AgentOsResult<Vec<EvidenceIndexProjection>>;
+    fn projection_checkpoint(
+        &self,
+        projection_name: &str,
+    ) -> AgentOsResult<Option<ProjectionCheckpoint>>;
 }
 
 /// Durable record of resource locks (`docs/10-kernel-design/state-storage-and-replay.md:30-47`).

@@ -3,7 +3,7 @@ use agent_os_sys::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct KernelState {
@@ -34,6 +34,9 @@ pub struct KernelState {
     pub environments: HashMap<String, ExecutionEnvironment>,
     pub environment_leases: HashMap<String, EnvironmentLease>,
     pub resource_leases: HashMap<String, ResourceLease>,
+    pub resource_sessions: HashMap<String, ResourceSession>,
+    pub automation_schedules: HashMap<String, AutomationSchedule>,
+    pub automation_runs: HashMap<String, AutomationRun>,
     pub budget_ledgers: HashMap<String, BudgetLedger>,
     pub messages: HashMap<String, AgentMessage>,
     pub mementos: HashMap<String, MementoFragment>,
@@ -64,6 +67,31 @@ pub struct Kernel {
     pub(crate) artifact_blobs: Option<Arc<dyn ArtifactBlobStore>>,
     pub(crate) evidence_blobs: Option<Arc<dyn EvidenceBlobStore>>,
     pub(crate) state: Arc<RwLock<KernelState>>,
+    pub(crate) tool_workers: Arc<Mutex<HashMap<String, ToolWorkerRecord>>>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ToolWorkerRecord {
+    pub call_id: String,
+    pub tool_name: String,
+    pub started_at: String,
+    pub output: ToolWorkerOutput,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ToolWorkerOutput {
+    pub stdout: ToolStreamOutput,
+    pub stderr: ToolStreamOutput,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ToolStreamOutput {
+    pub head: Vec<u8>,
+    pub tail: Vec<u8>,
+    pub bytes: usize,
+    pub truncated: bool,
+    pub spool_path: Option<String>,
 }
 
 impl fmt::Debug for Kernel {
@@ -75,6 +103,14 @@ impl fmt::Debug for Kernel {
             .field("threads", &state.threads.len())
             .field("artifact_blobs", &self.artifact_blobs.is_some())
             .field("evidence_blobs", &self.evidence_blobs.is_some())
+            .field(
+                "tool_workers",
+                &self
+                    .tool_workers
+                    .lock()
+                    .map(|workers| workers.len())
+                    .unwrap_or(0),
+            )
             .finish()
     }
 }
@@ -93,6 +129,7 @@ impl Kernel {
             artifact_blobs: None,
             evidence_blobs: None,
             state: Arc::new(RwLock::new(KernelState::default())),
+            tool_workers: Arc::new(Mutex::new(HashMap::new())),
         };
         kernel.install_core_profiles();
         kernel
@@ -112,6 +149,7 @@ impl Kernel {
         for event in &events {
             kernel.apply_event(event)?;
         }
+        kernel.store.rebuild_projections()?;
         Ok(kernel)
     }
 
@@ -133,7 +171,7 @@ impl Kernel {
             clear_event_projection(&mut state);
         }
         for event in events {
-            kernel.store.append(event.clone())?;
+            kernel.store.append_projected(event.clone())?;
             kernel.apply_event(event)?;
         }
         Ok(kernel)
@@ -172,6 +210,7 @@ fn clear_event_projection(state: &mut KernelState) {
     state.environments.clear();
     state.environment_leases.clear();
     state.resource_leases.clear();
+    state.resource_sessions.clear();
     state.budget_ledgers.clear();
     state.messages.clear();
     state.mementos.clear();

@@ -51,17 +51,17 @@ fn agent_thread_resumes_after_process_restart_with_persisted_tool_state() {
             workspace_roots: vec![workspace.to_string_lossy().to_string()],
         })
         .unwrap();
-    let first_script =
-        DeterministicModelClient::new(vec![DeterministicStep::ToolCall(ToolAction::new(
-            "write_file",
+    let first_script = DeterministicModelClient::new(vec![DeterministicStep::ToolCall(
+        ToolAction::new(
+            "apply_patch",
             json!({
                 "workspace_root": workspace.to_string_lossy(),
-                "path": "result.md",
-                "content": "written before restart\n"
+                "patch": "*** Begin Patch\n*** Add File: result.md\n+written before restart\n*** End Patch\n"
             }),
             4,
             Some("result was written before restart".to_string()),
-        ))]);
+        ),
+    )]);
     let mut first_runtime =
         ThreadRuntime::new(first_kernel.clone(), agent.thread_id.clone(), first_script);
     assert!(first_runtime

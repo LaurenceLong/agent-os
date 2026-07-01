@@ -2,7 +2,7 @@
 
 Status: planning baseline
 
-Last updated: 2026-06-29
+Last updated: 2026-07-01
 
 ## 1. Strategy
 
@@ -28,6 +28,10 @@ runtime:
 - `agent-os-kernel` owns lifecycle state, profiles, permissions, tool broker
   mediation, environments, leases, communication, blackboard entries, evidence,
   artifacts, review, verification, final submissions, and task bundle export.
+- The tool broker attaches managed text results to the unified tool-output
+  manager. Long-running or large tool outputs can be read by `tool_call_id`
+  using default `new` windows, explicit `head`/`tail` windows, or
+  `full=true` plus `offset`/`limit` line paging over spooled fields.
 - `agent-os-thread` owns the runtime loop, provider-neutral model actions,
   OpenAI-compatible and Anthropic-compatible adapters, prompt/message builders,
   parser logic, and live audit logs.
@@ -41,9 +45,7 @@ The current model-visible v0.2.0 tool surface is:
 ```text
 Host OS:
   read_file
-  write_file
-  replace_text
-  delete_file
+  apply_patch
   run_command
 
 Work State:
@@ -227,9 +229,7 @@ Deliverables:
 - Tool Broker service
 - Host OS model-visible tools:
   - `read_file`
-  - `write_file`
-  - `replace_text`
-  - `delete_file`
+  - `apply_patch`
   - `run_command`
 - Agent-OS control-plane tool taxonomy:
   - work state: `set_goal`, `accomplish_goal`, `update_checklist`, `record_evidence`
@@ -354,7 +354,7 @@ Deliverables:
 - software engineering distro manifest
 - workflow prompts and examples for Supervisor-led software engineering work
 - optional workflow step labels mapped onto core Worker or Reviewer semantics
-- CRUD filesystem tool policy using `read_file`, `write_file`, `replace_text`, and `delete_file`
+- workspace filesystem policy using `read_file` plus `apply_patch` for one-file create, update, or delete operations
 - command execution policy using `run_command`
 - review policy pack
 - final answer policy pack

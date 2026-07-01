@@ -6,7 +6,7 @@ use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 
-pub(super) fn run_load_skill(
+pub(in crate::tools) fn run_load_skill(
     kernel: &Kernel,
     descriptor: &ToolDescriptor,
     input: &Value,
@@ -18,6 +18,8 @@ pub(super) fn run_load_skill(
         .get(&name)
         .cloned()
         .ok_or_else(|| AgentOsError::NotFound(format!("skill {name}")))?;
+    let (offset, limit) = super::super::builtin::read_file::parse_paging(input)?;
+    let page = super::super::builtin::read_file::paginate_text(&skill.content, offset, limit);
     Ok(json!({
         "tool": descriptor.name,
         "status": "ok",
@@ -26,13 +28,20 @@ pub(super) fn run_load_skill(
         "skill_id": skill.skill_id,
         "name": skill.name,
         "description": skill.description,
-        "content": skill.content,
+        "content": page.content,
         "root_path": skill.root_path,
-        "skill_file_path": skill.skill_file_path
+        "skill_file_path": skill.skill_file_path,
+        "offset": offset,
+        "limit": limit,
+        "total_lines": page.total_lines,
+        "returned_lines": page.returned_lines,
+        "next_offset": page.next_offset,
+        "truncated": page.truncated,
+        "omitted_lines": page.omitted_lines
     }))
 }
 
-pub(super) fn run_read_skill_resource(
+pub(in crate::tools) fn run_read_skill_resource(
     kernel: &Kernel,
     descriptor: &ToolDescriptor,
     input: &Value,
@@ -60,6 +69,9 @@ pub(super) fn run_read_skill_resource(
     }
     let content = std::fs::read_to_string(&canonical)
         .map_err(|error| AgentOsError::Validation(format!("read skill resource: {error}")))?;
+    let (offset, limit) = super::super::builtin::read_file::parse_paging(input)?;
+    let page = super::super::builtin::read_file::paginate_text(&content, offset, limit);
+    let bytes_read = page.content.len();
     Ok(json!({
         "tool": descriptor.name,
         "status": "ok",
@@ -68,8 +80,15 @@ pub(super) fn run_read_skill_resource(
         "skill_id": skill.skill_id,
         "name": skill.name,
         "path": relative.to_string_lossy(),
-        "content": content,
-        "bytes_read": content.len()
+        "content": page.content,
+        "bytes_read": bytes_read,
+        "offset": offset,
+        "limit": limit,
+        "total_lines": page.total_lines,
+        "returned_lines": page.returned_lines,
+        "next_offset": page.next_offset,
+        "truncated": page.truncated,
+        "omitted_lines": page.omitted_lines
     }))
 }
 
@@ -101,9 +120,9 @@ pub(super) fn run_mcp_tool(descriptor: &ToolDescriptor, input: &Value) -> AgentO
         .map_err(|error| AgentOsError::Validation(format!("spawn MCP server: {error}")))?;
 
     {
-        let stdin = child
+        let mut stdin = child
             .stdin
-            .as_mut()
+            .take()
             .ok_or_else(|| AgentOsError::Validation("MCP stdin unavailable".to_string()))?;
         let initialize = json!({
             "jsonrpc": "2.0",
@@ -139,8 +158,8 @@ pub(super) fn run_mcp_tool(descriptor: &ToolDescriptor, input: &Value) -> AgentO
         .wait_with_output()
         .map_err(|error| AgentOsError::Validation(format!("wait for MCP server: {error}")))?;
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let raw_result = parse_mcp_response(&stdout, 2)?;
+    let raw_result = bounded_json(parse_mcp_response(&stdout, 2)?);
+    let (stderr, _, _) = super::super::builtin::run_command::bounded_text(&output.stderr);
     Ok(json!({
         "tool": descriptor.name,
         "status": "ok",
@@ -151,6 +170,32 @@ pub(super) fn run_mcp_tool(descriptor: &ToolDescriptor, input: &Value) -> AgentO
         "raw_result": raw_result,
         "stderr": stderr
     }))
+}
+
+fn bounded_json(value: Value) -> Value {
+    match value {
+        Value::String(text) => {
+            let bytes = text.as_bytes();
+            let (bounded, truncated, total) =
+                super::super::builtin::run_command::bounded_text(bytes);
+            if truncated {
+                json!({
+                    "content": bounded,
+                    "truncated": true,
+                    "original_bytes": total
+                })
+            } else {
+                Value::String(bounded)
+            }
+        }
+        Value::Array(items) => Value::Array(items.into_iter().map(bounded_json).collect()),
+        Value::Object(map) => Value::Object(
+            map.into_iter()
+                .map(|(key, value)| (key, bounded_json(value)))
+                .collect(),
+        ),
+        other => other,
+    }
 }
 
 fn ensure_safe_relative_path(path: &Path) -> AgentOsResult<()> {

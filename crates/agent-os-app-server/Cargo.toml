@@ -1,0 +1,9 @@
+[package]
+name = "agent-os-app-server"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+
+[dependencies]
+agent-os-sys.workspace = true
+serde_json.workspace = true

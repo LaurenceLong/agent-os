@@ -4,7 +4,7 @@ use crate::*;
 use agent_os_sys::*;
 use serde_json::{json, Value};
 
-pub(super) fn run_set_goal(
+pub(in crate::tools) fn run_set_goal(
     kernel: &Kernel,
     syscall: &SyscallEnvelope,
     descriptor: &ToolDescriptor,
@@ -35,7 +35,7 @@ pub(super) fn run_set_goal(
     }))
 }
 
-pub(super) fn run_accomplish_goal(
+pub(in crate::tools) fn run_accomplish_goal(
     kernel: &Kernel,
     syscall: &SyscallEnvelope,
     descriptor: &ToolDescriptor,
@@ -66,7 +66,7 @@ pub(super) fn run_accomplish_goal(
     }))
 }
 
-pub(super) fn run_update_checklist(
+pub(in crate::tools) fn run_update_checklist(
     kernel: &Kernel,
     syscall: &SyscallEnvelope,
     descriptor: &ToolDescriptor,
@@ -99,7 +99,7 @@ pub(super) fn run_update_checklist(
     }))
 }
 
-pub(super) fn run_record_evidence(
+pub(in crate::tools) fn run_record_evidence(
     kernel: &Kernel,
     syscall: &SyscallEnvelope,
     descriptor: &ToolDescriptor,
@@ -111,7 +111,16 @@ pub(super) fn run_record_evidence(
             AgentOsError::Validation("missing required field evidence_type".to_string())
         })?)?;
     let claim = required_string(input, "claim")?;
-    let inline_bytes = optional_string(input, "inline_content").map(String::into_bytes);
+    let inline_bytes = optional_string(input, "inline_content")
+        .map(|content| {
+            if content.len() > 8_000 {
+                return Err(AgentOsError::Validation(
+                    "record_evidence inline_content must be 8000 bytes or less; use blob_ref or content_hash for large evidence".to_string(),
+                ));
+            }
+            Ok(content.into_bytes())
+        })
+        .transpose()?;
     let evidence = kernel.attach_evidence_with_cause(
         AttachEvidenceInput {
             goal_id: acb.task.goal_id,

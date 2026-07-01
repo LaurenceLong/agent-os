@@ -7,9 +7,11 @@ use crate::{ModelClient, ModelTurnRequest, ModelTurnResponse};
 use agent_os_sys::*;
 use serde_json::{json, Value};
 use std::path::PathBuf;
+use std::time::Duration;
 
 const DEFAULT_API_BASE: &str = "https://api.openai.com/v1";
 const DEFAULT_MAX_TOKENS: u64 = 4096;
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LlmApiStyle {
@@ -50,6 +52,7 @@ pub struct OpenAiModelClient {
     model: String,
     max_tokens: u64,
     temperature: f64,
+    request_timeout: Duration,
     system_prompt_override: Option<String>,
     api_style: LlmApiStyle,
     audit_log_path: Option<PathBuf>,
@@ -63,6 +66,7 @@ impl OpenAiModelClient {
             model: model.into(),
             max_tokens: DEFAULT_MAX_TOKENS,
             temperature: 0.0,
+            request_timeout: DEFAULT_REQUEST_TIMEOUT,
             system_prompt_override: None,
             api_style: LlmApiStyle::OpenAiCompatible,
             audit_log_path: None,
@@ -87,6 +91,11 @@ impl OpenAiModelClient {
 
     pub fn with_temperature(mut self, temperature: f64) -> Self {
         self.temperature = temperature;
+        self
+    }
+
+    pub fn with_request_timeout(mut self, request_timeout: Duration) -> Self {
+        self.request_timeout = request_timeout;
         self
     }
 
@@ -146,6 +155,7 @@ impl OpenAiModelClient {
         }))?;
 
         let response_body = match ureq::post(&url)
+            .timeout(self.request_timeout)
             .set("Authorization", &bearer)
             .set("Content-Type", "application/json")
             .send_json(&body)
@@ -207,6 +217,7 @@ impl OpenAiModelClient {
             "body": body.clone(),
         }))?;
         let response_body = match ureq::post(&url)
+            .timeout(self.request_timeout)
             .set("x-api-key", &self.api_key)
             .set("Authorization", &bearer)
             .set("anthropic-version", "2023-06-01")
@@ -249,5 +260,20 @@ impl OpenAiModelClient {
             return Ok(());
         };
         append_jsonl(path, &entry)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_timeout_defaults_and_can_be_overridden() {
+        let client = OpenAiModelClient::new("test-key", "test-model");
+        assert_eq!(client.request_timeout, Duration::from_secs(120));
+
+        let client = OpenAiModelClient::new("test-key", "test-model")
+            .with_request_timeout(Duration::from_secs(30));
+        assert_eq!(client.request_timeout, Duration::from_secs(30));
     }
 }

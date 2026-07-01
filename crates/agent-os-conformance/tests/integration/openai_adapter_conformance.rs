@@ -70,12 +70,10 @@ fn openai_adapter_pattern_drives_full_integration_task() {
             Some("target file was inspected before edit".to_string()),
         )),
         common::DeterministicStep::ToolCall(agent_os_thread::ToolAction::new(
-            "replace_text",
+            "apply_patch",
             common::json!({
                 "workspace_root": workspace.to_string_lossy(),
-                "path": "src/lib.rs",
-                "old": "a + b",
-                "new": "a * b"
+                "patch": "*** Begin Patch\n*** Update File: src/lib.rs\n@@\n-pub fn add(a: i32, b: i32) -> i32 { a + b }\n+pub fn add(a: i32, b: i32) -> i32 { a * b }\n*** End Patch\n"
             }),
             4,
             Some("exact edit applied: add changed to multiply".to_string()),
@@ -162,11 +160,10 @@ fn openai_adapter_workspace_root_injection_pattern() {
     let ws = workspace.to_string_lossy().to_string();
     let script = common::DeterministicModelClient::new([
         common::DeterministicStep::ToolCall(agent_os_thread::ToolAction::new(
-            "write_file",
+            "apply_patch",
             common::json!({
                 "workspace_root": ws,
-                "path": "hello.txt",
-                "content": "Hello from agent-os!\n"
+                "patch": "*** Begin Patch\n*** Add File: hello.txt\n+Hello from agent-os!\n*** End Patch\n"
             }),
             4,
             Some("output file was created".to_string()),
@@ -196,7 +193,7 @@ fn openai_adapter_workspace_root_injection_pattern() {
         .tool_invocations
         .values()
         .find(|inv| {
-            inv.tool_name == "write_file" && inv.status == common::ToolCallStatus::Completed
+            inv.tool_name == "apply_patch" && inv.status == common::ToolCallStatus::Completed
         })
         .unwrap();
     assert_eq!(invocation.status, common::ToolCallStatus::Completed);
@@ -270,11 +267,10 @@ fn openai_adapter_command_execution_and_evidence() {
             Some("data file was read".to_string()),
         )),
         common::DeterministicStep::ToolCall(agent_os_thread::ToolAction::new(
-            "write_file",
+            "apply_patch",
             common::json!({
                 "workspace_root": ws,
-                "path": "verified.txt",
-                "content": "verified: 42\n"
+                "patch": "*** Begin Patch\n*** Add File: verified.txt\n+verified: 42\n*** End Patch\n"
             }),
             4,
             Some("verification result was written".to_string()),
@@ -307,7 +303,18 @@ fn openai_adapter_command_execution_and_evidence() {
         .unwrap();
 
     assert_eq!(report.status, common::ThreadStatus::Completed);
-    assert_eq!(report.tool_results.len(), 3);
+    assert_eq!(report.tool_results.len(), 4);
+    assert!(report.tool_results.iter().any(|result| {
+        result.tool_name == "runtime_feedback"
+            && result
+                .output
+                .as_ref()
+                .and_then(|output| output.get("message"))
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|message| {
+                    message.contains("patch plus command evidence already exist")
+                })
+    }));
 
     let state = kernel.state_snapshot().unwrap();
     let evidence_types: Vec<_> = report

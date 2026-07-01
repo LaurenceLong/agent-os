@@ -3,8 +3,6 @@ mod provider;
 mod roles;
 mod sandboxes;
 mod scheduler;
-mod tool_schemas;
-mod tools;
 
 use crate::*;
 use agent_os_sys::*;
@@ -47,7 +45,7 @@ impl Kernel {
         for alias in provider::core_model_aliases(&now) {
             state.model_aliases.insert(alias.alias.clone(), alias);
         }
-        for tool in tools::core_tool_descriptors(&now) {
+        for tool in crate::tools::core_tool_descriptors(&now) {
             state.tool_descriptors.insert(tool.name.clone(), tool);
         }
         for role in roles::core_roles(&now) {

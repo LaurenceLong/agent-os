@@ -54,8 +54,8 @@ fn mock_tool_call_strings_run_local_tools_and_build_llm_tool_results() {
                             "id": "call_mock_write",
                             "type": "function",
                             "function": {
-                                "name": "write_file",
-                                "arguments": "{\"path\":\"output.txt\",\"content\":\"written by mock call\\n\"}"
+                                "name": "apply_patch",
+                                "arguments": "{\"patch\":\"*** Begin Patch\\n*** Add File: output.txt\\n+written by mock call\\n*** End Patch\\n\"}"
                             }
                         }
                     ]
@@ -182,7 +182,7 @@ fn mock_tool_call_strings_run_local_tools_and_build_llm_tool_results() {
 
     assert_eq!(
         messages[4]["tool_calls"][0]["function"]["name"],
-        "write_file"
+        "apply_patch"
     );
     let write_args: Value = serde_json::from_str(
         messages[4]["tool_calls"][0]["function"]["arguments"]
@@ -190,17 +190,14 @@ fn mock_tool_call_strings_run_local_tools_and_build_llm_tool_results() {
             .unwrap(),
     )
     .unwrap();
-    assert_eq!(write_args["path"], "output.txt");
-    assert_eq!(write_args["content"], "written by mock call\n");
+    assert!(write_args["patch"].as_str().unwrap().contains("output.txt"));
     assert!(write_args.get("workspace_root").is_none());
     assert_eq!(messages[5]["role"], "tool");
     let write_result: Value =
         serde_json::from_str(messages[5]["content"].as_str().unwrap()).unwrap();
+    assert_eq!(write_result["operation"], "create");
     assert_eq!(write_result["bytes_written"], 21);
-    assert!(write_result["written_path"]
-        .as_str()
-        .unwrap()
-        .ends_with("output.txt"));
+    assert_eq!(write_result["path"], "output.txt");
 
     let _ = std::fs::remove_dir_all(tmp);
 }
@@ -227,15 +224,19 @@ fn openai_compatible_mock_adapter_runs_every_core_tool() {
         ("call_read", "read_file", json!({"path": "read.txt"})),
         (
             "call_write",
-            "write_file",
-            json!({"path": "created.txt", "content": "created by provider mock\n"}),
+            "apply_patch",
+            json!({"patch": "*** Begin Patch\n*** Add File: created.txt\n+created by provider mock\n*** End Patch\n"}),
         ),
         (
             "call_replace",
-            "replace_text",
-            json!({"path": "edit.txt", "old": "old", "new": "new"}),
+            "apply_patch",
+            json!({"patch": "*** Begin Patch\n*** Update File: edit.txt\n@@\n-alpha old beta\n+alpha new beta\n*** End Patch\n"}),
         ),
-        ("call_delete", "delete_file", json!({"path": "delete.txt"})),
+        (
+            "call_delete",
+            "apply_patch",
+            json!({"patch": "*** Begin Patch\n*** Delete File: delete.txt\n*** End Patch\n"}),
+        ),
         (
             "call_run",
             "run_command",
@@ -414,9 +415,9 @@ fn anthropic_compatible_mock_adapter_runs_every_core_tool() {
         "role": "assistant",
         "content": [
             {"type": "tool_use", "id": "toolu_read", "name": "read_file", "input": {"path": "read.txt"}},
-            {"type": "tool_use", "id": "toolu_write", "name": "write_file", "input": {"path": "created.txt", "content": "created by provider mock\n"}},
-            {"type": "tool_use", "id": "toolu_replace", "name": "replace_text", "input": {"path": "edit.txt", "old": "old", "new": "new"}},
-            {"type": "tool_use", "id": "toolu_delete", "name": "delete_file", "input": {"path": "delete.txt"}},
+            {"type": "tool_use", "id": "toolu_write", "name": "apply_patch", "input": {"patch": "*** Begin Patch\n*** Add File: created.txt\n+created by provider mock\n*** End Patch\n"}},
+            {"type": "tool_use", "id": "toolu_replace", "name": "apply_patch", "input": {"patch": "*** Begin Patch\n*** Update File: edit.txt\n@@\n-alpha old beta\n+alpha new beta\n*** End Patch\n"}},
+            {"type": "tool_use", "id": "toolu_delete", "name": "apply_patch", "input": {"patch": "*** Begin Patch\n*** Delete File: delete.txt\n*** End Patch\n"}},
             {"type": "tool_use", "id": "toolu_run", "name": "run_command", "input": {"program": current_exe.to_string_lossy(), "args": ["--help"]}},
             {"type": "tool_use", "id": "toolu_goal", "name": "set_goal", "input": {"goal": "complete provider-neutral all-tool mock adapter coverage"}},
             {"type": "tool_use", "id": "toolu_accomplish_goal", "name": "accomplish_goal", "input": {"summary": "provider-neutral mock adapter local goal complete"}},

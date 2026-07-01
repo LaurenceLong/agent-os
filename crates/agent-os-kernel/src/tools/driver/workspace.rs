@@ -1,41 +1,122 @@
-use crate::util::required_string;
+use crate::state::ToolStreamOutput;
+use crate::util::{hash_json, required_string};
 use crate::*;
 use agent_os_sys::*;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
+use std::process::{ChildStderr, ChildStdout, Command, Stdio};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 
-pub(super) fn run_workspace_write_file(
+const PREVIEW_CHARS: usize = 2_000;
+
+pub(in crate::tools) fn run_workspace_apply_patch(
     kernel: &Kernel,
     syscall: &SyscallEnvelope,
     descriptor: &ToolDescriptor,
     input: &Value,
 ) -> AgentOsResult<Value> {
     let workspace_root = PathBuf::from(required_string(input, "workspace_root")?);
-    let relative_path = PathBuf::from(required_string(input, "path")?);
-    let content = required_string(input, "content")?;
-    let (root, written_path) = resolve_workspace_path(&workspace_root, &relative_path)?;
+    let patch = required_string(input, "patch")?;
+    let operation = parse_apply_patch(&patch)?;
+    let relative_path = operation.path().to_path_buf();
+    let (root, path) = resolve_workspace_path(&workspace_root, &relative_path)?;
     ensure_environment_lease_for_path(kernel, syscall, &root, true)?;
-    if let Some(parent) = written_path.parent() {
-        fs::create_dir_all(parent).map_err(|error| {
-            AgentOsError::Validation(format!("create parent directory: {error}"))
-        })?;
+    ensure_workspace_target_contained(&root, &path)?;
+    match operation {
+        WorkspacePatch::Add { content, .. } => {
+            if path.exists() {
+                return Err(AgentOsError::Validation(format!(
+                    "apply_patch add file target already exists: {}",
+                    relative_path.display()
+                )));
+            }
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).map_err(|error| {
+                    AgentOsError::Validation(format!("create parent directory: {error}"))
+                })?;
+            }
+            fs::write(&path, content.as_bytes()).map_err(|error| {
+                AgentOsError::Validation(format!("write workspace file: {error}"))
+            })?;
+            let after_hash = hash_json(&content)?;
+            Ok(json!({
+                "tool": descriptor.name.clone(),
+                "status": "ok",
+                "input": input.clone(),
+                "driver_class": descriptor.driver_class,
+                "operation": "create",
+                "path": relative_path.to_string_lossy(),
+                "created_path": path.to_string_lossy(),
+                "bytes_written": content.len(),
+                "after_hash": after_hash,
+                "preview": preview_text(&content),
+                "truncated": content.len() > PREVIEW_CHARS,
+            }))
+        }
+        WorkspacePatch::Update { hunks, .. } => {
+            let before = fs::read_to_string(&path).map_err(|error| {
+                AgentOsError::Validation(format!("read workspace file: {error}"))
+            })?;
+            let after = apply_update_hunks(&before, &hunks)?;
+            let before_hash = hash_json(&before)?;
+            let after_hash = hash_json(&after)?;
+            fs::write(&path, after.as_bytes()).map_err(|error| {
+                AgentOsError::Validation(format!("write workspace file: {error}"))
+            })?;
+            Ok(json!({
+                "tool": descriptor.name.clone(),
+                "status": "ok",
+                "input": input.clone(),
+                "driver_class": descriptor.driver_class,
+                "operation": "update",
+                "path": relative_path.to_string_lossy(),
+                "changed_path": path.to_string_lossy(),
+                "replacements": hunks.len(),
+                "before_hash": before_hash,
+                "after_hash": after_hash,
+                "preview": preview_text(&after),
+                "truncated": after.len() > PREVIEW_CHARS,
+            }))
+        }
+        WorkspacePatch::Delete { .. } => {
+            let metadata = fs::metadata(&path).map_err(|error| {
+                AgentOsError::Validation(format!("stat workspace file: {error}"))
+            })?;
+            if !metadata.is_file() {
+                return Err(AgentOsError::Validation(
+                    "apply_patch delete operation only deletes files".to_string(),
+                ));
+            }
+            let before = fs::read_to_string(&path).map_err(|error| {
+                AgentOsError::Validation(format!("read workspace file: {error}"))
+            })?;
+            let before_hash = hash_json(&before)?;
+            let deleted_bytes = metadata.len();
+            fs::remove_file(&path).map_err(|error| {
+                AgentOsError::Validation(format!("delete workspace file: {error}"))
+            })?;
+            Ok(json!({
+                "tool": descriptor.name.clone(),
+                "status": "ok",
+                "input": input.clone(),
+                "driver_class": descriptor.driver_class,
+                "operation": "delete",
+                "path": relative_path.to_string_lossy(),
+                "deleted_path": path.to_string_lossy(),
+                "deleted_bytes": deleted_bytes,
+                "before_hash": before_hash,
+                "preview": preview_text(&before),
+                "truncated": before.len() > PREVIEW_CHARS,
+            }))
+        }
     }
-    fs::write(&written_path, content.as_bytes())
-        .map_err(|error| AgentOsError::Validation(format!("write workspace file: {error}")))?;
-    Ok(json!({
-        "tool": descriptor.name.clone(),
-        "status": "ok",
-        "input": input.clone(),
-        "driver_class": descriptor.driver_class,
-        "written_path": written_path.to_string_lossy(),
-        "bytes_written": content.len(),
-    }))
 }
 
-pub(super) fn run_workspace_read_file(
+pub(in crate::tools) fn run_workspace_read_file(
     kernel: &Kernel,
     syscall: &SyscallEnvelope,
     descriptor: &ToolDescriptor,
@@ -45,93 +126,35 @@ pub(super) fn run_workspace_read_file(
     let relative_path = PathBuf::from(required_string(input, "path")?);
     let (root, path) = resolve_workspace_path(&workspace_root, &relative_path)?;
     ensure_environment_lease_for_path(kernel, syscall, &root, false)?;
+    ensure_workspace_target_contained(&root, &path)?;
+    let (offset, limit) = super::super::builtin::read_file::parse_paging(input)?;
     let content = fs::read_to_string(&path)
         .map_err(|error| AgentOsError::Validation(format!("read workspace file: {error}")))?;
+    let page = super::super::builtin::read_file::paginate_text(&content, offset, limit);
+    let bytes_read = page.content.len();
     Ok(json!({
         "tool": descriptor.name.clone(),
         "status": "ok",
         "input": input.clone(),
         "driver_class": descriptor.driver_class,
         "path": path.to_string_lossy(),
-        "content": content,
-        "bytes_read": content.len(),
+        "content": page.content,
+        "bytes_read": bytes_read,
+        "offset": offset,
+        "limit": limit,
+        "total_lines": page.total_lines,
+        "returned_lines": page.returned_lines,
+        "next_offset": page.next_offset,
+        "truncated": page.truncated,
+        "omitted_lines": page.omitted_lines,
     }))
 }
 
-pub(super) fn run_workspace_delete_file(
+pub(in crate::tools) fn run_process(
     kernel: &Kernel,
     syscall: &SyscallEnvelope,
     descriptor: &ToolDescriptor,
-    input: &Value,
-) -> AgentOsResult<Value> {
-    let workspace_root = PathBuf::from(required_string(input, "workspace_root")?);
-    let relative_path = PathBuf::from(required_string(input, "path")?);
-    let (root, path) = resolve_workspace_path(&workspace_root, &relative_path)?;
-    ensure_environment_lease_for_path(kernel, syscall, &root, true)?;
-    let metadata = fs::metadata(&path)
-        .map_err(|error| AgentOsError::Validation(format!("stat workspace file: {error}")))?;
-    if !metadata.is_file() {
-        return Err(AgentOsError::Validation(
-            "delete_file only deletes files".to_string(),
-        ));
-    }
-    let deleted_bytes = metadata.len();
-    fs::remove_file(&path)
-        .map_err(|error| AgentOsError::Validation(format!("delete workspace file: {error}")))?;
-    Ok(json!({
-        "tool": descriptor.name.clone(),
-        "status": "ok",
-        "input": input.clone(),
-        "driver_class": descriptor.driver_class,
-        "deleted_path": path.to_string_lossy(),
-        "deleted_bytes": deleted_bytes,
-    }))
-}
-
-pub(super) fn run_workspace_replace_text(
-    kernel: &Kernel,
-    syscall: &SyscallEnvelope,
-    descriptor: &ToolDescriptor,
-    input: &Value,
-) -> AgentOsResult<Value> {
-    let workspace_root = PathBuf::from(required_string(input, "workspace_root")?);
-    let relative_path = PathBuf::from(required_string(input, "path")?);
-    let old = required_string(input, "old")?;
-    let new = required_string(input, "new")?;
-    if old.is_empty() {
-        return Err(AgentOsError::Validation(
-            "replace_text old text must not be empty".to_string(),
-        ));
-    }
-    let (root, path) = resolve_workspace_path(&workspace_root, &relative_path)?;
-    ensure_environment_lease_for_path(kernel, syscall, &root, true)?;
-    let before = fs::read_to_string(&path)
-        .map_err(|error| AgentOsError::Validation(format!("read workspace file: {error}")))?;
-    let occurrences = before.matches(&old).count();
-    if occurrences != 1 {
-        return Err(AgentOsError::Validation(format!(
-            "replace_text expected exactly one match, found {occurrences}"
-        )));
-    }
-    let after = before.replacen(&old, &new, 1);
-    fs::write(&path, after.as_bytes())
-        .map_err(|error| AgentOsError::Validation(format!("write workspace file: {error}")))?;
-    Ok(json!({
-        "tool": descriptor.name.clone(),
-        "status": "ok",
-        "input": input.clone(),
-        "driver_class": descriptor.driver_class,
-        "changed_path": path.to_string_lossy(),
-        "replacements": 1,
-        "before": before,
-        "after": after,
-    }))
-}
-
-pub(super) fn run_process(
-    kernel: &Kernel,
-    syscall: &SyscallEnvelope,
-    descriptor: &ToolDescriptor,
+    tool_call_id: &str,
     input: &Value,
 ) -> AgentOsResult<Value> {
     let program = required_string(input, "program")?;
@@ -147,26 +170,183 @@ pub(super) fn run_process(
             })
         })
         .collect::<AgentOsResult<Vec<_>>>()?;
+    if args.first().is_some_and(|arg| arg == &program) {
+        return Err(AgentOsError::Validation(
+            "run_command args must not include the program itself as args[0]".to_string(),
+        ));
+    }
     let env = optional_string_map(input, "env")?;
     let cwd = canonical_workspace_root(&cwd)?;
     ensure_environment_lease_for_path(kernel, syscall, &cwd, false)?;
     let mut command = Command::new(program);
-    command.args(args).current_dir(&cwd);
+    command
+        .args(args)
+        .current_dir(&cwd)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     if !env.is_empty() {
         command.envs(env);
     }
-    let output = command
-        .output()
+    let mut child = command
+        .spawn()
         .map_err(|error| AgentOsError::Validation(format!("run process: {error}")))?;
+    let (stdout_spool_path, stderr_spool_path) = tool_output_spool_paths(tool_call_id)?;
+    kernel.set_tool_worker_output_spool(
+        tool_call_id,
+        stdout_spool_path.to_string_lossy().into_owned(),
+        stderr_spool_path.to_string_lossy().into_owned(),
+    );
+    let stdout_capture = Arc::new(Mutex::new(ToolStreamOutput {
+        spool_path: Some(stdout_spool_path.to_string_lossy().into_owned()),
+        ..ToolStreamOutput::default()
+    }));
+    let stderr_capture = Arc::new(Mutex::new(ToolStreamOutput {
+        spool_path: Some(stderr_spool_path.to_string_lossy().into_owned()),
+        ..ToolStreamOutput::default()
+    }));
+    let stdout_reader = child.stdout.take().map(|stdout| {
+        spawn_stdout_reader(
+            kernel.clone(),
+            tool_call_id.to_string(),
+            stdout,
+            open_spool_file(&stdout_spool_path),
+            stdout_capture.clone(),
+        )
+    });
+    let stderr_reader = child.stderr.take().map(|stderr| {
+        spawn_stderr_reader(
+            kernel.clone(),
+            tool_call_id.to_string(),
+            stderr,
+            open_spool_file(&stderr_spool_path),
+            stderr_capture.clone(),
+        )
+    });
+    let status = child
+        .wait()
+        .map_err(|error| AgentOsError::Validation(format!("wait process: {error}")))?;
+    join_reader(stdout_reader)?;
+    join_reader(stderr_reader)?;
+    let stdout = stdout_capture
+        .lock()
+        .map_err(|_| AgentOsError::Validation("stdout capture lock poisoned".to_string()))?
+        .clone();
+    let stderr = stderr_capture
+        .lock()
+        .map_err(|_| AgentOsError::Validation("stderr capture lock poisoned".to_string()))?
+        .clone();
     Ok(json!({
         "tool": descriptor.name.clone(),
         "status": "ok",
         "input": input.clone(),
         "driver_class": descriptor.driver_class,
-        "exit_code": output.status.code().unwrap_or(-1),
-        "stdout": String::from_utf8_lossy(&output.stdout),
-        "stderr": String::from_utf8_lossy(&output.stderr),
+        "exit_code": status.code().unwrap_or(-1),
+        "stdout": stdout.tail_window(super::super::builtin::run_command::OUTPUT_PREVIEW_CHARS).text,
+        "stderr": stderr.tail_window(super::super::builtin::run_command::OUTPUT_PREVIEW_CHARS).text,
+        "stdout_truncated": stdout.truncated,
+        "stderr_truncated": stderr.truncated,
+        "stdout_bytes": stdout.bytes,
+        "stderr_bytes": stderr.bytes,
     }))
+}
+
+fn tool_output_spool_paths(tool_call_id: &str) -> AgentOsResult<(PathBuf, PathBuf)> {
+    let directory = std::env::temp_dir().join("agent-os-tool-output");
+    fs::create_dir_all(&directory)
+        .map_err(|error| AgentOsError::Validation(format!("create tool output spool: {error}")))?;
+    Ok((
+        directory.join(format!("{tool_call_id}.stdout.log")),
+        directory.join(format!("{tool_call_id}.stderr.log")),
+    ))
+}
+
+fn open_spool_file(path: &Path) -> AgentOsResult<File> {
+    OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(path)
+        .map_err(|error| AgentOsError::Validation(format!("open tool output spool: {error}")))
+}
+
+fn spawn_stdout_reader(
+    kernel: Kernel,
+    tool_call_id: String,
+    stdout: ChildStdout,
+    spool: AgentOsResult<File>,
+    capture: Arc<Mutex<ToolStreamOutput>>,
+) -> JoinHandle<AgentOsResult<()>> {
+    std::thread::spawn(move || {
+        read_process_stream(
+            kernel,
+            tool_call_id,
+            super::super::ToolOutputStream::Stdout,
+            stdout,
+            spool?,
+            capture,
+        )
+    })
+}
+
+fn spawn_stderr_reader(
+    kernel: Kernel,
+    tool_call_id: String,
+    stderr: ChildStderr,
+    spool: AgentOsResult<File>,
+    capture: Arc<Mutex<ToolStreamOutput>>,
+) -> JoinHandle<AgentOsResult<()>> {
+    std::thread::spawn(move || {
+        read_process_stream(
+            kernel,
+            tool_call_id,
+            super::super::ToolOutputStream::Stderr,
+            stderr,
+            spool?,
+            capture,
+        )
+    })
+}
+
+fn read_process_stream<R: Read>(
+    kernel: Kernel,
+    tool_call_id: String,
+    stream: super::super::ToolOutputStream,
+    mut reader: R,
+    mut spool: File,
+    capture: Arc<Mutex<ToolStreamOutput>>,
+) -> AgentOsResult<()> {
+    let mut buffer = [0_u8; 4096];
+    loop {
+        let bytes_read = reader
+            .read(&mut buffer)
+            .map_err(|error| AgentOsError::Validation(format!("read process output: {error}")))?;
+        if bytes_read == 0 {
+            return Ok(());
+        }
+        let chunk = &buffer[..bytes_read];
+        spool.write_all(chunk).map_err(|error| {
+            AgentOsError::Validation(format!("write process output spool: {error}"))
+        })?;
+        spool.flush().map_err(|error| {
+            AgentOsError::Validation(format!("flush process output spool: {error}"))
+        })?;
+        {
+            let mut capture = capture.lock().map_err(|_| {
+                AgentOsError::Validation("process stream capture lock poisoned".to_string())
+            })?;
+            capture.append_bounded(chunk);
+        }
+        kernel.append_tool_worker_output(&tool_call_id, stream, chunk);
+    }
+}
+
+fn join_reader(reader: Option<JoinHandle<AgentOsResult<()>>>) -> AgentOsResult<()> {
+    if let Some(reader) = reader {
+        reader.join().map_err(|_| {
+            AgentOsError::Validation("process output reader panicked".to_string())
+        })??;
+    }
+    Ok(())
 }
 
 fn optional_string_map(input: &Value, field: &str) -> AgentOsResult<BTreeMap<String, String>> {
@@ -189,6 +369,303 @@ fn optional_string_map(input: &Value, field: &str) -> AgentOsResult<BTreeMap<Str
         env.insert(key.clone(), value.to_string());
     }
     Ok(env)
+}
+
+enum WorkspacePatch {
+    Add {
+        path: PathBuf,
+        content: String,
+    },
+    Update {
+        path: PathBuf,
+        hunks: Vec<PatchHunk>,
+    },
+    Delete {
+        path: PathBuf,
+    },
+}
+
+impl WorkspacePatch {
+    fn path(&self) -> &Path {
+        match self {
+            Self::Add { path, .. } | Self::Update { path, .. } | Self::Delete { path } => path,
+        }
+    }
+}
+
+struct PatchHunk {
+    old_lines: Vec<String>,
+    new_lines: Vec<String>,
+    plain_old_lines: Vec<String>,
+    plain_new_lines: Vec<String>,
+    prefer_plain_context: bool,
+}
+
+const MULTIPLE_OPERATIONS_ERROR: &str = "apply_patch accepts exactly one file operation";
+
+fn parse_apply_patch(patch: &str) -> AgentOsResult<WorkspacePatch> {
+    let normalized = patch.replace("\r\n", "\n");
+    let lines = normalized.split('\n').collect::<Vec<_>>();
+    if lines.first() != Some(&"*** Begin Patch") {
+        return Err(AgentOsError::Validation(
+            "apply_patch must start with *** Begin Patch".to_string(),
+        ));
+    }
+    let mut index = 1;
+    while lines.get(index).is_some_and(|line| line.trim().is_empty()) {
+        index += 1;
+    }
+    let Some(header) = lines.get(index) else {
+        return Err(AgentOsError::Validation(
+            "apply_patch missing file operation".to_string(),
+        ));
+    };
+    index += 1;
+    let operation = if let Some(path) = header.strip_prefix("*** Add File: ") {
+        parse_add_file(path, &lines, &mut index)?
+    } else if let Some(path) = header.strip_prefix("*** Update File: ") {
+        parse_update_file(path, &lines, &mut index)?
+    } else if let Some(path) = header.strip_prefix("*** Delete File: ") {
+        WorkspacePatch::Delete {
+            path: PathBuf::from(path),
+        }
+    } else {
+        return Err(AgentOsError::Validation(
+            "apply_patch supports Add File, Update File, or Delete File".to_string(),
+        ));
+    };
+    require_patch_end(&lines, index)?;
+    Ok(operation)
+}
+
+fn parse_add_file(path: &str, lines: &[&str], index: &mut usize) -> AgentOsResult<WorkspacePatch> {
+    let mut content = Vec::new();
+    while let Some(line) = lines.get(*index) {
+        if *line == "*** End Patch" {
+            break;
+        }
+        if line.starts_with("*** ") {
+            return Err(AgentOsError::Validation(
+                MULTIPLE_OPERATIONS_ERROR.to_string(),
+            ));
+        }
+        let Some(text) = line.strip_prefix('+') else {
+            return Err(AgentOsError::Validation(
+                "apply_patch add file lines must start with +".to_string(),
+            ));
+        };
+        content.push(text.to_string());
+        *index += 1;
+    }
+    Ok(WorkspacePatch::Add {
+        path: PathBuf::from(path),
+        content: finish_patch_content(content),
+    })
+}
+
+fn parse_update_file(
+    path: &str,
+    lines: &[&str],
+    index: &mut usize,
+) -> AgentOsResult<WorkspacePatch> {
+    let mut hunks = Vec::new();
+    let mut old_lines = Vec::new();
+    let mut new_lines = Vec::new();
+    let mut plain_old_lines = Vec::new();
+    let mut plain_new_lines = Vec::new();
+    let mut changed = false;
+    let mut prefer_plain_context = false;
+    while let Some(line) = lines.get(*index) {
+        if *line == "*** End Patch" || *line == "*** End of File" {
+            break;
+        }
+        if line.starts_with("*** ") {
+            return Err(AgentOsError::Validation(
+                MULTIPLE_OPERATIONS_ERROR.to_string(),
+            ));
+        }
+        if line.starts_with("@@") {
+            push_hunk(
+                &mut hunks,
+                &mut old_lines,
+                &mut new_lines,
+                &mut plain_old_lines,
+                &mut plain_new_lines,
+                changed,
+                prefer_plain_context,
+            )?;
+            changed = false;
+            prefer_plain_context = false;
+            *index += 1;
+            continue;
+        }
+        if line.is_empty() {
+            old_lines.push(String::new());
+            new_lines.push(String::new());
+            plain_old_lines.push(String::new());
+            plain_new_lines.push(String::new());
+            *index += 1;
+            continue;
+        }
+        let Some((prefix, text)) = line.split_at_checked(1) else {
+            unreachable!("empty patch hunk lines are handled before splitting")
+        };
+        match prefix {
+            " " => {
+                old_lines.push(text.to_string());
+                new_lines.push(text.to_string());
+                plain_old_lines.push((*line).to_string());
+                plain_new_lines.push((*line).to_string());
+            }
+            "-" => {
+                old_lines.push(text.to_string());
+                plain_old_lines.push(text.to_string());
+                changed = true;
+            }
+            "+" => {
+                new_lines.push(text.to_string());
+                plain_new_lines.push(text.to_string());
+                changed = true;
+            }
+            _ => {
+                old_lines.push((*line).to_string());
+                new_lines.push((*line).to_string());
+                plain_old_lines.push((*line).to_string());
+                plain_new_lines.push((*line).to_string());
+                prefer_plain_context = true;
+            }
+        }
+        *index += 1;
+    }
+    push_hunk(
+        &mut hunks,
+        &mut old_lines,
+        &mut new_lines,
+        &mut plain_old_lines,
+        &mut plain_new_lines,
+        changed,
+        prefer_plain_context,
+    )?;
+    if hunks.is_empty() {
+        return Err(AgentOsError::Validation(
+            "apply_patch update operation must contain a changed hunk".to_string(),
+        ));
+    }
+    Ok(WorkspacePatch::Update {
+        path: PathBuf::from(path),
+        hunks,
+    })
+}
+
+fn push_hunk(
+    hunks: &mut Vec<PatchHunk>,
+    old_lines: &mut Vec<String>,
+    new_lines: &mut Vec<String>,
+    plain_old_lines: &mut Vec<String>,
+    plain_new_lines: &mut Vec<String>,
+    changed: bool,
+    prefer_plain_context: bool,
+) -> AgentOsResult<()> {
+    if old_lines.is_empty() && new_lines.is_empty() {
+        return Ok(());
+    }
+    if !changed {
+        return Err(AgentOsError::Validation(
+            "apply_patch update hunk must change at least one line".to_string(),
+        ));
+    }
+    hunks.push(PatchHunk {
+        old_lines: std::mem::take(old_lines),
+        new_lines: std::mem::take(new_lines),
+        plain_old_lines: std::mem::take(plain_old_lines),
+        plain_new_lines: std::mem::take(plain_new_lines),
+        prefer_plain_context,
+    });
+    Ok(())
+}
+
+fn require_patch_end(lines: &[&str], index: usize) -> AgentOsResult<()> {
+    match lines.get(index) {
+        Some(&"*** End Patch") => {}
+        Some(line) if line.starts_with("*** ") => {
+            return Err(AgentOsError::Validation(
+                MULTIPLE_OPERATIONS_ERROR.to_string(),
+            ))
+        }
+        _ => {
+            return Err(AgentOsError::Validation(
+                "apply_patch must end with *** End Patch".to_string(),
+            ))
+        }
+    }
+    if lines.iter().skip(index + 1).any(|line| !line.is_empty()) {
+        return Err(AgentOsError::Validation(
+            "apply_patch cannot contain content after *** End Patch".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn finish_patch_content(lines: Vec<String>) -> String {
+    if lines.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n", lines.join("\n"))
+    }
+}
+
+fn apply_update_hunks(before: &str, hunks: &[PatchHunk]) -> AgentOsResult<String> {
+    let had_trailing_newline = before.ends_with('\n');
+    let mut lines = before.lines().map(str::to_string).collect::<Vec<_>>();
+    for hunk in hunks {
+        let Some((position, old_len, new_lines)) = find_hunk_replacement(&lines, hunk) else {
+            return Err(AgentOsError::Validation(
+                "apply_patch update hunk did not match file content".to_string(),
+            ));
+        };
+        lines.splice(position..position + old_len, new_lines);
+    }
+    let mut after = lines.join("\n");
+    if had_trailing_newline && !after.is_empty() {
+        after.push('\n');
+    }
+    Ok(after)
+}
+
+fn find_hunk_replacement(
+    lines: &[String],
+    hunk: &PatchHunk,
+) -> Option<(usize, usize, Vec<String>)> {
+    let canonical = find_hunk(lines, &hunk.old_lines)
+        .map(|position| (position, hunk.old_lines.len(), hunk.new_lines.clone()));
+    let plain_differs =
+        hunk.plain_old_lines != hunk.old_lines || hunk.plain_new_lines != hunk.new_lines;
+    let plain = if plain_differs {
+        find_hunk(lines, &hunk.plain_old_lines).map(|position| {
+            (
+                position,
+                hunk.plain_old_lines.len(),
+                hunk.plain_new_lines.clone(),
+            )
+        })
+    } else {
+        None
+    };
+
+    if hunk.prefer_plain_context {
+        plain.or(canonical)
+    } else {
+        canonical.or(plain)
+    }
+}
+
+fn find_hunk(lines: &[String], old_lines: &[String]) -> Option<usize> {
+    if old_lines.is_empty() || old_lines.len() > lines.len() {
+        return None;
+    }
+    lines
+        .windows(old_lines.len())
+        .position(|candidate| candidate == old_lines)
 }
 
 fn ensure_safe_relative_path(path: &Path) -> AgentOsResult<()> {
@@ -214,10 +691,48 @@ fn resolve_workspace_path(
 }
 
 fn canonical_workspace_root(path: &Path) -> AgentOsResult<PathBuf> {
-    fs::create_dir_all(path)
-        .map_err(|error| AgentOsError::Validation(format!("create workspace root: {error}")))?;
-    path.canonicalize()
-        .map_err(|error| AgentOsError::Validation(format!("canonicalize workspace root: {error}")))
+    match path.canonicalize() {
+        Ok(path) => Ok(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(path.to_path_buf()),
+        Err(error) => Err(AgentOsError::Validation(format!(
+            "canonicalize workspace root: {error}"
+        ))),
+    }
+}
+
+fn ensure_workspace_target_contained(root: &Path, target: &Path) -> AgentOsResult<()> {
+    if target.exists() {
+        let canonical = target.canonicalize().map_err(|error| {
+            AgentOsError::Validation(format!("canonicalize workspace path: {error}"))
+        })?;
+        if !canonical.starts_with(root) {
+            return Err(AgentOsError::PermissionDenied(
+                "workspace path escapes workspace root".to_string(),
+            ));
+        }
+        return Ok(());
+    }
+    let mut ancestor = target.parent().ok_or_else(|| {
+        AgentOsError::Validation("workspace path must have a parent directory".to_string())
+    })?;
+    while !ancestor.exists() {
+        ancestor = ancestor.parent().ok_or_else(|| {
+            AgentOsError::Validation("workspace path has no existing ancestor".to_string())
+        })?;
+    }
+    let canonical_parent = ancestor
+        .canonicalize()
+        .map_err(|error| AgentOsError::Validation(format!("canonicalize parent path: {error}")))?;
+    if !canonical_parent.starts_with(root) {
+        return Err(AgentOsError::PermissionDenied(
+            "workspace path escapes workspace root".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn preview_text(content: &str) -> String {
+    content.chars().take(PREVIEW_CHARS).collect()
 }
 
 fn ensure_environment_lease_for_path(
@@ -277,4 +792,40 @@ fn sandbox_allows_workspace_write(sandbox: &SandboxProfile) -> bool {
             sandbox.filesystem_mode,
             FilesystemMode::WorkspaceWrite | FilesystemMode::IsolatedWorktree
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn update_hunk_accepts_plain_context_lines() {
+        let patch = "*** Begin Patch\n*** Update File: src/lib.rs\n@@\nfn demo() {\n    before();\n\n+    inserted();\n    after();\n}\n*** End Patch\n";
+        let operation = parse_apply_patch(patch).unwrap();
+        let WorkspacePatch::Update { hunks, .. } = operation else {
+            panic!("expected update operation");
+        };
+
+        let before = "fn demo() {\n    before();\n\n    after();\n}\n";
+        let after = apply_update_hunks(before, &hunks).unwrap();
+
+        assert_eq!(
+            after,
+            "fn demo() {\n    before();\n\n    inserted();\n    after();\n}\n"
+        );
+    }
+
+    #[test]
+    fn update_hunk_still_rejects_plain_context_without_changes() {
+        let patch = "*** Begin Patch\n*** Update File: src/lib.rs\n@@\nfn demo() {\n    before();\n}\n*** End Patch\n";
+        let error = match parse_apply_patch(patch) {
+            Ok(_) => panic!("expected no-op update hunk to fail"),
+            Err(error) => error.to_string(),
+        };
+
+        assert!(
+            error.contains("apply_patch update hunk must change at least one line"),
+            "{error}"
+        );
+    }
 }

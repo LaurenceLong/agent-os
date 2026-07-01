@@ -520,7 +520,7 @@ fn provider_capability_mismatch_is_strictly_rejected() {
 #[test]
 fn sqlite_store_persists_events_for_kernel_replay() {
     let sqlite = SqliteStore::in_memory().unwrap();
-    assert_eq!(sqlite.migration_version().unwrap(), 1);
+    assert_eq!(sqlite.migration_version().unwrap(), 3);
     let fx = fixture_with_kernel(Kernel::with_store(sqlite));
     let evidence = fx
         .kernel
@@ -554,6 +554,12 @@ fn sqlite_store_persists_events_for_kernel_replay() {
     let replayed_state = replayed.state_snapshot().unwrap();
     assert_eq!(replayed_state.final_submissions.len(), 1);
     assert_eq!(replayed_state.evidence.len(), 1);
+    assert!(fx
+        .kernel
+        .store()
+        .projection_checkpoint("evidence_index")
+        .unwrap()
+        .is_some());
 }
 
 #[test]

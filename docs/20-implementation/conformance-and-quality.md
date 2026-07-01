@@ -2,7 +2,7 @@
 
 Status: normative
 
-Last updated: 2026-06-29
+Last updated: 2026-07-01
 
 ## 1. Purpose
 
@@ -85,6 +85,8 @@ Runtime conformance tests MUST verify:
 - worker cannot message human unless profile allows it
 - worker communication is limited to Supervisor, scoped blackboard, and human routes allowed by profile
 - crash and resume preserve task state
+- provider client calls have a hard request timeout and surface timeout failures
+  through the normal provider retry/failure path
 
 ## 5. Tool Driver Conformance
 
@@ -99,7 +101,7 @@ Tool driver tests MUST verify:
 - secret redaction behavior
 - failure semantics
 - provider capability declaration for model-facing tools where applicable
-- Host OS tool surface contains exactly `read_file`, `write_file`, `replace_text`, `delete_file`, and `run_command`
+- Host OS tool surface contains exactly `read_file`, `apply_patch`, and `run_command`; `apply_patch` covers workspace file creation, update, and deletion with exactly one file operation per call
 - Agent-OS control-plane tools are grouped by work state, communication, permission request, agent supervision, privileged administration, and session lifecycle
 - `wait_agent` is absent from the core surface; child progress reporting is covered by `agent_control(action=set_hook)`
 - model-visible tools are filtered by effective permission set and S-level; `agent_control` and `set_goal` are hidden from S2+ views
@@ -107,6 +109,28 @@ Tool driver tests MUST verify:
   path containment
 - local stdio MCP fixtures cover `tools/list`, dynamic tool registration,
   `tools/call`, schema validation, and permission denial
+- every managed text tool-output field is queryable through the unified
+  tool-output manager without inlining the full value into model context
+- `tool_call_id` output lookup defaults to new output, supports bounded
+  `head`/`tail` windows, and supports `full=true` with `offset`/`limit` line
+  paging over the complete spooled field
+- descriptor-declared evidence attachment for workspace, command, control-plane,
+  and permission tools so final `evidence_map` entries can cite real evidence ids
+
+## 5.1 Validation Gate Order
+
+Changes that affect model-visible behavior, runtime behavior, tool behavior,
+prompts, provider adapters, storage/replay, or benchmark behavior MUST pass
+validation gates in this order:
+
+1. Unit tests for the changed crates.
+2. Integration and conformance tests.
+3. Live LLM e2e tests through the normal runtime loop and provider adapters.
+4. Private benchmark runs.
+
+The private benchmark gate MUST NOT start until the live e2e gate has passed.
+If a later gate fails, fix the root cause and restart from the earliest affected
+gate instead of treating the failure as a benchmark result.
 
 ## 5.2 Ecosystem Conformance
 
@@ -138,12 +162,28 @@ prompt and normal runtime loop; test fixtures may define the task goal and
 workspace state, but MUST NOT add hidden prompts that force a specific per-tool
 call sequence.
 
+Live e2e commands resolve provider variables from the process environment first
+and then from the repository-root `.env` file. Required variables:
+
+```text
+AGENT_OS_LIVE_OPENAI_API_KEY
+AGENT_OS_LIVE_OPENAI_MODEL
+AGENT_OS_LIVE_OPENAI_BASE_URL
+AGENT_OS_LIVE_ANTHROPIC_API_KEY
+AGENT_OS_LIVE_ANTHROPIC_MODEL
+AGENT_OS_LIVE_ANTHROPIC_BASE_URL
+```
+
 Current live goal-driven scenarios:
 
 ```text
+All ignored OpenAI/Anthropic live scenarios:
+  cargo test -p agent-os-thread openai::tests::live -- --ignored --nocapture --test-threads=1
+  expected coverage: simple file-writing e2e, workspace e2e, control-plane e2e, agent_control lifecycle e2e, full tool-surface e2e for OpenAI-compatible and Anthropic-compatible providers
+
 OpenAI-compatible workspace:
   cargo test -p agent-os-thread live_openai_compatible_llm_goal_driven_workspace_e2e -- --ignored --nocapture
-  expected coverage: read_file, write_file, replace_text, delete_file, run_command, accomplish_goal, submit_final
+  expected coverage: read_file, apply_patch, run_command, accomplish_goal, submit_final
 
 OpenAI-compatible control plane:
   cargo test -p agent-os-thread live_openai_compatible_llm_goal_driven_control_plane_e2e -- --ignored --nocapture
@@ -151,7 +191,7 @@ OpenAI-compatible control plane:
 
 Anthropic-compatible workspace:
   cargo test -p agent-os-thread live_anthropic_compatible_llm_goal_driven_workspace_e2e -- --ignored --nocapture
-  expected coverage: read_file, write_file, replace_text, delete_file, run_command, accomplish_goal, submit_final
+  expected coverage: read_file, apply_patch, run_command, accomplish_goal, submit_final
 
 Anthropic-compatible control plane:
   cargo test -p agent-os-thread live_anthropic_compatible_llm_goal_driven_control_plane_e2e -- --ignored --nocapture
@@ -172,6 +212,11 @@ provider responses, tool invocations, tool results, and a
 `live_goal_driven_summary` record. The summary coverage rate MUST be `6/6` for
 workspace scenarios and `9/9` for control-plane scenarios. Pretty JSON siblings
 may be generated for review, but secrets must remain redacted or absent.
+
+The 2026-06-30 long-running kernel refactor gate used the all-scenario command
+above from WSL with exported provider variables. The observed result was 10
+ignored-by-default live LLM e2e tests passing: five OpenAI-compatible scenarios
+and five Anthropic-compatible scenarios.
 
 ## 6. Storage Driver Conformance
 
@@ -242,6 +287,34 @@ Required test families:
 - artifact tampering
 - evidence tampering
 - guest agent syscall bypass
+
+Runtime quality gates also include model-loop feedback when behavior is visible
+but not a hard authorization failure:
+
+- repeated identical tool calls, including `read_file`, receive
+  `runtime_feedback` instead of executing the third duplicate call
+- after a bounded sequence of completed pre-patch read/command investigation
+  tools without any `apply_patch` attempt, the runtime emits pre-patch
+  resolution feedback while keeping the normal tool surface available
+- if pre-patch investigation continues past the hard gate without an
+  `apply_patch` attempt, the runtime narrows the projected tool surface to
+  `apply_patch`, `submit_final`, and `accomplish_goal`
+- while pre-patch resolution feedback is active, more investigation tool calls
+  are rejected with `runtime_feedback`; the gate releases after any
+  `apply_patch` attempt so normal patch-failure recovery can continue
+- runtime feedback that actively controls tool-surface narrowing remains in the
+  model projection after it falls outside the ordinary recent tool-result window
+- once a thread has patch and command evidence, it receives finalization
+  feedback telling the model to call `submit_final`
+- while finalization feedback is active, the projected tool surface is narrowed
+  to `submit_final` and `accomplish_goal`; any other tool call is rejected with
+  `runtime_feedback`
+
+Final-answer evidence checks are intentionally limited to concrete high-impact
+claim families such as security, deletion, deployment, and migration. Local
+test, finalization, and non-production workflow words are not high-impact
+claims by themselves; otherwise normal benchmark closeout would be blocked by
+its own validation language.
 
 ## 10. Long-Task Benchmarks
 

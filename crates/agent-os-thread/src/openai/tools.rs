@@ -84,14 +84,34 @@ fn descriptor_to_openai_tool(descriptor: &ToolDescriptor) -> Option<Value> {
         return None;
     }
     let parameters = descriptor.model_input_schema.clone()?;
+    let description = descriptor_description_with_examples(descriptor);
     Some(json!({
         "type": "function",
         "function": {
             "name": descriptor.name,
-            "description": descriptor.description,
+            "description": description,
             "parameters": parameters
         }
     }))
+}
+
+fn descriptor_description_with_examples(descriptor: &ToolDescriptor) -> String {
+    if descriptor.examples.is_empty() {
+        return descriptor.description.clone();
+    }
+    let mut description = descriptor.description.clone();
+    description.push_str("\n\nExamples:");
+    for example in &descriptor.examples {
+        let parameters =
+            serde_json::to_string(&example.parameters).unwrap_or_else(|_| "{}".to_string());
+        description.push_str("\n- ");
+        description.push_str(&example.description);
+        description.push_str("\n  parameters: ");
+        description.push_str(&parameters);
+        description.push_str("\n  expected_result: ");
+        description.push_str(&example.expected_result);
+    }
+    description
 }
 
 fn openai_tools_to_anthropic(tools: Vec<Value>) -> Vec<Value> {

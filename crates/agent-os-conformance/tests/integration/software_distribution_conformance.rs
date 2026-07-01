@@ -1,6 +1,6 @@
 use crate::common::*;
 use agent_os_sys::{PackageManifest, PackageType};
-use agent_os_thread::{SoftwareCodeTask, SoftwareEditPlanSource, SoftwareEngineeringPipeline};
+use agent_os_thread::{SoftwareCodeTask, SoftwareEditPlanSource, SoftwareWorkflowPrompt};
 use std::{env, fs, path::PathBuf};
 
 #[test]
@@ -25,75 +25,33 @@ fn software_engineering_distro_package_has_manifest_and_policy_packs() {
 }
 
 #[test]
-fn software_distribution_runs_through_required_roles() {
-    let workspace = temp_workspace("agent-os-conformance-software");
-    fs::create_dir_all(workspace.join("src")).unwrap();
-    fs::write(
-        workspace.join("src/lib.rs"),
-        "pub fn answer() -> i32 { 1 }\n",
-    )
-    .unwrap();
-    let pipeline = SoftwareEngineeringPipeline::new(Kernel::new()).unwrap();
-    let report = pipeline
-        .run_code_task(SoftwareCodeTask::exact_edit(
-            &workspace,
-            "Change answer from one to two",
-            "src/lib.rs",
-            "1",
-            "2",
-            env::current_exe().unwrap(),
-            vec!["--help".to_string()],
-        ))
-        .unwrap();
+fn software_distribution_builds_prompt_workflow_without_scripted_pipeline() {
+    let spec = SoftwareCodeTask::exact_edit(
+        "workspace",
+        "Change answer from one to two",
+        "src/lib.rs",
+        "1",
+        "2",
+        env::current_exe().unwrap(),
+        vec!["--help".to_string()],
+    );
+    let prompt = SoftwareWorkflowPrompt::from_code_task(&spec).unwrap();
 
-    assert_eq!(report.status, ThreadStatus::Completed);
-    assert_eq!(report.test_exit_code, 0);
-    assert_eq!(report.verification_verdict, VerificationVerdict::Pass);
-    assert_eq!(report.replay.final_submissions, 6);
-    assert!(report.replay.reviews >= 1);
-    assert!(report.replay.verifications >= 1);
-    for role in ["SupervisorAgent", "WorkerAgent", "ReviewerAgent"] {
-        assert!(report.role_thread_ids.contains_key(role), "missing {role}");
-    }
+    assert_eq!(prompt.package_name, "software-engineering");
+    assert_eq!(prompt.review_policy_name, "software-engineering-review");
     assert_eq!(
-        fs::read_to_string(workspace.join("src/lib.rs")).unwrap(),
-        "pub fn answer() -> i32 { 2 }\n"
+        prompt.final_answer_policy_name,
+        "software-engineering-final-answer"
     );
-    let _ = fs::remove_dir_all(workspace);
-}
-
-#[test]
-fn failed_tests_block_supervisor_final_acceptance() {
-    let workspace = temp_workspace("agent-os-conformance-failed-test");
-    fs::create_dir_all(workspace.join("src")).unwrap();
-    fs::write(
-        workspace.join("src/lib.rs"),
-        "pub fn answer() -> i32 { 1 }\n",
-    )
-    .unwrap();
-    let pipeline = SoftwareEngineeringPipeline::new(Kernel::new()).unwrap();
-    let err = pipeline
-        .run_code_task(SoftwareCodeTask::exact_edit(
-            &workspace,
-            "Change answer but fail tests",
-            "src/lib.rs",
-            "1",
-            "2",
-            env::current_exe().unwrap(),
-            vec!["--definitely-not-a-valid-test-flag".to_string()],
-        ))
-        .unwrap_err();
-    assert!(matches!(err, AgentOsError::Validation(_)));
-    let state = pipeline.kernel().state_snapshot().unwrap();
-    assert!(
-        !state
-            .threads
-            .values()
-            .any(|thread| thread.role == "SupervisorAgent"
-                && thread.status == ThreadStatus::Completed)
-    );
-    assert!(state.final_submissions.len() < 6);
-    let _ = fs::remove_dir_all(workspace);
+    assert!(prompt
+        .workflow_steps
+        .iter()
+        .any(|step| step.label == "review" && step.core_role == "ReviewerAgent"));
+    assert!(prompt.prompt.contains("Flexible Workflow Policy"));
+    assert!(prompt.prompt.contains(
+        "Do not assume a fixed Explorer -> Coder -> Tester -> Reviewer -> Verifier sequence"
+    ));
+    assert!(prompt.prompt.contains("submit_final as the last action"));
 }
 
 #[test]
@@ -118,14 +76,10 @@ fn task_only_code_request_can_infer_single_safe_edit() {
     assert_eq!(spec.old, "1");
     assert_eq!(spec.new, "2");
 
-    let pipeline = SoftwareEngineeringPipeline::new(Kernel::new()).unwrap();
-    let report = pipeline.run_code_task(spec).unwrap();
-    assert_eq!(report.status, ThreadStatus::Completed);
-    assert_eq!(report.edit_plan_source, SoftwareEditPlanSource::Inferred);
-    assert_eq!(
-        fs::read_to_string(workspace.join("src/lib.rs")).unwrap(),
-        "pub fn answer() -> i32 { 2 }\n"
-    );
+    let prompt = SoftwareWorkflowPrompt::from_code_task(&spec).unwrap();
+    assert!(prompt.prompt.contains("Edit plan source: Inferred"));
+    assert!(prompt.prompt.contains("Target file:"));
+    assert!(prompt.prompt.contains("lib.rs"));
     let _ = fs::remove_dir_all(workspace);
 }
 

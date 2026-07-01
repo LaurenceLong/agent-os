@@ -62,7 +62,7 @@ impl Kernel {
             correlation_id,
             to_value(payload)?,
         );
-        self.store.append(event.clone())?;
+        self.store.append_projected(event.clone())?;
         self.apply_event(&event)?;
         Ok(event)
     }
@@ -188,8 +188,8 @@ impl Kernel {
                     .tool_descriptors
                     .insert(descriptor.name.clone(), descriptor);
             }
-            "ToolCallProposed" | "ToolCallStarted" | "ToolCallCompleted" | "ToolCallFailed"
-            | "ToolCallDenied" | "ToolCallReconciled" => {
+            "ToolCallProposed" | "ToolCallStarted" | "ToolCallProgressed" | "ToolCallCompleted"
+            | "ToolCallFailed" | "ToolCallDenied" | "ToolCallReconciled" => {
                 let invocation: ToolInvocation = parse_payload(&event.payload)?;
                 state
                     .tool_invocations
@@ -215,6 +215,26 @@ impl Kernel {
                 state
                     .resource_leases
                     .insert(lease.resource_lease_id.clone(), lease);
+            }
+            "ResourceSessionOpened" | "ResourceSessionClosed" => {
+                let session: ResourceSession = parse_payload(&event.payload)?;
+                state
+                    .resource_sessions
+                    .insert(session.session_id.clone(), session);
+            }
+            "AutomationScheduleCreated" | "AutomationScheduleUpdated" => {
+                let schedule: AutomationSchedule = parse_payload(&event.payload)?;
+                state
+                    .automation_schedules
+                    .insert(schedule.schedule_id.clone(), schedule);
+            }
+            "AutomationRunQueued"
+            | "AutomationRunStarted"
+            | "AutomationRunCompleted"
+            | "AutomationRunFailed"
+            | "AutomationRunCancelled" => {
+                let run: AutomationRun = parse_payload(&event.payload)?;
+                state.automation_runs.insert(run.run_id.clone(), run);
             }
             "BudgetLedgerCreated" | "BudgetDebited" | "BudgetExhausted" => {
                 let ledger: BudgetLedger = parse_payload(&event.payload)?;

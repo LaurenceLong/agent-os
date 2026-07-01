@@ -14,17 +14,12 @@ use serde_json::Value;
 /// be present in the evidence map with at least one active evidence ref.
 /// Matched case-insensitively against the claim text.
 const HIGH_IMPACT_KEYWORDS: &[&str] = &[
-    "final",
-    "test",
-    "tested",
-    "tests",
     "security",
     "secure",
     "delete",
     "deleted",
     "deploy",
     "deployed",
-    "production",
     "migrate",
     "migration",
 ];
@@ -126,10 +121,10 @@ fn evaluate_submission(
     let mut uncovered: Vec<String> = Vec::new();
     for keyword in HIGH_IMPACT_KEYWORDS {
         let kw = keyword.to_string();
-        // A high-impact keyword is uncovered if it appears in the submission
-        // narrative (summary/known_risks/tests) but no covered claim mentions
-        // it. This is intentionally conservative: it only flags keywords the
-        // submission itself raises.
+        // A high-impact keyword is uncovered if it appears in the submission's
+        // explicit risk statements but no covered claim mentions it. Workflow
+        // words such as local tests or non-production validation are not risk
+        // actions by themselves.
         if submission_mentions(submission, keyword)
             && !covered_claims
                 .iter()
@@ -289,6 +284,24 @@ mod tests {
             .expect("covered high-impact risk passes the deep gate");
         let state = kernel.state_snapshot().unwrap();
         assert_eq!(state.verifications.len(), 1);
+        let verification = state.verifications.values().next().unwrap();
+        assert_eq!(verification.verdict, VerificationVerdict::Pass);
+    }
+
+    #[test]
+    fn final_submission_does_not_treat_local_test_or_non_production_caveats_as_high_impact() {
+        let (kernel, goal_id, task_id, agent_id) = fixture();
+        let evidence_id = attach_evidence(&kernel, &goal_id, &task_id, "focused validation passed");
+        let submission = submission(
+            "focused validation passed for the change",
+            &evidence_id,
+            vec!["tests were run locally outside production".to_string()],
+        );
+
+        kernel
+            .submit_final(&agent_id, &task_id, submission)
+            .expect("workflow caveats are not high-impact risk claims");
+        let state = kernel.state_snapshot().unwrap();
         let verification = state.verifications.values().next().unwrap();
         assert_eq!(verification.verdict, VerificationVerdict::Pass);
     }

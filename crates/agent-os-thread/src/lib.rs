@@ -24,9 +24,12 @@ pub use model::{
 };
 pub use openai::{LlmApiStyle, OpenAiModelClient};
 pub use ops::turn_start_op;
-pub use runtime::{RuntimeConfig, RuntimeRunOverrides, RuntimeRunReport, ThreadRuntime};
+pub use runtime::{
+    RuntimeConfig, RuntimeJob, RuntimeJobRecord, RuntimeJobStatus, RuntimeRunOverrides,
+    RuntimeRunReport, ThreadRuntime,
+};
 pub use software::{
-    ReviewRevision, SoftwareCodeTask, SoftwareEditPlanSource, SoftwareEngineeringPipeline,
-    SoftwarePipelineReport, SoftwareReplaySummary,
+    SoftwareCodeTask, SoftwareEditPlanSource, SoftwareExactEdit, SoftwareWorkflowPrompt,
+    SoftwareWorkflowRequest, SoftwareWorkflowStep,
 };
 pub use types::{AgentOpAck, ThreadStatusSnapshot, TurnStartAck};

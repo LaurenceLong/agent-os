@@ -12,14 +12,25 @@ from private20_runner import (
     ProviderSpec,
     build_agent_os_command,
     build_opencode_command,
+    build_swebench_harness_command,
     build_task_process_env,
     build_task_prompt,
+    build_workspace_pythonpath,
+    evaluate_agent_os_run,
     load_manifest_tasks,
+    load_run_instance_ids,
+    load_dotenv_values,
+    parse_args,
+    parse_dotenv_content,
+    prepare_agent_os_tool_bin,
     read_existing_task_record,
     resolve_api_key,
+    resolve_config_value,
+    resolve_required_config_value,
     run_command_to_log,
     run_agent_os_task,
     run_opencode_task,
+    swebench_report_passed,
     write_agent_os_provider_config,
     write_predictions_jsonl,
 )
@@ -104,6 +115,7 @@ class Private20RunnerTests(unittest.TestCase):
         self.assertIn("Do not inspect git history", prompt)
         self.assertIn("submit the final answer", prompt)
         self.assertIn("immediately instead of repeating checks", prompt)
+        self.assertIn("the next action must be submit_final", prompt)
         self.assertNotIn("diff --git", prompt)
         self.assertNotIn("Use anchors.", prompt)
 
@@ -143,6 +155,148 @@ class Private20RunnerTests(unittest.TestCase):
                 },
             ],
         )
+
+    def test_load_run_instance_ids_reads_exact_completed_run_summary(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            summary = Path(tmp) / "summary.json"
+            summary.write_text(
+                json.dumps(
+                    [
+                        {"instance_id": "demo__repo-2", "exit_code": 0},
+                        {"instance_id": "demo__repo-1", "exit_code": 0},
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            instance_ids = load_run_instance_ids(summary)
+
+        self.assertEqual(instance_ids, ["demo__repo-2", "demo__repo-1"])
+
+    def test_load_run_instance_ids_rejects_duplicate_ids(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            summary = Path(tmp) / "summary.json"
+            summary.write_text(
+                json.dumps(
+                    [
+                        {"instance_id": "demo__repo-1", "exit_code": 0},
+                        {"instance_id": "demo__repo-1", "exit_code": 0},
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "duplicate"):
+                load_run_instance_ids(summary)
+
+    def test_build_swebench_harness_command_uses_wsl_venv_and_exact_ids(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            venv = root / "venv"
+            python_bin = venv / "bin" / "python"
+            python_bin.parent.mkdir(parents=True)
+            python_bin.write_text("#!/usr/bin/env python\n", encoding="utf-8")
+
+            command = build_swebench_harness_command(
+                swebench_venv=venv,
+                dataset_name="SWE-bench/SWE-bench_Lite",
+                split="test",
+                predictions_path=root / "predictions.jsonl",
+                instance_ids=["demo__repo-2", "demo__repo-1"],
+                max_workers=2,
+                timeout=1800,
+                run_id="demo-run",
+                report_dir=root / "report",
+            )
+
+        self.assertEqual(command[0], python_bin.as_posix())
+        self.assertEqual(command[1:3], ["-m", "swebench.harness.run_evaluation"])
+        self.assertIn("--instance_ids", command)
+        start = command.index("--instance_ids") + 1
+        self.assertEqual(command[start:start + 2], ["demo__repo-2", "demo__repo-1"])
+        self.assertIn("--report_dir", command)
+
+    def test_swebench_report_passed_requires_all_expected_ids_resolved(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            report = Path(tmp) / "agent-os.demo-run.json"
+            report.write_text(
+                json.dumps(
+                    {
+                        "submitted_ids": ["demo__repo-1", "demo__repo-2"],
+                        "completed_ids": ["demo__repo-1", "demo__repo-2"],
+                        "resolved_ids": ["demo__repo-1"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            passed = swebench_report_passed(
+                report_path=report,
+                expected_instance_ids=["demo__repo-1", "demo__repo-2"],
+            )
+
+        self.assertFalse(passed)
+
+    def test_evaluate_agent_os_run_writes_exact_predictions_and_fails_unresolved_report(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            venv = root / "venv"
+            python_bin = venv / "bin" / "python"
+            python_bin.parent.mkdir(parents=True)
+            python_bin.write_text("#!/usr/bin/env python\n", encoding="utf-8")
+            patch_dir = root / "out" / "agent-os" / "patches"
+            patch_dir.mkdir(parents=True)
+            (patch_dir / "demo__repo-2.patch").write_text("diff --git b\n", encoding="utf-8")
+            (patch_dir / "demo__repo-1.patch").write_text("diff --git a\n", encoding="utf-8")
+            tasks = [
+                BenchmarkTask(1, "demo__repo-1", "demo/repo", "abc", ()),
+                BenchmarkTask(2, "demo__repo-2", "demo/repo", "def", ()),
+                BenchmarkTask(3, "demo__repo-3", "demo/repo", "ghi", ()),
+            ]
+            captured = {}
+
+            def fake_executor(command, *, cwd, env):
+                captured["command"] = command
+                captured["cwd"] = cwd
+                captured["env"] = env
+                (Path(cwd) / "agent-os.demo-run.json").write_text(
+                    json.dumps(
+                        {
+                            "submitted_ids": ["demo__repo-1", "demo__repo-2"],
+                            "completed_ids": ["demo__repo-1", "demo__repo-2"],
+                            "resolved_ids": ["demo__repo-1"],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                return 0
+
+            exit_code = evaluate_agent_os_run(
+                tasks=tasks,
+                output_root=root / "out",
+                swebench_venv=venv,
+                dataset_name="SWE-bench/SWE-bench_Lite",
+                split="test",
+                model_name="agent-os",
+                instance_ids=["demo__repo-2", "demo__repo-1"],
+                max_workers=2,
+                timeout=1800,
+                run_id="demo-run",
+                executor=fake_executor,
+            )
+
+            predictions = [
+                json.loads(line)
+                for line in (root / "out" / "agent-os-evaluation-predictions.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
+            ]
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(captured["command"][0], python_bin.as_posix())
+        self.assertEqual(captured["cwd"], root / "out")
+        self.assertEqual([row["instance_id"] for row in predictions], ["demo__repo-1", "demo__repo-2"])
+        self.assertNotIn("demo__repo-3", {row["instance_id"] for row in predictions})
 
     def test_read_existing_task_record_returns_record_when_present(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
@@ -195,6 +349,98 @@ class Private20RunnerTests(unittest.TestCase):
 
         self.assertEqual(key, "env-key")
 
+    def test_parse_dotenv_content_handles_bom_comments_and_quotes(self):
+        values = parse_dotenv_content('\ufeff# comment\nLLM_MODEL="provider/model"\nPLAIN=value\nEMPTY=\n')
+
+        self.assertEqual(values["LLM_MODEL"], "provider/model")
+        self.assertEqual(values["PLAIN"], "value")
+        self.assertEqual(values["EMPTY"], "")
+
+    def test_load_dotenv_values_reads_given_path(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            dotenv = Path(tmp) / ".env"
+            dotenv.write_text("LLM_BASE_URL='http://model.example/v1'\n", encoding="utf-8")
+
+            values = load_dotenv_values(dotenv)
+
+        self.assertEqual(values["LLM_BASE_URL"], "http://model.example/v1")
+
+    def test_resolve_required_config_value_precedence_and_missing_error(self):
+        value = resolve_required_config_value(
+            "LLM_MODEL",
+            explicit="explicit-model",
+            env={"LLM_MODEL": "env-model"},
+            dotenv_values={"LLM_MODEL": "dotenv-model"},
+        )
+        self.assertEqual(value, "explicit-model")
+
+        value = resolve_required_config_value(
+            "LLM_MODEL",
+            explicit=None,
+            env={"LLM_MODEL": "env-model"},
+            dotenv_values={"LLM_MODEL": "dotenv-model"},
+        )
+        self.assertEqual(value, "env-model")
+
+        value = resolve_required_config_value(
+            "LLM_MODEL",
+            explicit=None,
+            env={},
+            dotenv_values={"LLM_MODEL": "dotenv-model"},
+        )
+        self.assertEqual(value, "dotenv-model")
+
+        with self.assertRaisesRegex(ValueError, "LLM_MODEL"):
+            resolve_required_config_value("LLM_MODEL", env={}, dotenv_values={})
+
+    def test_resolve_config_value_uses_default_after_env_and_dotenv(self):
+        value = resolve_config_value(
+            "LLM_API_STYLE",
+            explicit=None,
+            env={},
+            dotenv_values={"LLM_API_STYLE": "openai-compatible"},
+            default="anthropic-compatible",
+        )
+        self.assertEqual(value, "openai-compatible")
+
+        value = resolve_config_value(
+            "LLM_API_STYLE",
+            explicit=None,
+            env={},
+            dotenv_values={},
+            default="anthropic-compatible",
+        )
+        self.assertEqual(value, "anthropic-compatible")
+
+    def test_resolve_api_key_uses_dotenv_when_environment_is_absent(self):
+        key = resolve_api_key(
+            api_key_file=None,
+            api_key_env="LLM_API_KEY",
+            env={},
+            dotenv_values={"LLM_API_KEY": "dotenv-key"},
+        )
+
+        self.assertEqual(key, "dotenv-key")
+
+    def test_run_agent_os_cli_allows_provider_values_from_dotenv(self):
+        args = parse_args(
+            [
+                "run-agent-os",
+                "--output-root",
+                "out",
+                "--repo-cache",
+                "repo-cache",
+                "--agent-os-bin",
+                "agent-os",
+                "--instance-id",
+                "demo__repo-1",
+            ]
+        )
+
+        self.assertIsNone(args.base_url)
+        self.assertIsNone(args.model)
+        self.assertIsNone(args.api_style)
+
     def test_build_task_process_env_removes_runner_python_state(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             venv = Path(tmp) / "runner-venv"
@@ -217,6 +463,43 @@ class Private20RunnerTests(unittest.TestCase):
         self.assertEqual(env["PYTHONNOUSERSITE"], "1")
         self.assertEqual(env["OPENCODE_CONFIG"], "keep")
 
+    def test_build_task_process_env_prepends_benchmark_tool_bin(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            tool_bin = Path(tmp) / "tool-bin"
+            env = build_task_process_env(
+                {"PATH": os.pathsep.join(["/usr/bin", "/bin"])},
+                prepend_paths=[tool_bin],
+            )
+
+        self.assertEqual(env["PATH"].split(os.pathsep)[0], tool_bin.as_posix())
+
+    def test_prepare_agent_os_tool_bin_writes_python_shim(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            tool_bin = prepare_agent_os_tool_bin(Path(tmp))
+
+            shim = tool_bin / ("python.cmd" if os.name == "nt" else "python")
+            self.assertTrue(shim.exists())
+            self.assertIn("python3", shim.read_text(encoding="utf-8"))
+
+    def test_build_workspace_pythonpath_includes_common_source_layouts(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            workspace = Path(tmp) / "repo"
+            (workspace / "lib").mkdir(parents=True)
+            (workspace / "src").mkdir()
+
+            pythonpath = build_workspace_pythonpath(workspace)
+
+        self.assertEqual(
+            pythonpath,
+            os.pathsep.join(
+                [
+                    workspace.as_posix(),
+                    (workspace / "lib").as_posix(),
+                    (workspace / "src").as_posix(),
+                ]
+            ),
+        )
+
     def test_build_agent_os_command_uses_chat_state_db_and_bundle(self):
         command = build_agent_os_command(
             agent_os_bin=Path("/repo/target/wsl2-linux/debug/agent-os"),
@@ -225,6 +508,7 @@ class Private20RunnerTests(unittest.TestCase):
             bundle_output=Path("agent-os-task-bundle.json"),
             task_file=Path("/out/prompts/django.md"),
             max_steps=48,
+            runtime_timeout_seconds=3600,
         )
 
         self.assertEqual(command[0], "/repo/target/wsl2-linux/debug/agent-os")
@@ -237,6 +521,8 @@ class Private20RunnerTests(unittest.TestCase):
         self.assertIn("agent-os-task-bundle.json", command)
         self.assertIn("--max-steps", command)
         self.assertIn("48", command)
+        self.assertIn("--runtime-timeout-seconds", command)
+        self.assertIn("3600", command)
         self.assertIn("--task-file", command)
         self.assertIn("/out/prompts/django.md", command)
         self.assertNotIn("Solve this task", command)

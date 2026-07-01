@@ -607,6 +607,62 @@ fn agent_control_lifecycle_actions_update_state_and_trace() {
         json!("Ready")
     );
 
+    let stream = fx
+        .kernel
+        .open_stream_session(StreamRequest {
+            thread_id: child_thread_id.clone(),
+            turn_id: Some("turn_lifecycle".to_string()),
+            provider_profile_id: "prov_default".to_string(),
+            model_routing_policy_id: "route_default".to_string(),
+            requested_model_alias: None,
+            role: "WorkerAgent".to_string(),
+            task_id: fx.task.task_id.clone(),
+            reasoning_profile: None,
+            tool_visibility_profile: None,
+            output_schema: None,
+        })
+        .unwrap();
+    fx.kernel
+        .record_provider_stream_event(
+            &stream.session_id,
+            ProviderStreamEventType::OutputTextDelta,
+            json!({"text": "first"}),
+        )
+        .unwrap();
+    fx.kernel
+        .record_provider_stream_event(
+            &stream.session_id,
+            ProviderStreamEventType::OutputTextDelta,
+            json!({"text": "second"}),
+        )
+        .unwrap();
+    let paged_output = fx
+        .kernel
+        .invoke_tool(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            &supervisor.session_id,
+            cap.capability_id.clone(),
+            1,
+            ToolInvokeInput {
+                tool_name: "agent_control".to_string(),
+                input: json!({
+                    "action": "output",
+                    "thread_id": child_thread_id.clone(),
+                    "payload": {"cursor": 1, "limit": 1}
+                }),
+                evidence_claim: None,
+            },
+        )
+        .unwrap();
+    let output_page = &paged_output.output.as_ref().unwrap()["output"];
+    assert_eq!(output_page["cursor"], json!(1));
+    assert_eq!(output_page["limit"], json!(1));
+    assert_eq!(output_page["items"].as_array().unwrap().len(), 1);
+    assert!(output_page["total_items"].as_u64().unwrap() >= 3);
+    assert_eq!(output_page["next_cursor"], json!(2));
+    assert_eq!(output_page["truncated"], json!(true));
+
     let trace = fx
         .kernel
         .invoke_tool(

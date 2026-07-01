@@ -18,7 +18,7 @@ fn ecosystem_imports_project_sources_and_replays_kernel_events() {
     .unwrap();
     fs::write(
         workspace.join(".agent-os/skills/review-skill/resources/checklist.md"),
-        "Check risk, tests, and scope.\n",
+        "Check risk\nCheck tests\nCheck scope\n",
     )
     .unwrap();
     fs::write(
@@ -115,12 +115,12 @@ fn skill_tools_enforce_scope_and_skill_root_resource_bounds() {
     fs::create_dir_all(workspace.join(".agent-os/skills/review-skill/resources")).unwrap();
     fs::write(
         workspace.join(".agent-os/skills/review-skill/SKILL.md"),
-        "---\nname: review-skill\ndescription: Review code with local criteria.\n---\nUse resources/checklist.md.\n",
+        "---\nname: review-skill\ndescription: Review code with local criteria.\n---\nUse resources/checklist.md.\nSecond skill line.\nThird skill line.\n",
     )
     .unwrap();
     fs::write(
         workspace.join(".agent-os/skills/review-skill/resources/checklist.md"),
-        "Check risk, tests, and scope.\n",
+        "Check risk\nCheck tests\nCheck scope\n",
     )
     .unwrap();
     let fx = fixture();
@@ -152,12 +152,20 @@ fn skill_tools_enforce_scope_and_skill_root_resource_bounds() {
             1,
             ToolInvokeInput {
                 tool_name: "load_skill".to_string(),
-                input: json!({"name": "review-skill"}),
+                input: json!({"name": "review-skill", "offset": 1, "limit": 1}),
                 evidence_claim: Some("skill loaded".to_string()),
             },
         )
         .unwrap();
-    assert_eq!(loaded.output.unwrap()["name"], json!("review-skill"));
+    let loaded_output = loaded.output.unwrap();
+    assert_eq!(loaded_output["name"], json!("review-skill"));
+    assert_eq!(loaded_output["offset"], json!(1));
+    assert_eq!(loaded_output["limit"], json!(1));
+    assert_eq!(loaded_output["content"], json!("Second skill line.\n"));
+    assert_eq!(loaded_output["total_lines"], json!(3));
+    assert_eq!(loaded_output["returned_lines"], json!(1));
+    assert_eq!(loaded_output["next_offset"], json!(2));
+    assert_eq!(loaded_output["truncated"], json!(true));
 
     let resource = fx
         .kernel
@@ -169,12 +177,26 @@ fn skill_tools_enforce_scope_and_skill_root_resource_bounds() {
             1,
             ToolInvokeInput {
                 tool_name: "read_skill_resource".to_string(),
-                input: json!({"name": "review-skill", "path": "resources/checklist.md"}),
+                input: json!({
+                    "name": "review-skill",
+                    "path": "resources/checklist.md",
+                    "offset": 1,
+                    "limit": 1
+                }),
                 evidence_claim: Some("resource loaded".to_string()),
             },
         )
         .unwrap();
-    assert_eq!(resource.output.unwrap()["bytes_read"], json!(30));
+    let resource_output = resource.output.unwrap();
+    assert_eq!(resource_output["content"], json!("Check tests\n"));
+    assert_eq!(resource_output["bytes_read"], json!(12));
+    assert_eq!(resource_output["offset"], json!(1));
+    assert_eq!(resource_output["limit"], json!(1));
+    assert_eq!(resource_output["total_lines"], json!(3));
+    assert_eq!(resource_output["returned_lines"], json!(1));
+    assert_eq!(resource_output["next_offset"], json!(2));
+    assert_eq!(resource_output["truncated"], json!(true));
+    assert_eq!(resource_output["omitted_lines"], json!(1));
 
     let denied = fx
         .kernel

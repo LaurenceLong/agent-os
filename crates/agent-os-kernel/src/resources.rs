@@ -1,5 +1,6 @@
 use crate::*;
 use agent_os_sys::*;
+use std::path::Path;
 
 impl Kernel {
     pub fn create_environment(
@@ -9,12 +10,18 @@ impl Kernel {
         sandbox_profile_id: impl Into<String>,
         reuse_policy: ReusePolicy,
     ) -> AgentOsResult<ExecutionEnvironment> {
+        let template_name = template_name.into();
+        if matches!(backend_type, BackendType::IsolatedWorktree) {
+            std::fs::create_dir_all(Path::new(&template_name)).map_err(|error| {
+                AgentOsError::Validation(format!("create isolated workspace root: {error}"))
+            })?;
+        }
         let now = now_rfc3339();
         let env = ExecutionEnvironment {
             environment_id: new_id("env_"),
             status: EnvironmentStatus::Ready,
             backend_type,
-            template_name: template_name.into(),
+            template_name,
             sandbox_profile_id: sandbox_profile_id.into(),
             host_id: None,
             workspace_mounts: Vec::new(),
@@ -221,6 +228,82 @@ impl Kernel {
             &lease,
         )?;
         Ok(lease)
+    }
+
+    pub fn open_resource_session(
+        &self,
+        input: OpenResourceSessionInput,
+    ) -> AgentOsResult<ResourceSession> {
+        if let Some(thread_id) = &input.client_thread_id {
+            let state = self.read_state()?;
+            if !state.threads.contains_key(thread_id) {
+                return Err(AgentOsError::NotFound(format!("thread {thread_id}")));
+            }
+        }
+        if let Some(agent_id) = &input.owner_agent_id {
+            let state = self.read_state()?;
+            if !state
+                .threads
+                .values()
+                .any(|thread| thread.agent_id == *agent_id)
+            {
+                return Err(AgentOsError::NotFound(format!("agent {agent_id}")));
+            }
+        }
+        let now = now_rfc3339();
+        let session = ResourceSession {
+            session_id: new_id("rsess_"),
+            resource_type: input.resource_type,
+            client_thread_id: input.client_thread_id,
+            owner_agent_id: input.owner_agent_id,
+            status: ResourceSessionStatus::Active,
+            lease_expires_at: input.lease_expires_at,
+            created_at: now.clone(),
+            updated_at: now,
+            closed_at: None,
+            payload: input.payload,
+        };
+        self.emit(
+            "ResourceSessionOpened",
+            "resource_session",
+            &session.session_id,
+            session.owner_agent_id.clone(),
+            None,
+            None,
+            session.client_thread_id.clone(),
+            &session,
+        )?;
+        Ok(session)
+    }
+
+    pub fn close_resource_session(&self, session_id: &str) -> AgentOsResult<ResourceSession> {
+        let current = self
+            .read_state()?
+            .resource_sessions
+            .get(session_id)
+            .cloned()
+            .ok_or_else(|| AgentOsError::NotFound(format!("resource session {session_id}")))?;
+        if current.status != ResourceSessionStatus::Active {
+            return Err(AgentOsError::InvalidTransition(
+                "only active resource sessions can be closed".to_string(),
+            ));
+        }
+        let now = now_rfc3339();
+        let mut session = current;
+        session.status = ResourceSessionStatus::Closed;
+        session.updated_at = now.clone();
+        session.closed_at = Some(now);
+        self.emit(
+            "ResourceSessionClosed",
+            "resource_session",
+            &session.session_id,
+            session.owner_agent_id.clone(),
+            None,
+            None,
+            session.client_thread_id.clone(),
+            &session,
+        )?;
+        Ok(session)
     }
 
     #[allow(clippy::too_many_arguments)]

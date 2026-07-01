@@ -3,7 +3,7 @@ use crate::*;
 use agent_os_sys::*;
 use serde_json::{json, Value};
 
-pub(super) fn run_request_permissions(
+pub(in crate::tools) fn run_request_permissions(
     kernel: &Kernel,
     syscall: &SyscallEnvelope,
     descriptor: &ToolDescriptor,

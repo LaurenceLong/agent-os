@@ -1,7 +1,14 @@
 use super::*;
 use crate::ModelTurnResponse;
 use agent_os_kernel::{RegisterGoalInput, SpawnAgentInput, SpawnTaskInput};
-use std::{collections::VecDeque, env, fs};
+use std::{
+    collections::VecDeque,
+    env, fs,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
 
 #[derive(Debug, Clone)]
 enum DeterministicStep {
@@ -89,12 +96,109 @@ impl ModelClient for DeterministicModelClient {
 }
 
 #[test]
+fn runtime_job_projects_active_turn_contract() {
+    let workspace = temp_workspace("runtime-job-contract");
+    let kernel = Kernel::new();
+    let agent = spawn_runtime_agent(&kernel, &workspace, "Run job contract");
+    let active = kernel.start_turn(&agent.thread_id).unwrap();
+
+    let job = RuntimeJob::from_active_turn(&active).unwrap();
+
+    assert_eq!(job.client_thread_id, agent.thread_id);
+    assert_eq!(job.agent_thread_id, agent.thread_id);
+    assert_eq!(job.turn_id, active.active_turn.turn_id.clone().unwrap());
+    assert_eq!(job.workspace, workspace.to_string_lossy().to_string());
+    assert_eq!(
+        job.provider_profile,
+        active.config_snapshot.provider_profile_id
+    );
+    assert_eq!(job.model, active.config_snapshot.model_id);
+    let _ = fs::remove_dir_all(workspace);
+}
+
+#[test]
+fn runtime_job_runner_uses_existing_turn_without_starting_another() {
+    let workspace = temp_workspace("runtime-job-existing-turn");
+    let kernel = Kernel::new();
+    let agent = spawn_runtime_agent(&kernel, &workspace, "Finish existing turn");
+    let active = kernel.start_turn(&agent.thread_id).unwrap();
+    let job = RuntimeJob::from_active_turn(&active).unwrap();
+    let current_exe = env::current_exe().unwrap();
+    let script = DeterministicModelClient::new(vec![
+        DeterministicStep::ToolCall(ToolAction::new(
+            "run_command",
+            json!({
+                "program": current_exe.to_string_lossy(),
+                "args": ["--help"],
+                "cwd": workspace.to_string_lossy()
+            }),
+            4,
+            Some("runtime job command evidence was captured".to_string()),
+        )),
+        DeterministicStep::Final {
+            summary: "Finished from an existing daemon turn.".to_string(),
+            known_risks: Vec::new(),
+            tests_run: vec!["test binary --help".to_string()],
+            tests_not_run: Vec::new(),
+        },
+    ]);
+
+    let mut runtime = ThreadRuntime::new_for_job(kernel.clone(), job, script);
+    let report = runtime
+        .run_job_to_completion(RuntimeConfig::workspace_write(&workspace))
+        .unwrap();
+
+    assert_eq!(report.status, ThreadStatus::Completed);
+    assert_eq!(
+        kernel
+            .events()
+            .unwrap()
+            .into_iter()
+            .filter(|event| event.event_type == "TurnStarted")
+            .count(),
+        1
+    );
+    let _ = fs::remove_dir_all(workspace);
+}
+
+#[test]
+fn runtime_job_runner_stops_before_model_call_when_turn_is_interrupted() {
+    struct PanicIfCalled;
+
+    impl ModelClient for PanicIfCalled {
+        fn next(&mut self, _request: &ModelTurnRequest) -> AgentOsResult<ModelTurnResponse> {
+            panic!("interrupted runtime job called the model")
+        }
+    }
+
+    let workspace = temp_workspace("runtime-job-interrupted");
+    let kernel = Kernel::new();
+    let agent = spawn_runtime_agent(&kernel, &workspace, "Stop interrupted turn");
+    let active = kernel.start_turn(&agent.thread_id).unwrap();
+    let job = RuntimeJob::from_active_turn(&active).unwrap();
+    kernel
+        .transition_thread(
+            &agent.thread_id,
+            ThreadStatus::Interrupted,
+            Some("test interrupt".to_string()),
+        )
+        .unwrap();
+
+    let mut runtime = ThreadRuntime::new_for_job(kernel.clone(), job, PanicIfCalled);
+    let report = runtime
+        .run_job_to_completion(RuntimeConfig::workspace_write(&workspace))
+        .unwrap();
+
+    assert_eq!(report.status, ThreadStatus::Interrupted);
+    assert!(!report.final_submitted);
+    assert!(report.provider_stream_session_ids.is_empty());
+    assert!(report.tool_results.is_empty());
+    let _ = fs::remove_dir_all(workspace);
+}
+
+#[test]
 fn deterministic_runtime_finishes_code_task_through_tool_loop() {
-    let workspace = env::temp_dir().join(format!(
-        "agent-os-thread-runtime-{}-{}",
-        std::process::id(),
-        new_id("case_")
-    ));
+    let workspace = temp_workspace("runtime-code-task");
     fs::create_dir_all(workspace.join("src")).unwrap();
     fs::write(
         workspace.join("src/lib.rs"),
@@ -155,12 +259,10 @@ fn deterministic_runtime_finishes_code_task_through_tool_loop() {
             Some("target file was inspected before edit".to_string()),
         )),
         DeterministicStep::ToolCall(ToolAction::new(
-            "replace_text",
+            "apply_patch",
             json!({
                 "workspace_root": workspace.to_string_lossy(),
-                "path": "src/lib.rs",
-                "old": "1",
-                "new": "2"
+                "patch": "*** Begin Patch\n*** Update File: src/lib.rs\n@@\n-pub fn answer() -> i32 { 1 }\n+pub fn answer() -> i32 { 2 }\n*** End Patch\n"
             }),
             4,
             Some("exact repository edit was applied".to_string()),
@@ -189,7 +291,18 @@ fn deterministic_runtime_finishes_code_task_through_tool_loop() {
     assert_eq!(report.status, ThreadStatus::Completed);
     assert!(report.final_submitted);
     assert_eq!(report.artifacts.len(), 1);
-    assert_eq!(report.tool_results.len(), 3);
+    assert_eq!(report.tool_results.len(), 4);
+    assert!(report.tool_results.iter().any(|result| {
+        result.tool_name == "runtime_feedback"
+            && result
+                .output
+                .as_ref()
+                .and_then(|output| output.get("message"))
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|message| {
+                    message.contains("patch plus command evidence already exist")
+                })
+    }));
     assert_eq!(
         fs::read_to_string(workspace.join("src/lib.rs")).unwrap(),
         "pub fn answer() -> i32 { 2 }\n"
@@ -203,6 +316,60 @@ fn deterministic_runtime_finishes_code_task_through_tool_loop() {
         .values()
         .any(|invocation| invocation.status == ToolCallStatus::Proposed));
     let _ = fs::remove_dir_all(workspace);
+}
+
+fn temp_workspace(label: &str) -> std::path::PathBuf {
+    let workspace = env::temp_dir().join(format!(
+        "agent-os-thread-{label}-{}-{}",
+        std::process::id(),
+        new_id("case_")
+    ));
+    fs::create_dir_all(&workspace).unwrap();
+    workspace
+}
+
+fn spawn_runtime_agent(
+    kernel: &Kernel,
+    workspace: &std::path::Path,
+    goal_text: &str,
+) -> AgentControlBlock {
+    let goal = kernel
+        .register_goal(RegisterGoalInput {
+            namespace: "runtime-test".to_string(),
+            created_by: "agent-os-thread-test".to_string(),
+            title: goal_text.to_string(),
+            description: goal_text.to_string(),
+            acceptance_criteria: vec!["runtime completes".to_string()],
+            constraints: Vec::new(),
+            risk_level: 0,
+            deadline: None,
+        })
+        .unwrap();
+    let task = kernel
+        .spawn_task(SpawnTaskInput {
+            goal_id: goal.goal_id,
+            parent_task_id: None,
+            title: goal_text.to_string(),
+            description: goal_text.to_string(),
+            depends_on: Vec::new(),
+            required_artifact_types: Vec::new(),
+            required_evidence_types: Vec::new(),
+            priority: 10,
+            risk_level: 0,
+        })
+        .unwrap();
+    kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: task.task_id,
+            role_profile_id: "role_worker".to_string(),
+            owner: "agent-os-thread-test".to_string(),
+            goal: goal_text.to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: vec![workspace.to_string_lossy().to_string()],
+        })
+        .unwrap()
 }
 
 #[test]
@@ -347,6 +514,600 @@ fn runtime_projects_feedback_after_text_only_model_response() {
 }
 
 #[test]
+fn runtime_projects_feedback_after_repeated_identical_tool_call() {
+    struct RepeatCommandThenFinal {
+        program: std::path::PathBuf,
+        workspace: std::path::PathBuf,
+    }
+
+    impl ModelClient for RepeatCommandThenFinal {
+        fn next(&mut self, request: &ModelTurnRequest) -> AgentOsResult<ModelTurnResponse> {
+            if request
+                .context
+                .tool_results
+                .iter()
+                .any(|result| result.tool_name == "runtime_feedback")
+            {
+                let evidence_map = request
+                    .context
+                    .tool_results
+                    .iter()
+                    .filter(|result| !result.evidence_ids.is_empty())
+                    .map(|result| EvidenceMapEntry {
+                        claim: result
+                            .evidence_claim
+                            .clone()
+                            .unwrap_or_else(|| "command evidence".to_string()),
+                        evidence_refs: result.evidence_ids.clone(),
+                    })
+                    .collect();
+                return Ok(ModelTurnResponse::single(ModelAction::Final {
+                    submission: FinalSubmission {
+                        summary: "Submitted after duplicate tool feedback.".to_string(),
+                        changed_artifacts: Vec::new(),
+                        evidence_map,
+                        unverified_claims: Vec::new(),
+                        known_risks: Vec::new(),
+                        tests_run: Vec::new(),
+                        tests_not_run: Vec::new(),
+                        approvals: Vec::new(),
+                    },
+                }));
+            }
+            Ok(ModelTurnResponse::single(ModelAction::ToolCall(
+                ToolAction::new(
+                    "run_command",
+                    json!({
+                        "program": self.program.to_string_lossy(),
+                        "args": ["--help"],
+                        "cwd": self.workspace.to_string_lossy()
+                    }),
+                    4,
+                    Some("same command was requested".to_string()),
+                ),
+            )))
+        }
+    }
+
+    let workspace = temp_workspace("runtime-duplicate-tool-feedback");
+    let kernel = Kernel::new();
+    let agent = spawn_runtime_agent(&kernel, &workspace, "Handle duplicate tool calls");
+    let mut runtime = ThreadRuntime::new(
+        kernel.clone(),
+        agent.thread_id,
+        RepeatCommandThenFinal {
+            program: env::current_exe().unwrap(),
+            workspace: workspace.clone(),
+        },
+    );
+
+    let report = runtime
+        .run_to_completion(RuntimeConfig::workspace_write(&workspace))
+        .unwrap();
+
+    assert!(report.final_submitted);
+    let run_command_results = report
+        .tool_results
+        .iter()
+        .filter(|result| result.tool_name == "run_command")
+        .count();
+    assert_eq!(run_command_results, 2);
+    let feedback = report
+        .tool_results
+        .iter()
+        .find(|result| result.tool_name == "runtime_feedback")
+        .expect("duplicate tool feedback should be projected");
+    let message = feedback
+        .output
+        .as_ref()
+        .and_then(|output| output.get("message"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    assert!(message.contains("repeated an identical tool call"));
+    let persisted_run_commands = kernel
+        .state_snapshot()
+        .unwrap()
+        .tool_invocations
+        .values()
+        .filter(|invocation| {
+            invocation.tool_name == "run_command" && invocation.status == ToolCallStatus::Completed
+        })
+        .count();
+    assert_eq!(persisted_run_commands, 2);
+    let _ = fs::remove_dir_all(workspace);
+}
+
+#[test]
+fn runtime_projects_feedback_after_repeated_identical_read_file_call() {
+    struct RepeatReadThenFinal;
+
+    impl ModelClient for RepeatReadThenFinal {
+        fn next(&mut self, request: &ModelTurnRequest) -> AgentOsResult<ModelTurnResponse> {
+            if request
+                .context
+                .tool_results
+                .iter()
+                .any(|result| result.tool_name == "runtime_feedback")
+            {
+                let evidence_map = request
+                    .context
+                    .tool_results
+                    .iter()
+                    .filter(|result| result.tool_name == "read_file")
+                    .filter_map(|result| {
+                        let claim = result.evidence_claim.clone()?;
+                        Some(EvidenceMapEntry {
+                            claim,
+                            evidence_refs: result.evidence_ids.clone(),
+                        })
+                    })
+                    .collect();
+                return Ok(ModelTurnResponse::single(ModelAction::Final {
+                    submission: FinalSubmission {
+                        summary: "Submitted after duplicate read feedback.".to_string(),
+                        changed_artifacts: Vec::new(),
+                        evidence_map,
+                        unverified_claims: Vec::new(),
+                        known_risks: Vec::new(),
+                        tests_run: Vec::new(),
+                        tests_not_run: Vec::new(),
+                        approvals: Vec::new(),
+                    },
+                }));
+            }
+            Ok(ModelTurnResponse::single(ModelAction::ToolCall(
+                ToolAction::new(
+                    "read_file",
+                    json!({
+                        "workspace_root": request.workspace_root.to_string_lossy(),
+                        "path": "README.md"
+                    }),
+                    1,
+                    Some("README was inspected".to_string()),
+                ),
+            )))
+        }
+    }
+
+    let workspace = temp_workspace("runtime-duplicate-read-feedback");
+    fs::write(workspace.join("README.md"), "hello\n").unwrap();
+    let kernel = Kernel::new();
+    let agent = spawn_runtime_agent(&kernel, &workspace, "Handle duplicate read calls");
+    let mut config = RuntimeConfig::workspace_write(&workspace);
+    config.max_steps = 5;
+    let mut runtime = ThreadRuntime::new(kernel.clone(), agent.thread_id, RepeatReadThenFinal);
+
+    let report = runtime.run_to_completion(config).unwrap();
+
+    assert!(report.final_submitted);
+    assert_eq!(
+        report
+            .tool_results
+            .iter()
+            .filter(|result| result.tool_name == "read_file")
+            .count(),
+        2
+    );
+    let feedback = report
+        .tool_results
+        .iter()
+        .find(|result| result.tool_name == "runtime_feedback")
+        .expect("duplicate read feedback should be projected");
+    assert_eq!(
+        feedback
+            .input
+            .as_ref()
+            .and_then(|input| input.get("tool_name"))
+            .and_then(serde_json::Value::as_str),
+        Some("read_file")
+    );
+    let _ = fs::remove_dir_all(workspace);
+}
+
+#[test]
+fn runtime_projects_finalization_feedback_after_patch_and_command_and_filters_tools() {
+    struct FinishAfterFinalizationFeedback {
+        program: std::path::PathBuf,
+        workspace: std::path::PathBuf,
+        attempted_extra_command_after_feedback: bool,
+        saw_filtered_tools: Arc<AtomicBool>,
+    }
+
+    impl ModelClient for FinishAfterFinalizationFeedback {
+        fn next(&mut self, request: &ModelTurnRequest) -> AgentOsResult<ModelTurnResponse> {
+            let has_gate_feedback = request.context.tool_results.iter().any(|result| {
+                result.tool_name == "runtime_feedback"
+                    && result
+                        .output
+                        .as_ref()
+                        .and_then(|output| output.get("message"))
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|message| message.contains("finalization gate is active"))
+            });
+            if request.context.tool_results.iter().any(|result| {
+                result.tool_name == "runtime_feedback"
+                    && result
+                        .output
+                        .as_ref()
+                        .and_then(|output| output.get("message"))
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|message| {
+                            message.contains("patch plus command evidence already exist")
+                        })
+            }) {
+                let visible_tool_names = request
+                    .context
+                    .tool_descriptors
+                    .iter()
+                    .map(|descriptor| descriptor.name.as_str())
+                    .collect::<Vec<_>>();
+                assert!(visible_tool_names.contains(&"submit_final"));
+                assert!(visible_tool_names.contains(&"accomplish_goal"));
+                assert!(!visible_tool_names.contains(&"apply_patch"));
+                assert!(!visible_tool_names.contains(&"run_command"));
+                assert!(!visible_tool_names.contains(&"read_file"));
+                self.saw_filtered_tools.store(true, Ordering::SeqCst);
+                if !has_gate_feedback && !self.attempted_extra_command_after_feedback {
+                    self.attempted_extra_command_after_feedback = true;
+                    return Ok(ModelTurnResponse::single(ModelAction::ToolCall(
+                        ToolAction::new(
+                            "run_command",
+                            json!({
+                                "program": self.program.to_string_lossy(),
+                                "args": ["--help"],
+                                "cwd": self.workspace.to_string_lossy()
+                            }),
+                            4,
+                            Some("extra command after finalization feedback".to_string()),
+                        ),
+                    )));
+                }
+                let evidence_map = request
+                    .context
+                    .tool_results
+                    .iter()
+                    .filter(|result| !result.evidence_ids.is_empty())
+                    .map(|result| EvidenceMapEntry {
+                        claim: result
+                            .evidence_claim
+                            .clone()
+                            .unwrap_or_else(|| "runtime evidence".to_string()),
+                        evidence_refs: result.evidence_ids.clone(),
+                    })
+                    .collect();
+                return Ok(ModelTurnResponse::single(ModelAction::Final {
+                    submission: FinalSubmission {
+                        summary: "Submitted after finalization feedback.".to_string(),
+                        changed_artifacts: request
+                            .context
+                            .artifacts
+                            .iter()
+                            .map(|artifact| artifact.artifact_id.clone())
+                            .collect(),
+                        evidence_map,
+                        unverified_claims: Vec::new(),
+                        known_risks: Vec::new(),
+                        tests_run: vec!["test binary --help".to_string()],
+                        tests_not_run: Vec::new(),
+                        approvals: Vec::new(),
+                    },
+                }));
+            }
+            if request.context.artifacts.is_empty() {
+                return Ok(ModelTurnResponse::single(ModelAction::ToolCall(
+                    ToolAction::new(
+                        "apply_patch",
+                        json!({
+                            "workspace_root": self.workspace.to_string_lossy(),
+                            "patch": "*** Begin Patch\n*** Add File: result.txt\n+done\n*** End Patch\n"
+                        }),
+                        4,
+                        Some("patch was applied".to_string()),
+                    ),
+                )));
+            }
+            if request
+                .context
+                .tool_results
+                .iter()
+                .all(|result| result.tool_name != "run_command")
+            {
+                return Ok(ModelTurnResponse::single(ModelAction::ToolCall(
+                    ToolAction::new(
+                        "run_command",
+                        json!({
+                            "program": self.program.to_string_lossy(),
+                            "args": ["--help"],
+                            "cwd": self.workspace.to_string_lossy()
+                        }),
+                        4,
+                        Some("validation command was captured".to_string()),
+                    ),
+                )));
+            }
+            Ok(ModelTurnResponse::single(ModelAction::ToolCall(
+                ToolAction::new(
+                    "read_file",
+                    json!({
+                        "workspace_root": self.workspace.to_string_lossy(),
+                        "path": "result.txt"
+                    }),
+                    1,
+                    Some("model kept inspecting after validation".to_string()),
+                ),
+            )))
+        }
+    }
+
+    let workspace = temp_workspace("runtime-finalization-feedback");
+    let kernel = Kernel::new();
+    let agent = spawn_runtime_agent(&kernel, &workspace, "Finalize after validation");
+    let mut config = RuntimeConfig::workspace_write(&workspace);
+    config.max_steps = 24;
+    let saw_filtered_tools = Arc::new(AtomicBool::new(false));
+    let mut runtime = ThreadRuntime::new(
+        kernel.clone(),
+        agent.thread_id,
+        FinishAfterFinalizationFeedback {
+            program: env::current_exe().unwrap(),
+            workspace: workspace.clone(),
+            attempted_extra_command_after_feedback: false,
+            saw_filtered_tools: saw_filtered_tools.clone(),
+        },
+    );
+
+    let report = runtime.run_to_completion(config).unwrap();
+
+    assert!(report.final_submitted);
+    assert_eq!(report.status, ThreadStatus::Completed);
+    assert!(report.tool_results.iter().any(|result| {
+        result.tool_name == "runtime_feedback"
+            && result
+                .output
+                .as_ref()
+                .and_then(|output| output.get("message"))
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|message| {
+                    message.contains("patch plus command evidence already exist")
+                })
+    }));
+    assert!(report.tool_results.iter().any(|result| {
+        result.tool_name == "runtime_feedback"
+            && result
+                .output
+                .as_ref()
+                .and_then(|output| output.get("message"))
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|message| message.contains("finalization gate is active"))
+    }));
+    assert!(saw_filtered_tools.load(Ordering::SeqCst));
+    let _ = fs::remove_dir_all(workspace);
+}
+
+#[test]
+fn runtime_projects_pre_patch_resolution_feedback_after_bounded_investigation() {
+    struct ResolveAfterPrePatchResolutionFeedback {
+        program: std::path::PathBuf,
+        workspace: std::path::PathBuf,
+        investigation_calls: usize,
+        attempted_extra_command_after_feedback: bool,
+        saw_filtered_tools: Arc<AtomicBool>,
+        saw_gate_rejection: Arc<AtomicBool>,
+    }
+
+    impl ModelClient for ResolveAfterPrePatchResolutionFeedback {
+        fn next(&mut self, request: &ModelTurnRequest) -> AgentOsResult<ModelTurnResponse> {
+            let has_patch = request.context.tool_results.iter().any(|result| {
+                result.tool_name == "apply_patch" && result.status == ToolCallStatus::Completed
+            });
+            let has_post_patch_command = request.context.tool_results.iter().any(|result| {
+                result.tool_name == "run_command"
+                    && result.status == ToolCallStatus::Completed
+                    && !result.evidence_ids.is_empty()
+            });
+            if has_patch && has_post_patch_command {
+                let evidence_map = request
+                    .context
+                    .tool_results
+                    .iter()
+                    .filter(|result| !result.evidence_ids.is_empty())
+                    .map(|result| EvidenceMapEntry {
+                        claim: result
+                            .evidence_claim
+                            .clone()
+                            .unwrap_or_else(|| "runtime evidence".to_string()),
+                        evidence_refs: result.evidence_ids.clone(),
+                    })
+                    .collect();
+                return Ok(ModelTurnResponse::single(ModelAction::Final {
+                    submission: FinalSubmission {
+                        summary: "Submitted after pre-patch resolution gate.".to_string(),
+                        changed_artifacts: request
+                            .context
+                            .artifacts
+                            .iter()
+                            .map(|artifact| artifact.artifact_id.clone())
+                            .collect(),
+                        evidence_map,
+                        unverified_claims: Vec::new(),
+                        known_risks: Vec::new(),
+                        tests_run: vec!["test binary --help".to_string()],
+                        tests_not_run: Vec::new(),
+                        approvals: Vec::new(),
+                    },
+                }));
+            }
+            if has_patch {
+                return Ok(ModelTurnResponse::single(ModelAction::ToolCall(
+                    ToolAction::new(
+                        "run_command",
+                        json!({
+                            "program": self.program.to_string_lossy(),
+                            "args": ["--help"],
+                            "cwd": self.workspace.to_string_lossy()
+                        }),
+                        4,
+                        Some("post-patch command evidence was captured".to_string()),
+                    ),
+                )));
+            }
+
+            let has_resolution_feedback = request.context.tool_results.iter().any(|result| {
+                result.tool_name == "runtime_feedback"
+                    && result
+                        .output
+                        .as_ref()
+                        .and_then(|output| output.get("message"))
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|message| {
+                            message.contains("pre-patch investigation budget is nearly exhausted")
+                        })
+            });
+            let has_gate_rejection = request.context.tool_results.iter().any(|result| {
+                result.tool_name == "runtime_feedback"
+                    && result
+                        .output
+                        .as_ref()
+                        .and_then(|output| output.get("message"))
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|message| {
+                            message.contains("pre-patch resolution gate is active")
+                        })
+            });
+            if has_resolution_feedback {
+                let visible_tool_names = request
+                    .context
+                    .tool_descriptors
+                    .iter()
+                    .map(|descriptor| descriptor.name.as_str())
+                    .collect::<Vec<_>>();
+                assert!(visible_tool_names.contains(&"apply_patch"));
+                assert!(visible_tool_names.contains(&"submit_final"));
+                assert!(visible_tool_names.contains(&"accomplish_goal"));
+                if self.investigation_calls < PRE_PATCH_HARD_GATE_TOOL_RESULTS {
+                    assert!(visible_tool_names.contains(&"read_file"));
+                    assert!(visible_tool_names.contains(&"run_command"));
+                    self.investigation_calls += 1;
+                    return Ok(ModelTurnResponse::single(ModelAction::ToolCall(
+                        ToolAction::new(
+                            "read_file",
+                            json!({
+                                "workspace_root": self.workspace.to_string_lossy(),
+                                "path": "notes.txt",
+                                "offset": 0,
+                                "limit": self.investigation_calls,
+                            }),
+                            1,
+                            Some("pre-patch investigation read after soft feedback".to_string()),
+                        ),
+                    )));
+                }
+                assert!(!visible_tool_names.contains(&"read_file"));
+                assert!(!visible_tool_names.contains(&"run_command"));
+                self.saw_filtered_tools.store(true, Ordering::SeqCst);
+                if !has_gate_rejection && !self.attempted_extra_command_after_feedback {
+                    self.attempted_extra_command_after_feedback = true;
+                    return Ok(ModelTurnResponse::single(ModelAction::ToolCall(
+                        ToolAction::new(
+                            "run_command",
+                            json!({
+                                "program": self.program.to_string_lossy(),
+                                "args": ["--help"],
+                                "cwd": self.workspace.to_string_lossy()
+                            }),
+                            4,
+                            Some("extra command after pre-patch feedback".to_string()),
+                        ),
+                    )));
+                }
+                self.saw_gate_rejection.store(true, Ordering::SeqCst);
+                return Ok(ModelTurnResponse::single(ModelAction::ToolCall(
+                    ToolAction::new(
+                        "apply_patch",
+                        json!({
+                            "workspace_root": self.workspace.to_string_lossy(),
+                            "patch": "*** Begin Patch\n*** Update File: notes.txt\n@@\n-line 1\n+line 1 patched\n*** End Patch\n"
+                        }),
+                        4,
+                        Some("notes.txt was patched after bounded investigation".to_string()),
+                    ),
+                )));
+            }
+
+            self.investigation_calls += 1;
+            Ok(ModelTurnResponse::single(ModelAction::ToolCall(
+                ToolAction::new(
+                    "read_file",
+                    json!({
+                        "workspace_root": self.workspace.to_string_lossy(),
+                        "path": "notes.txt",
+                        "offset": 0,
+                        "limit": self.investigation_calls,
+                    }),
+                    1,
+                    Some("pre-patch investigation read".to_string()),
+                ),
+            )))
+        }
+    }
+
+    let workspace = temp_workspace("runtime-pre-patch-resolution");
+    fs::write(
+        workspace.join("notes.txt"),
+        (1..=20)
+            .map(|line| format!("line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n",
+    )
+    .unwrap();
+    let kernel = Kernel::new();
+    let agent = spawn_runtime_agent(&kernel, &workspace, "Resolve after bounded investigation");
+    let saw_filtered_tools = Arc::new(AtomicBool::new(false));
+    let saw_gate_rejection = Arc::new(AtomicBool::new(false));
+    let script = ResolveAfterPrePatchResolutionFeedback {
+        program: env::current_exe().unwrap(),
+        workspace: workspace.clone(),
+        investigation_calls: 0,
+        attempted_extra_command_after_feedback: false,
+        saw_filtered_tools: saw_filtered_tools.clone(),
+        saw_gate_rejection: saw_gate_rejection.clone(),
+    };
+    let mut config = RuntimeConfig::workspace_write(&workspace);
+    config.max_steps = 48;
+    let mut runtime = ThreadRuntime::new(kernel.clone(), agent.thread_id.clone(), script);
+
+    let report = runtime.run_to_completion(config).unwrap();
+
+    assert_eq!(report.status, ThreadStatus::Completed);
+    assert!(report.final_submitted);
+    assert!(saw_filtered_tools.load(Ordering::SeqCst));
+    assert!(saw_gate_rejection.load(Ordering::SeqCst));
+    assert!(fs::read_to_string(workspace.join("notes.txt"))
+        .unwrap()
+        .starts_with("line 1 patched\n"));
+    let feedback_messages = report
+        .tool_results
+        .iter()
+        .filter(|result| result.tool_name == "runtime_feedback")
+        .filter_map(|result| {
+            result
+                .output
+                .as_ref()
+                .and_then(|output| output.get("message"))
+                .and_then(serde_json::Value::as_str)
+        })
+        .collect::<Vec<_>>();
+    assert!(feedback_messages
+        .iter()
+        .any(|message| message.contains("pre-patch investigation budget is nearly exhausted")));
+    assert!(feedback_messages
+        .iter()
+        .any(|message| message.contains("pre-patch resolution gate is active")));
+    let _ = fs::remove_dir_all(workspace);
+}
+
+#[test]
 fn runtime_returns_blocked_report_after_consecutive_no_action_model_responses() {
     struct TextOnly;
 
@@ -483,12 +1244,10 @@ fn runtime_returns_blocked_report_at_max_steps_without_final_submission() {
         })
         .unwrap();
     let script = DeterministicModelClient::new(vec![DeterministicStep::ToolCall(ToolAction::new(
-        "replace_text",
+        "apply_patch",
         json!({
             "workspace_root": workspace.to_string_lossy(),
-            "path": "result.txt",
-            "old": "before",
-            "new": "after"
+            "patch": "*** Begin Patch\n*** Update File: result.txt\n@@\n-before\n+after\n*** End Patch\n"
         }),
         4,
         Some("result file was edited before the step limit".to_string()),
@@ -531,12 +1290,13 @@ fn runtime_compacts_older_evidence_tool_outputs_in_projection() {
                 .filter(|result| result.tool_name == "read_file")
                 .collect::<Vec<_>>();
             if read_results.len() < 10 {
+                let path = format!("large-{}.txt", read_results.len());
                 return Ok(ModelTurnResponse::single(ModelAction::ToolCall(
                     ToolAction::new(
                         "read_file",
                         json!({
                             "workspace_root": request.workspace_root.to_string_lossy(),
-                            "path": "large.txt"
+                            "path": path
                         }),
                         1,
                         Some("large file was inspected".to_string()),
@@ -582,7 +1342,13 @@ fn runtime_compacts_older_evidence_tool_outputs_in_projection() {
         new_id("case_")
     ));
     fs::create_dir_all(&workspace).unwrap();
-    fs::write(workspace.join("large.txt"), "x".repeat(12_000)).unwrap();
+    for index in 0..10 {
+        fs::write(
+            workspace.join(format!("large-{index}.txt")),
+            "x".repeat(12_000),
+        )
+        .unwrap();
+    }
     let kernel = Kernel::new();
     let goal = kernel
         .register_goal(RegisterGoalInput {
@@ -643,17 +1409,15 @@ fn runtime_projects_failed_tool_result_for_model_recovery() {
                 .context
                 .tool_results
                 .iter()
-                .filter(|result| result.tool_name == "replace_text")
+                .filter(|result| result.tool_name == "apply_patch")
                 .collect::<Vec<_>>();
             match replace_results.as_slice() {
                 [] => Ok(ModelTurnResponse::single(ModelAction::ToolCall(
                     ToolAction::new(
-                        "replace_text",
+                        "apply_patch",
                         json!({
                             "workspace_root": request.workspace_root.to_string_lossy(),
-                            "path": "src/lib.rs",
-                            "old": "missing",
-                            "new": "value = \"new\""
+                            "patch": "*** Begin Patch\n*** Update File: src/lib.rs\n@@\n-missing\n+value = \"new\"\n*** End Patch\n"
                         }),
                         4,
                         Some("first edit attempt was tried".to_string()),
@@ -667,15 +1431,13 @@ fn runtime_projects_failed_tool_result_for_model_recovery() {
                         .and_then(|output| output.get("error"))
                         .and_then(serde_json::Value::as_str)
                         .unwrap_or_default();
-                    assert!(error.contains("replace_text expected exactly one match"));
+                    assert!(error.contains("apply_patch update hunk did not match file content"));
                     Ok(ModelTurnResponse::single(ModelAction::ToolCall(
                         ToolAction::new(
-                            "replace_text",
+                            "apply_patch",
                             json!({
                                 "workspace_root": request.workspace_root.to_string_lossy(),
-                                "path": "src/lib.rs",
-                                "old": "value = \"old\"",
-                                "new": "value = \"new\""
+                                "patch": "*** Begin Patch\n*** Update File: src/lib.rs\n@@\n-value = \"old\"\n+value = \"new\"\n*** End Patch\n"
                             }),
                             4,
                             Some("corrected edit was applied after failed attempt".to_string()),
@@ -708,7 +1470,7 @@ fn runtime_projects_failed_tool_result_for_model_recovery() {
                     }))
                 }
                 _ => Err(AgentOsError::Validation(
-                    "unexpected replace_text retry count".to_string(),
+                    "unexpected apply_patch retry count".to_string(),
                 )),
             }
         }
@@ -752,7 +1514,7 @@ fn runtime_projects_failed_tool_result_for_model_recovery() {
             task_id: task.task_id,
             role_profile_id: "role_worker".to_string(),
             owner: "agent-os-thread-test".to_string(),
-            goal: "Recover after a failed replace_text call".to_string(),
+            goal: "Recover after a failed apply_patch call".to_string(),
             success_criteria: Vec::new(),
             failure_criteria: Vec::new(),
             parent_thread_id: None,
@@ -983,19 +1745,17 @@ fn runtime_resumes_with_persisted_failed_tool_results() {
                 .context
                 .tool_results
                 .iter()
-                .filter(|result| result.tool_name == "replace_text")
+                .filter(|result| result.tool_name == "apply_patch")
                 .collect::<Vec<_>>();
             match replace_results.as_slice() {
                 [failed] => {
                     assert_eq!(failed.status, ToolCallStatus::Failed);
                     Ok(ModelTurnResponse::single(ModelAction::ToolCall(
                         ToolAction::new(
-                            "replace_text",
+                            "apply_patch",
                             json!({
                                 "workspace_root": request.workspace_root.to_string_lossy(),
-                                "path": "src/lib.rs",
-                                "old": "state = \"old\"",
-                                "new": "state = \"new\""
+                                "patch": "*** Begin Patch\n*** Update File: src/lib.rs\n@@\n-state = \"old\"\n+state = \"new\"\n*** End Patch\n"
                             }),
                             4,
                             Some("resumed edit was applied after persisted failure".to_string()),
@@ -1028,7 +1788,7 @@ fn runtime_resumes_with_persisted_failed_tool_results() {
                     }))
                 }
                 _ => Err(AgentOsError::Validation(format!(
-                    "expected persisted failed replace_text result, found {}",
+                    "expected persisted failed apply_patch result, found {}",
                     replace_results.len()
                 ))),
             }
@@ -1073,7 +1833,7 @@ fn runtime_resumes_with_persisted_failed_tool_results() {
             task_id: task.task_id,
             role_profile_id: "role_worker".to_string(),
             owner: "agent-os-thread-test".to_string(),
-            goal: "Resume after failed replace_text call".to_string(),
+            goal: "Resume after failed apply_patch call".to_string(),
             success_criteria: Vec::new(),
             failure_criteria: Vec::new(),
             parent_thread_id: None,
@@ -1081,18 +1841,17 @@ fn runtime_resumes_with_persisted_failed_tool_results() {
         })
         .unwrap();
 
-    let first_script =
-        DeterministicModelClient::new(vec![DeterministicStep::ToolCall(ToolAction::new(
-            "replace_text",
+    let first_script = DeterministicModelClient::new(vec![DeterministicStep::ToolCall(
+        ToolAction::new(
+            "apply_patch",
             json!({
                 "workspace_root": workspace.to_string_lossy(),
-                "path": "src/lib.rs",
-                "old": "missing",
-                "new": "state = \"new\""
+                "patch": "*** Begin Patch\n*** Update File: src/lib.rs\n@@\n-missing\n+state = \"new\"\n*** End Patch\n"
             }),
             4,
             Some("failed edit was persisted before resume".to_string()),
-        ))]);
+        ),
+    )]);
     let mut first_config = RuntimeConfig::workspace_write(&workspace);
     first_config.max_steps = 1;
     let mut first_runtime =
@@ -1208,17 +1967,17 @@ fn runtime_resumes_with_persisted_tool_results_and_artifacts() {
         })
         .unwrap();
 
-    let first_script =
-        DeterministicModelClient::new(vec![DeterministicStep::ToolCall(ToolAction::new(
-            "write_file",
+    let first_script = DeterministicModelClient::new(vec![DeterministicStep::ToolCall(
+        ToolAction::new(
+            "apply_patch",
             json!({
                 "workspace_root": workspace.to_string_lossy(),
-                "path": "result.md",
-                "content": "persisted before restart\n"
+                "patch": "*** Begin Patch\n*** Add File: result.md\n+persisted before restart\n*** End Patch\n"
             }),
             4,
             Some("result file was written before restart".to_string()),
-        ))]);
+        ),
+    )]);
     let mut first_runtime =
         ThreadRuntime::new(kernel.clone(), agent.thread_id.clone(), first_script);
     let err = first_runtime
