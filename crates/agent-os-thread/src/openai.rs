@@ -4,6 +4,7 @@ mod client;
 mod messages;
 mod parser;
 mod prompt;
+mod request;
 mod tools;
 
 pub use client::OpenAiModelClient;
@@ -13,9 +14,13 @@ pub(super) use audit::append_jsonl;
 #[cfg(test)]
 pub(super) use messages::{build_anthropic_messages, build_messages};
 #[cfg(test)]
-pub(super) use parser::{map_function_call, parse_anthropic_response, parse_response};
+pub(super) use parser::{
+    map_function_call, parse_anthropic_response, parse_openai_responses_response, parse_response,
+};
 #[cfg(test)]
 pub(super) use prompt::default_system_prompt;
+#[cfg(test)]
+pub(super) use request::{build_provider_request, ProviderRequestConfig};
 #[cfg(test)]
 pub(super) use tools::{anthropic_tool_definitions, tool_definitions};
 #[cfg(test)]

@@ -76,6 +76,82 @@ pub(crate) fn parse_response(
     Ok(ModelTurnResponse { actions, usage })
 }
 
+pub(crate) fn parse_openai_responses_response(
+    body: &Value,
+    request: &ModelTurnRequest,
+) -> AgentOsResult<ModelTurnResponse> {
+    let output = body
+        .get("output")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            AgentOsError::Validation("OpenAI responses payload missing output array".to_string())
+        })?;
+
+    let mut actions = Vec::new();
+    for item in output {
+        match item.get("type").and_then(Value::as_str) {
+            Some("message") => {
+                if let Some(content) = item.get("content").and_then(Value::as_array) {
+                    for part in content {
+                        if part.get("type").and_then(Value::as_str) == Some("output_text") {
+                            if let Some(text) = part.get("text").and_then(Value::as_str) {
+                                if !text.trim().is_empty() {
+                                    actions.push(ModelAction::OutputText {
+                                        text: text.to_string(),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Some("function_call") => {
+                let name = item.get("name").and_then(Value::as_str).ok_or_else(|| {
+                    AgentOsError::Validation(
+                        "OpenAI responses function_call missing name".to_string(),
+                    )
+                })?;
+                let arguments = item
+                    .get("arguments")
+                    .map(parse_tool_arguments)
+                    .unwrap_or_else(|| json!({}));
+                let (tool_name, input, risk_level) = map_function_call(name, arguments, request);
+                let claim = evidence_claim_for_tool(&tool_name);
+                actions.push(ModelAction::ToolCall(ToolAction::new(
+                    tool_name,
+                    input,
+                    risk_level,
+                    Some(claim),
+                )));
+            }
+            _ => {}
+        }
+    }
+
+    let usage = body
+        .get("usage")
+        .map(|usage| ProviderUsage {
+            input_tokens: usage
+                .get("input_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            output_tokens: usage
+                .get("output_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            cost: 0.0,
+        })
+        .unwrap_or_default();
+
+    if actions.is_empty() {
+        actions.push(ModelAction::OutputText {
+            text: "(no action from model)".to_string(),
+        });
+    }
+
+    Ok(ModelTurnResponse { actions, usage })
+}
+
 fn parse_tool_arguments(value: &Value) -> Value {
     match value {
         Value::String(arguments) => serde_json::from_str(arguments).unwrap_or_else(|_| json!({})),
@@ -93,7 +169,7 @@ pub(crate) fn parse_anthropic_response(
         .and_then(Value::as_array)
         .ok_or_else(|| {
             AgentOsError::Validation(
-                "Anthropic-compatible response missing content array".to_string(),
+                "anthropic_messages response missing content array".to_string(),
             )
         })?;
 

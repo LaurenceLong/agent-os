@@ -260,7 +260,7 @@ fn instruction_candidates_for_root(root: &EcosystemRoot) -> Vec<PathBuf> {
     match root.kind {
         EcosystemSourceKind::Claude => vec![root.path.join("CLAUDE.md")],
         EcosystemSourceKind::Agents => vec![root.path.join("AGENTS.md")],
-        EcosystemSourceKind::AgentOs | EcosystemSourceKind::OpenCode => {
+        EcosystemSourceKind::AgentOs | EcosystemSourceKind::ExternalAgent => {
             vec![root.path.join("AGENTS.md"), root.path.join("CLAUDE.md")]
         }
     }

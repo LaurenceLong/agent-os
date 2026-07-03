@@ -16,15 +16,11 @@ This document refines [Agent Thread Runtime](agent-thread-runtime.md) into an im
 
 ## 2. Design Inputs
 
-This module is informed by [Agent Thread Source Study](../05-research/agent-thread-source-study.md).
+This module is defined by Agent-OS foundation documents, kernel boundary rules,
+and the current replayable event contract.
 
-The source study is an input, not authority. The Agent-OS ABI defined here is authoritative.
-
-Source boundary:
-
-- OpenCode and OpenAI Codex public source can inform control-plane patterns.
-- Public Claude Code documentation can inform product behavior patterns.
-- Leaked or non-public Claude Code source MUST NOT be inspected, copied, or used as implementation input.
+The Agent-OS ABI defined here is authoritative. External agent frameworks are
+not implementation authorities for Agent Thread behavior.
 
 ## 3. Core Axioms
 

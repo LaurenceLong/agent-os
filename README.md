@@ -1,4 +1,4 @@
-# Agent-OS
+﻿# Agent-OS
 
 Agent-OS is a production-oriented runtime kernel for agent organizations.
 
@@ -129,7 +129,7 @@ Config shape:
   "provider": {
     "openai": {
       "api_key": "replace-with-your-api-key",
-      "api_style": "openai-compatible",
+      "endpoint": "openai_chat_completions",
       "options": {
         "base_url": "https://api.openai.com/v1",
         "timeout_ms": 120000
@@ -166,18 +166,18 @@ Config shape:
 ```
 
 `model` is the selected runtime model in `provider_id/model_id` form. Each
-provider owns its credential, `api_style`, endpoint options, and model catalog.
-`api_style` is required and supports `openai-compatible` and
-`anthropic-compatible`. Use `agent-os chat --model <provider/model>` to select
-a non-default model from the merged global/project config. Each model entry
-must explicitly define `name`, `limit.context`, and `limit.output`;
-`limit.input` is optional.
+provider owns its credential, `endpoint`, endpoint options, and model catalog.
+`endpoint` is required and supports the canonical values
+`openai_chat_completions`, `openai_responses`, and `anthropic_messages`. Use
+`agent-os chat --model <provider/model>` to select a non-default model from
+the merged global/project config. Each model entry must explicitly define
+`name`, `limit.context`, and `limit.output`; `limit.input` is optional.
 Model `options` is an object merged into the provider request body before
 runtime-controlled fields, so reasoning controls such as `reasoningEffort`,
 `reasoningSummary`, or provider-native `thinking` settings belong there.
 Project `.agent-os/config.json` may override `model`, `small_model`, provider
 `options`, and model metadata, but it must not contain provider `api_key` or
-`api_style` values. Tests and isolated local runs may set `AGENT_OS_HOME` to
+`endpoint` values. Tests and isolated local runs may set `AGENT_OS_HOME` to
 place all Agent-OS roots under one temporary directory.
 
 Run the current conformance suite with:
@@ -195,14 +195,14 @@ and then from the repository-root `.env` file.
 AGENT_OS_LIVE_OPENAI_API_KEY=... \
 AGENT_OS_LIVE_OPENAI_BASE_URL=https://api.openai.com/v1 \
 AGENT_OS_LIVE_OPENAI_MODEL=gpt-4o \
-cargo test -p agent-os-thread live_openai_compatible_llm_goal_driven -- --ignored --nocapture
+cargo test -p agent-os-thread live_openai_chat_completions_llm_goal_driven -- --ignored --nocapture
 ```
 
 ```sh
 AGENT_OS_LIVE_ANTHROPIC_API_KEY=... \
 AGENT_OS_LIVE_ANTHROPIC_BASE_URL=https://api.anthropic.com \
 AGENT_OS_LIVE_ANTHROPIC_MODEL=claude-sonnet-4-20250514 \
-cargo test -p agent-os-thread live_anthropic_compatible_llm_goal_driven -- --ignored --nocapture
+cargo test -p agent-os-thread live_anthropic_messages_llm_goal_driven -- --ignored --nocapture
 ```
 
 These ignored tests use the normal system prompt and normal Agent Thread Runtime loop. They do not mock model responses and do not inject per-tool forcing prompts. The workspace scenario covers `read_file`, `apply_patch`, `run_command`, `accomplish_goal`, and `submit_final`. The control-plane scenario covers `set_goal`, `accomplish_goal`, `update_checklist`, `record_evidence`, `report_supervisor`, `post_blackboard`, `ask_human`, `agent_control`, `read_file`, and `submit_final`.
@@ -210,10 +210,10 @@ These ignored tests use the normal system prompt and normal Agent Thread Runtime
 Inspectable interaction logs are written under `target/agent-os-audit/`:
 
 ```text
-live-openai-compatible-goal-workspace.jsonl
-live-openai-compatible-goal-control-plane.jsonl
-live-anthropic-compatible-goal-workspace.jsonl
-live-anthropic-compatible-goal-control-plane.jsonl
+live-openai_chat_completions-goal-workspace.jsonl
+live-openai_chat_completions-goal-control-plane.jsonl
+live-anthropic_messages-goal-workspace.jsonl
+live-anthropic_messages-goal-control-plane.jsonl
 ```
 
 The tests also generate `.pretty.json` siblings for prompt and message audit. Logs must not contain provider API keys.
@@ -304,31 +304,28 @@ Read in this order:
 4. [Architecture Principles](docs/00-foundation/architecture-principles.md)
 5. [System Architecture](docs/10-kernel-design/system-architecture.md)
 6. [Overall Architecture Mermaid](docs/10-kernel-design/overall-architecture-mermaid.md)
-7. [Agent Thread Source Study](docs/05-research/agent-thread-source-study.md)
-8. [Agent Optimization Statistics Study](docs/05-research/agent-optimization-statistics-study.md)
-9. [Long-Running Kernel/App-Server Gap Study](docs/05-research/long-running-kernel-app-server-gap-study.md)
-10. [Agent Thread Runtime](docs/10-kernel-design/agent-thread-runtime.md)
-11. [Agent Thread Core Module](docs/10-kernel-design/agent-thread-core-module.md)
-12. [Role and Profile System](docs/10-kernel-design/role-and-profile-system.md)
-13. [Execution Environment System](docs/10-kernel-design/execution-environment-system.md)
-14. [Scheduler and Resource Arbitration](docs/10-kernel-design/scheduler-and-resource-arbitration.md)
-15. [Provider System](docs/10-kernel-design/provider-system.md)
-16. [Agent Thread Communication](docs/10-kernel-design/agent-thread-communication.md)
-17. [Memento Fragments](docs/10-kernel-design/memento-fragments.md)
-18. [Kernel Data Model](docs/10-kernel-design/kernel-data-model.md)
-19. [Kernel ABI and Syscalls](docs/10-kernel-design/kernel-abi-and-syscalls.md)
-20. [State, Storage, and Replay](docs/10-kernel-design/state-storage-and-replay.md)
-21. [Permission, Tool, and Evidence Model](docs/10-kernel-design/permission-tool-evidence-model.md)
-22. [Production Roadmap](docs/20-implementation/production-roadmap.md)
-23. [Conformance and Quality Gates](docs/20-implementation/conformance-and-quality.md)
-24. [SWE-bench Lite Private Benchmark](docs/20-implementation/swe-bench-lite-private-benchmark.md)
+7. [Agent Thread Runtime](docs/10-kernel-design/agent-thread-runtime.md)
+8. [Agent Thread Core Module](docs/10-kernel-design/agent-thread-core-module.md)
+9. [Role and Profile System](docs/10-kernel-design/role-and-profile-system.md)
+10. [Execution Environment System](docs/10-kernel-design/execution-environment-system.md)
+11. [Scheduler and Resource Arbitration](docs/10-kernel-design/scheduler-and-resource-arbitration.md)
+12. [Provider System](docs/10-kernel-design/provider-system.md)
+13. [Agent Thread Communication](docs/10-kernel-design/agent-thread-communication.md)
+14. [Memento Fragments](docs/10-kernel-design/memento-fragments.md)
+15. [Kernel Data Model](docs/10-kernel-design/kernel-data-model.md)
+16. [Kernel ABI and Syscalls](docs/10-kernel-design/kernel-abi-and-syscalls.md)
+17. [State, Storage, and Replay](docs/10-kernel-design/state-storage-and-replay.md)
+18. [Permission, Tool, and Evidence Model](docs/10-kernel-design/permission-tool-evidence-model.md)
+19. [Production Roadmap](docs/20-implementation/production-roadmap.md)
+20. [Conformance and Quality Gates](docs/20-implementation/conformance-and-quality.md)
+21. [SWE-bench Lite Private Benchmark](docs/20-implementation/swe-bench-lite-private-benchmark.md)
 
 Architecture decision records:
 
 - [ADR-0001: Agent-OS is a microkernel-style runtime](docs/30-decisions/ADR-0001-agent-os-is-a-microkernel-runtime.md)
 - [ADR-0002: PostgreSQL is a storage driver, not kernel state](docs/30-decisions/ADR-0002-postgresql-is-a-storage-driver.md)
 - [ADR-0003: Agent Thread Runtime is proprietary core infrastructure](docs/30-decisions/ADR-0003-agent-thread-runtime-is-proprietary-core.md)
-- [ADR-0004: Agent Thread Core Module is source-informed and clean-room](docs/30-decisions/ADR-0004-agent-thread-core-module-source-informed-clean-room.md)
+- [ADR-0004: Agent Thread Core Module is native core infrastructure](docs/30-decisions/ADR-0004-agent-thread-core-module-source-informed-clean-room.md)
 - [ADR-0005: Memento Fragments are owner self-reminders](docs/30-decisions/ADR-0005-memento-fragments-are-owner-self-reminders.md)
 - [ADR-0006: Agent Thread communication is capability-scoped](docs/30-decisions/ADR-0006-agent-thread-communication-is-capability-scoped.md)
 - [ADR-0007: Provider System is global control-plane infrastructure](docs/30-decisions/ADR-0007-provider-system-is-global-control-plane.md)

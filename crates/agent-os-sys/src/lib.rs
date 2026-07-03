@@ -6,6 +6,7 @@
 
 mod abi;
 mod app;
+mod app_protocol;
 mod artifacts;
 mod audit;
 mod automation;
@@ -24,6 +25,7 @@ mod tools;
 
 pub use abi::*;
 pub use app::*;
+pub use app_protocol::*;
 pub use artifacts::*;
 pub use audit::*;
 pub use automation::*;

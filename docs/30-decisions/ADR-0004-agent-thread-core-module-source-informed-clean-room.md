@@ -1,4 +1,4 @@
-# ADR-0004: Agent Thread Core Module is source-informed and clean-room
+# ADR-0004: Agent Thread Core Module is native core infrastructure
 
 Status: accepted
 
@@ -6,15 +6,13 @@ Date: 2026-06-25
 
 ## Context
 
-Agent-OS needs a production Agent Thread runtime. Existing open-source agents provide useful implementation patterns, but none of them define the exact kernel contract Agent-OS needs.
+Agent-OS needs a production Agent Thread runtime. That runtime must be owned by
+the Agent-OS kernel contract instead of delegated to any external agent
+framework.
 
-The project studied:
-
-- OpenCode public source for provider abstraction, typed message parts, tool lifecycle, permissions, snapshots, patches, compaction, and agent role overlays.
-- OpenAI Codex public source for Rust core architecture, thread/turn separation, submission and event queues, Agent Control, Agent Registry, spawn reservations, residency, permission profiles, tool routing, protocol schemas, and recovery surfaces.
-- Public Claude Code documentation for subagent behavior, worktree isolation, foreground/background execution, permission precedence, hooks, auto mode, and sandboxing behavior.
-
-The project must avoid dependence on leaked or non-public source material.
+The project must keep its implementation authority inside Agent-OS documents,
+typed syscalls, replayable events, permissions, evidence, artifacts, provider
+contracts, and conformance tests.
 
 ## Decision
 
@@ -32,7 +30,8 @@ Agent-OS will implement a dedicated Agent Thread Core Module with:
 - workspace, process, permission, context, and memory isolation.
 - event-first recovery and conformance tests.
 
-Open-source agents may be hosted as guest runtimes only after they comply with Agent-OS syscalls, permissions, artifact, evidence, and audit contracts.
+External agents may be hosted as guest runtimes only after they comply with
+Agent-OS syscalls, permissions, artifact, evidence, and audit contracts.
 
 ## Consequences
 
@@ -40,8 +39,8 @@ Positive:
 
 - Agent-OS has a stable kernel execution unit.
 - Development can start from a precise module contract.
-- Public source research informs maturity without importing incompatible architecture.
-- The design remains clean-room with respect to non-public code.
+- Product maturity is judged against Agent-OS contracts rather than borrowed architecture.
+- The design remains native to Agent-OS.
 - Third-party distributions can target a stable ABI.
 
 Negative:

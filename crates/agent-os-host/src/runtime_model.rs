@@ -93,7 +93,7 @@ impl HostRuntimeModelConfig {
                 )?;
                 let mut client = OpenAiModelClient::new(model.api_key, model.name.clone())
                     .with_api_base(model.base_url)
-                    .with_api_style(model.api_style)
+                    .with_endpoint(model.endpoint)
                     .with_model_options(model.options.clone());
                 if let Some(timeout_ms) = model.timeout_ms {
                     client = client.with_request_timeout(Duration::from_millis(timeout_ms));
@@ -270,7 +270,7 @@ mod tests {
                 "provider": {
                     "mock": {
                         "api_key": "test-key",
-                        "api_style": "openai-compatible",
+                        "endpoint": "openai_chat_completions",
                         "options": {
                             "base_url": mock_provider.base_url,
                             "timeout_ms": 120000
@@ -400,7 +400,7 @@ mod tests {
                 "provider": {
                     "mock": {
                         "api_key": "test-key",
-                        "api_style": "openai-compatible",
+                        "endpoint": "openai_chat_completions",
                         "options": {
                             "base_url": mock_provider.base_url
                         },
@@ -482,6 +482,7 @@ mod tests {
 
     fn request(server: &mut AppServer<AgentOsHost>, request: AppRequest) -> Value {
         let response = server.handle_envelope(AppRequestEnvelope {
+            protocol: agent_os_sys::app_protocol_version(),
             request_id: new_id("req_"),
             client: ClientConnection {
                 client_id: "test-client".to_string(),

@@ -14,6 +14,6 @@ mod live;
 #[path = "tests/mock_adapter.rs"]
 mod mock_adapter;
 #[path = "tests/support.rs"]
-mod support;
+pub(super) mod support;
 #[path = "tests/unit.rs"]
 mod unit;

@@ -1,4 +1,4 @@
-use super::support::*;
+﻿use super::support::*;
 use super::*;
 
 #[test]
@@ -204,7 +204,7 @@ fn mock_tool_call_strings_run_local_tools_and_build_llm_tool_results() {
 }
 
 #[test]
-fn openai_compatible_mock_adapter_runs_every_core_tool() {
+fn openai_chat_completions_mock_adapter_runs_every_core_tool() {
     let tmp = std::env::temp_dir().join(format!("aos-openai-all-tools-{}", new_id("t_")));
     std::fs::create_dir_all(&tmp).unwrap();
     std::fs::write(tmp.join("read.txt"), "read me\n").unwrap();
@@ -345,11 +345,11 @@ fn openai_compatible_mock_adapter_runs_every_core_tool() {
     };
     let messages = build_messages(&next_request, tmp.to_str().unwrap(), &None);
     write_mock_interaction_log(
-        "openai-compatible-mock-adapter-interaction.jsonl",
+        "openai_chat_completions-mock-adapter-interaction.jsonl",
         &[
             json!({
                 "type": "provider_request",
-                "provider": "openai-compatible",
+                "provider": "openai_chat_completions",
                 "endpoint": "/chat/completions",
                 "body": {
                     "model": "mock-model",
@@ -360,22 +360,22 @@ fn openai_compatible_mock_adapter_runs_every_core_tool() {
             }),
             json!({
                 "type": "mock_llm_response",
-                "provider": "openai-compatible",
+                "provider": "openai_chat_completions",
                 "body": body
             }),
             json!({
                 "type": "parsed_model_actions",
-                "provider": "openai-compatible",
+                "provider": "openai_chat_completions",
                 "actions": parsed_actions
             }),
             json!({
                 "type": "tool_execution_records",
-                "provider": "openai-compatible",
+                "provider": "openai_chat_completions",
                 "records": next_request.context.tool_results.clone()
             }),
             json!({
                 "type": "provider_followup_request",
-                "provider": "openai-compatible",
+                "provider": "openai_chat_completions",
                 "endpoint": "/chat/completions",
                 "body": {
                     "model": "mock-model",
@@ -399,7 +399,7 @@ fn openai_compatible_mock_adapter_runs_every_core_tool() {
 }
 
 #[test]
-fn anthropic_compatible_mock_adapter_runs_every_core_tool() {
+fn anthropic_messages_mock_adapter_runs_every_core_tool() {
     let tmp = std::env::temp_dir().join(format!("aos-anthropic-all-tools-{}", new_id("t_")));
     std::fs::create_dir_all(&tmp).unwrap();
     std::fs::write(tmp.join("read.txt"), "read me\n").unwrap();
@@ -480,11 +480,11 @@ fn anthropic_compatible_mock_adapter_runs_every_core_tool() {
     };
     let messages = build_anthropic_messages(&next_request, tmp.to_str().unwrap());
     write_mock_interaction_log(
-        "anthropic-compatible-mock-adapter-interaction.jsonl",
+        "anthropic_messages-mock-adapter-interaction.jsonl",
         &[
             json!({
                 "type": "provider_request",
-                "provider": "anthropic-compatible",
+                "provider": "anthropic_messages",
                 "endpoint": "/v1/messages",
                 "body": {
                     "model": "mock-model",
@@ -498,22 +498,22 @@ fn anthropic_compatible_mock_adapter_runs_every_core_tool() {
             }),
             json!({
                 "type": "mock_llm_response",
-                "provider": "anthropic-compatible",
+                "provider": "anthropic_messages",
                 "body": body
             }),
             json!({
                 "type": "parsed_model_actions",
-                "provider": "anthropic-compatible",
+                "provider": "anthropic_messages",
                 "actions": parsed_actions
             }),
             json!({
                 "type": "tool_execution_records",
-                "provider": "anthropic-compatible",
+                "provider": "anthropic_messages",
                 "records": next_request.context.tool_results.clone()
             }),
             json!({
                 "type": "provider_followup_request",
-                "provider": "anthropic-compatible",
+                "provider": "anthropic_messages",
                 "endpoint": "/v1/messages",
                 "body": {
                     "model": "mock-model",

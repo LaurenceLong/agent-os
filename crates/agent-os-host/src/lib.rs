@@ -487,7 +487,7 @@ impl AgentOsHost {
             .store()
             .thread_summaries()?
             .into_iter()
-            .find(|thread| thread.client_thread_id == client_thread_id)
+            .find(|thread| thread.client_thread_id == client_thread_id && !thread.deleted)
             .ok_or_else(|| AgentOsError::NotFound(format!("thread {client_thread_id}")))
     }
 
@@ -793,7 +793,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn app_server_starts_lists_reads_and_archives_threads_through_host() {
+    fn app_server_runs_thread_lifecycle_updates_through_host() {
         let mut server = initialized_server();
 
         let started = request(
@@ -834,10 +834,65 @@ mod tests {
             &mut server,
             "req_thread_archive",
             AppRequest::ThreadArchive {
-                client_thread_id: thread_id,
+                client_thread_id: thread_id.clone(),
             },
         );
         assert_eq!(accepted_body(archived)["thread"]["archived"], true);
+
+        let unarchived = request(
+            &mut server,
+            "req_thread_unarchive",
+            AppRequest::ThreadUnarchive {
+                client_thread_id: thread_id.clone(),
+            },
+        );
+        assert_eq!(accepted_body(unarchived)["thread"]["archived"], false);
+
+        let renamed = request(
+            &mut server,
+            "req_thread_name_set",
+            AppRequest::ThreadNameSet {
+                client_thread_id: thread_id.clone(),
+                title: "GOAT protocol thread".to_string(),
+            },
+        );
+        assert_eq!(
+            accepted_body(renamed)["thread"]["title"],
+            "GOAT protocol thread"
+        );
+
+        let deleted = request(
+            &mut server,
+            "req_thread_delete",
+            AppRequest::ThreadDelete {
+                client_thread_id: thread_id.clone(),
+            },
+        );
+        let deleted_body = accepted_body(deleted);
+        assert_eq!(deleted_body["thread"]["deleted"], true);
+        assert_eq!(deleted_body["thread"]["archived"], true);
+
+        let listed = request(
+            &mut server,
+            "req_thread_list_after_delete",
+            AppRequest::ThreadList { archived: None },
+        );
+        assert!(accepted_body(listed)["threads"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+
+        let read_deleted = request(
+            &mut server,
+            "req_thread_read_deleted",
+            AppRequest::ThreadRead {
+                client_thread_id: thread_id,
+            },
+        );
+        assert!(matches!(
+            read_deleted.response,
+            AppResponse::Rejected { code, .. } if code == "not_found"
+        ));
     }
 
     #[test]
@@ -1631,6 +1686,40 @@ mod tests {
     }
 
     #[test]
+    fn app_server_reads_provider_usage_and_permission_profiles() {
+        let mut server = initialized_server();
+
+        let usage = request(
+            &mut server,
+            "req_provider_usage",
+            AppRequest::ProviderUsageRead {
+                query: StatsQuery {
+                    provider_id: Some("provider_default".to_string()),
+                    ..StatsQuery::default()
+                },
+            },
+        );
+        let usage = accepted_body(usage);
+        assert_eq!(usage["usage"]["query"]["provider_id"], "provider_default");
+        assert_eq!(usage["usage"]["snapshot"]["provider_calls"], 0);
+
+        let permissions = request(
+            &mut server,
+            "req_permission_profiles",
+            AppRequest::PermissionProfileList,
+        );
+        let profiles = accepted_body(permissions)["permission_profiles"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert!(profiles.iter().any(|profile| {
+            profile["permission_profile_id"]
+                .as_str()
+                .is_some_and(|id| id == "perm_producer")
+        }));
+    }
+
+    #[test]
     fn subscription_stays_in_app_server_protocol_layer() {
         let mut server = initialized_server();
 
@@ -1968,6 +2057,7 @@ mod tests {
         request: AppRequest,
     ) -> agent_os_sys::AppResponseEnvelope {
         server.handle_envelope(AppRequestEnvelope {
+            protocol: agent_os_sys::app_protocol_version(),
             request_id: request_id.to_string(),
             client: human_client(),
             request,
@@ -1986,7 +2076,7 @@ mod tests {
     fn human_client() -> ClientConnection {
         ClientConnection {
             client_id: "human_1".to_string(),
-            client_name: "Codex Desktop".to_string(),
+            client_name: "Agent-OS Desktop".to_string(),
             client_kind: ClientKind::DesktopApp,
             authority: SecurityLevel::HUMAN_ROOT,
             connected_at: "2026-06-30T00:00:00Z".to_string(),

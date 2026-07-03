@@ -1,4 +1,4 @@
-use agent_os_sys::AgentOsError;
+﻿use agent_os_sys::AgentOsError;
 use serde_json::{json, Value};
 
 const ERROR_BODY_LIMIT: usize = 2048;
@@ -285,7 +285,7 @@ mod tests {
     #[test]
     fn classifies_context_overflow_without_retry() {
         let error = ProviderApiError::from_status(
-            "openai-compatible",
+            "openai_chat_completions",
             400,
             json!({
                 "error": {
@@ -310,7 +310,7 @@ mod tests {
     #[test]
     fn classifies_rate_limit_with_retry_after_header() {
         let error = ProviderApiError::from_status(
-            "openai-compatible",
+            "openai_chat_completions",
             429,
             json!({"error": {"message": "rate limit reached"}}).to_string(),
             Some("1500"),
@@ -325,7 +325,7 @@ mod tests {
     #[test]
     fn classifies_quota_as_budget_exhausted() {
         let error = ProviderApiError::from_status(
-            "openai-compatible",
+            "openai_chat_completions",
             429,
             json!({
                 "error": {

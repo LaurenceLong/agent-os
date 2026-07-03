@@ -1,9 +1,9 @@
 use crate::AgentOsHost;
 use agent_os_sys::{
-    AgentOsResult, AppNotification, AppNotificationEnvelope, ApprovalQueueProjection,
-    ArtifactIndexProjection, ClientThread, EventEnvelope, EvidenceIndexProjection,
-    ProjectionCursor, ResourceSessionProjection, StatsQuery, StatsSnapshot, TimelineItem,
-    TimelineItemType, TurnRecord,
+    app_protocol_version, AgentOsResult, AppNotification, AppNotificationEnvelope,
+    ApprovalQueueProjection, ArtifactIndexProjection, ClientThread, EventEnvelope,
+    EvidenceIndexProjection, ProjectionCursor, ResourceSessionProjection, StatsQuery,
+    StatsSnapshot, TimelineItem, TimelineItemType, TurnRecord,
 };
 use std::collections::BTreeMap;
 
@@ -77,6 +77,7 @@ impl AgentOsHost {
             }
             for notification in notifications_for_event(event, &index) {
                 notifications.push(AppNotificationEnvelope {
+                    protocol: app_protocol_version(),
                     subscription_id: None,
                     cursor: ProjectionCursor {
                         last_event_ordinal: ordinal,

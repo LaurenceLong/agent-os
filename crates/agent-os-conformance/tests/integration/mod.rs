@@ -1,3 +1,4 @@
+mod app_protocol_conformance;
 mod artifact_conformance;
 mod communication_conformance;
 mod context_conformance;

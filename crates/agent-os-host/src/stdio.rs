@@ -166,6 +166,7 @@ mod tests {
         let input = format!(
             "{}\n",
             serde_json::to_string(&AppRequestEnvelope {
+                protocol: agent_os_sys::app_protocol_version(),
                 request_id: "req_init".to_string(),
                 client: ClientConnection {
                     client_id: "human_1".to_string(),
@@ -216,6 +217,7 @@ mod tests {
         let input = format!(
             "{}\n{}\n",
             serde_json::to_string(&AppRequestEnvelope {
+                protocol: agent_os_sys::app_protocol_version(),
                 request_id: "req_init".to_string(),
                 client: ClientConnection {
                     client_id: "human_1".to_string(),
@@ -228,6 +230,7 @@ mod tests {
             })
             .unwrap(),
             serde_json::to_string(&AppRequestEnvelope {
+                protocol: agent_os_sys::app_protocol_version(),
                 request_id: "req_turn_start".to_string(),
                 client: ClientConnection {
                     client_id: "human_1".to_string(),

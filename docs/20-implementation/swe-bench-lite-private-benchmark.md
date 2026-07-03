@@ -279,14 +279,14 @@ Observed 2026-07-01 gate evidence for this sample:
   `sympy__sympy-15308`, and `sympy__sympy-24066` with exit code 0.
 - Every task wrote a non-empty patch file in the same invocation.
 
-Run one OpenCode task with the same prompt contract:
+Run one external-agent task with the same prompt contract:
 
 ```bash
-python benchmarks/swe-bench-lite/private20_runner.py run-opencode \
+python benchmarks/swe-bench-lite/private20_runner.py run-external-agent \
   --repo-cache /root/swebench-repo-cache \
   --output-root "$RUN_ROOT" \
-  --opencode-bin opencode \
-  --model "$OPENCODE_MODEL" \
+  --external-agent-bin external-agent \
+  --model "$EXTERNAL_AGENT_MODEL" \
   --instance-id django__django-11099
 ```
 

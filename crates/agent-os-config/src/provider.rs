@@ -23,7 +23,7 @@ pub struct ProviderConfigEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub api_style: Option<String>,
+    pub endpoint: Option<String>,
     #[serde(default, skip_serializing_if = "ProviderOptions::is_empty")]
     pub options: ProviderOptions,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -140,7 +140,7 @@ pub struct ProviderCatalog {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderEntry {
     pub api_key: String,
-    pub api_style: LlmApiStyle,
+    pub endpoint: LlmApiStyle,
     pub options: ProviderOptionsEntry,
     pub models: BTreeMap<String, ModelEntry>,
 }
@@ -167,7 +167,7 @@ pub struct ResolvedModel {
     pub name: String,
     pub api_key: String,
     pub base_url: String,
-    pub api_style: LlmApiStyle,
+    pub endpoint: LlmApiStyle,
     pub timeout_ms: Option<u64>,
     pub options: BTreeMap<String, Value>,
     pub limit: ModelLimit,
@@ -261,7 +261,7 @@ impl ProviderCatalog {
             name: model.name.clone(),
             api_key: provider.api_key.clone(),
             base_url: provider.options.base_url.clone(),
-            api_style: provider.api_style,
+            endpoint: provider.endpoint,
             timeout_ms: provider.options.timeout_ms,
             options: model.options.clone(),
             limit: model.limit.clone(),
@@ -327,12 +327,12 @@ pub(crate) fn reject_project_provider_authority(
     }
     if config.provider.values().any(|provider| {
         provider
-            .api_style
+            .endpoint
             .as_deref()
             .is_some_and(|value| !value.trim().is_empty())
     }) {
         return Err(AgentOsError::Validation(format!(
-            "project Agent-OS config {} must not contain provider api_style values",
+            "project Agent-OS config {} must not contain provider endpoint values",
             path.display()
         )));
     }
@@ -343,8 +343,8 @@ fn merge_provider(base: &mut ProviderConfigEntry, next: ProviderConfigEntry) {
     if next.api_key.is_some() {
         base.api_key = next.api_key;
     }
-    if next.api_style.is_some() {
-        base.api_style = next.api_style;
+    if next.endpoint.is_some() {
+        base.endpoint = next.endpoint;
     }
     if next.options.base_url.is_some() {
         base.options.base_url = next.options.base_url;
@@ -434,16 +434,16 @@ fn resolve_provider_entries(
                     ))
                 })
                 .collect::<AgentOsResult<BTreeMap<_, _>>>()?;
-            let api_style = LlmApiStyle::from_value(&required_provider_field(
+            let endpoint = LlmApiStyle::from_value(&required_provider_field(
                 &provider_id,
-                provider.api_style,
-                "api_style",
+                provider.endpoint,
+                "endpoint",
             )?)?;
             Ok((
                 provider_id.clone(),
                 ProviderEntry {
                     api_key: required_provider_field(&provider_id, provider.api_key, "api_key")?,
-                    api_style,
+                    endpoint,
                     options: ProviderOptionsEntry {
                         base_url: required_provider_field(
                             &provider_id,
@@ -517,7 +517,7 @@ mod tests {
                 "openai".to_string(),
                 ProviderConfigEntry {
                     api_key: Some("global-key".to_string()),
-                    api_style: Some("openai-compatible".to_string()),
+                    endpoint: Some("openai_chat_completions".to_string()),
                     options: ProviderOptions {
                         base_url: Some("https://api.example.test/v1".to_string()),
                         timeout_ms: Some(120000),
@@ -575,7 +575,7 @@ mod tests {
                 "provider": {
                     "openai": {
                         "api_key": "global-key",
-                        "api_style": "openai-compatible",
+                        "endpoint": "openai_chat_completions",
                         "options": {
                             "base_url": "https://api.example.test/v1",
                             "timeout_ms": 120000
@@ -657,7 +657,7 @@ mod tests {
                 "provider": {
                     "openai": {
                         "api_key": "global-key",
-                        "api_style": "openai-compatible",
+                        "endpoint": "openai_chat_completions",
                         "options": {"base_url": "https://api.example.test/v1"},
                             "models": {
                             "gpt-4o": {
@@ -724,7 +724,7 @@ mod tests {
                 "openai".to_string(),
                 ProviderConfigEntry {
                     api_key: Some("key".to_string()),
-                    api_style: Some("openai-compatible".to_string()),
+                    endpoint: Some("openai_chat_completions".to_string()),
                     options: ProviderOptions {
                         base_url: Some("https://api.example.test/v1".to_string()),
                         timeout_ms: None,
@@ -744,7 +744,7 @@ mod tests {
                 "openai".to_string(),
                 ProviderConfigEntry {
                     api_key: Some("key".to_string()),
-                    api_style: Some("openai-compatible".to_string()),
+                    endpoint: Some("openai_chat_completions".to_string()),
                     options: ProviderOptions {
                         base_url: Some("https://api.example.test/v1".to_string()),
                         timeout_ms: None,
@@ -767,7 +767,7 @@ mod tests {
                 "openai".to_string(),
                 ProviderConfigEntry {
                     api_key: Some("key".to_string()),
-                    api_style: Some("openai-compatible".to_string()),
+                    endpoint: Some("openai_chat_completions".to_string()),
                     options: ProviderOptions {
                         base_url: Some("https://api.example.test/v1".to_string()),
                         timeout_ms: None,
@@ -792,7 +792,7 @@ mod tests {
                 "openai".to_string(),
                 ProviderConfigEntry {
                     api_key: Some("key".to_string()),
-                    api_style: Some("openai-compatible".to_string()),
+                    endpoint: Some("openai_chat_completions".to_string()),
                     options: ProviderOptions {
                         base_url: Some("https://api.example.test/v1".to_string()),
                         timeout_ms: None,
@@ -817,7 +817,7 @@ mod tests {
                 "openai".to_string(),
                 ProviderConfigEntry {
                     api_key: Some("key".to_string()),
-                    api_style: Some("openai-compatible".to_string()),
+                    endpoint: Some("openai_chat_completions".to_string()),
                     options: ProviderOptions {
                         base_url: Some("https://api.example.test/v1".to_string()),
                         timeout_ms: None,
@@ -852,7 +852,7 @@ mod tests {
                 "tongyi".to_string(),
                 ProviderConfigEntry {
                     api_key: Some("key".to_string()),
-                    api_style: Some("openai-compatible".to_string()),
+                    endpoint: Some("openai_chat_completions".to_string()),
                     options: ProviderOptions {
                         base_url: Some("https://api.example.test/v1".to_string()),
                         timeout_ms: None,
@@ -885,7 +885,7 @@ mod tests {
                 "tongyi".to_string(),
                 ProviderConfigEntry {
                     api_key: Some("key".to_string()),
-                    api_style: Some("openai-compatible".to_string()),
+                    endpoint: Some("openai_chat_completions".to_string()),
                     options: ProviderOptions {
                         base_url: Some("https://api.example.test/v1".to_string()),
                         timeout_ms: None,
@@ -918,7 +918,7 @@ mod tests {
                 "openai".to_string(),
                 ProviderConfigEntry {
                     api_key: Some("key".to_string()),
-                    api_style: Some("openai-compatible".to_string()),
+                    endpoint: Some("openai_chat_completions".to_string()),
                     options: ProviderOptions {
                         base_url: Some("https://api.example.test/v1".to_string()),
                         timeout_ms: None,
@@ -951,7 +951,7 @@ mod tests {
                 "openai".to_string(),
                 ProviderConfigEntry {
                     api_key: Some("key".to_string()),
-                    api_style: Some("openai-compatible".to_string()),
+                    endpoint: Some("openai_chat_completions".to_string()),
                     options: ProviderOptions {
                         base_url: Some("https://api.example.test/v1".to_string()),
                         timeout_ms: None,

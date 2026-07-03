@@ -2,8 +2,8 @@
 """Private SWE-bench Lite 20-task runner helpers.
 
 This module owns the benchmark artifact contract shared by Agent-OS and
-OpenCode runs. The model runners may differ, but task prompts and SWE-bench
-prediction rows must not.
+external-agent runs. The model runners may differ, but task prompts and
+SWE-bench prediction rows must not.
 """
 
 from __future__ import annotations
@@ -158,7 +158,7 @@ Base commit: {task.base_commit}
 Solve the bug in this checked-out repository. Keep the change minimal and scoped
 to the problem statement.
 
-Use Agent-OS/OpenCode tools for reading, editing, and command evidence. Run the
+Use the available agent tools for reading, editing, and command evidence. Run the
 most relevant failing test command if the local environment allows it. If the
 test command cannot run because dependencies or platform tools are missing,
 capture the exact command and error.
@@ -492,15 +492,15 @@ def build_agent_os_command(
     ]
 
 
-def build_opencode_command(
+def build_external_agent_command(
     *,
-    opencode_bin: str,
+    external_agent_bin: str,
     workspace: Path,
     prompt_file: Path,
     model: str,
 ) -> list[str]:
     return [
-        opencode_bin,
+        external_agent_bin,
         "run",
         "Solve the attached SWE-bench Lite task. Keep the patch minimal, run relevant tests, inspect git diff, and stop after the fix is complete.",
         "--dir",
@@ -682,26 +682,26 @@ def run_agent_os_task(
     return record
 
 
-def run_opencode_task(
+def run_external_agent_task(
     *,
     task: BenchmarkTask,
     dataset_row: Mapping[str, object],
     repo_cache: Path,
     output_root: Path,
-    opencode_bin: str,
+    external_agent_bin: str,
     model: str,
     task_timeout_seconds: int | None = None,
     executor=run_command_to_log,
 ) -> dict[str, object]:
-    paths = task_paths(output_root, "opencode", task.instance_id)
+    paths = task_paths(output_root, "external-agent", task.instance_id)
     reset_workspace(repo_cache, paths["workspace"], task)
     prompt = build_task_prompt(task, dataset_row)
     paths["prompt"].parent.mkdir(parents=True, exist_ok=True)
     paths["prompt"].write_text(prompt, encoding="utf-8", newline="\n")
 
     env = build_task_process_env(extra={"PYTHONPATH": build_workspace_pythonpath(paths["workspace"])})
-    command = build_opencode_command(
-        opencode_bin=opencode_bin,
+    command = build_external_agent_command(
+        external_agent_bin=external_agent_bin,
         workspace=paths["workspace"],
         prompt_file=paths["prompt"],
         model=model,
@@ -716,7 +716,7 @@ def run_opencode_task(
     )
     write_workspace_patch(paths["workspace"], paths["patch"])
     record = {
-        "agent": "opencode",
+        "agent": "external-agent",
         "instance_id": task.instance_id,
         "exit_code": exit_code,
         "workspace": paths["workspace"].as_posix(),
@@ -791,16 +791,19 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     evaluate_agent.add_argument("--predictions-output", type=Path)
     evaluate_agent.add_argument("--report-dir", type=Path)
 
-    run_opencode = subcommands.add_parser("run-opencode", help="run OpenCode on selected tasks")
-    run_opencode.add_argument("--output-root", type=Path, required=True)
-    run_opencode.add_argument("--repo-cache", type=Path, required=True)
-    run_opencode.add_argument("--opencode-bin", default="opencode")
-    run_opencode.add_argument("--model", required=True)
-    run_opencode.add_argument("--task-timeout-seconds", type=int, default=3600)
-    run_opencode.add_argument("--resume-existing", action="store_true")
-    run_opencode.add_argument("--dataset-name", default=DEFAULT_SWEBENCH_DATASET)
-    run_opencode.add_argument("--split", default=DEFAULT_SWEBENCH_SPLIT)
-    run_opencode.add_argument("--instance-id", action="append", default=[])
+    run_external = subcommands.add_parser(
+        "run-external-agent",
+        help="run an external agent on selected tasks",
+    )
+    run_external.add_argument("--output-root", type=Path, required=True)
+    run_external.add_argument("--repo-cache", type=Path, required=True)
+    run_external.add_argument("--external-agent-bin", default="external-agent")
+    run_external.add_argument("--model", required=True)
+    run_external.add_argument("--task-timeout-seconds", type=int, default=3600)
+    run_external.add_argument("--resume-existing", action="store_true")
+    run_external.add_argument("--dataset-name", default=DEFAULT_SWEBENCH_DATASET)
+    run_external.add_argument("--split", default=DEFAULT_SWEBENCH_SPLIT)
+    run_external.add_argument("--instance-id", action="append", default=[])
 
     return parser.parse_args(argv)
 
@@ -895,26 +898,26 @@ def main(argv: Sequence[str] | None = None) -> int:
             predictions_output=args.predictions_output,
             report_dir=args.report_dir,
         )
-    if args.command == "run-opencode":
+    if args.command == "run-external-agent":
         selected = select_tasks(tasks, args.instance_id)
         rows = load_dataset_rows(args.dataset_name, args.split, selected)
         records = []
         for task in selected:
             if args.resume_existing:
-                existing = read_existing_task_record(args.output_root, "opencode", task.instance_id)
+                existing = read_existing_task_record(args.output_root, "external-agent", task.instance_id)
                 if existing is not None:
                     records.append(existing)
                     continue
-            records.append(run_opencode_task(
+            records.append(run_external_agent_task(
                 task=task,
                 dataset_row=rows[task.instance_id],
                 repo_cache=args.repo_cache,
                 output_root=args.output_root,
-                opencode_bin=args.opencode_bin,
+                external_agent_bin=args.external_agent_bin,
                 model=args.model,
                 task_timeout_seconds=args.task_timeout_seconds,
             ))
-        summary = args.output_root / "opencode" / "summary.json"
+        summary = args.output_root / "external-agent" / "summary.json"
         summary.write_text(json.dumps(records, indent=2), encoding="utf-8", newline="\n")
         return 0
     raise AssertionError(f"unhandled command: {args.command}")

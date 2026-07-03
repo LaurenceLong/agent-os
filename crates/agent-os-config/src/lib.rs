@@ -523,7 +523,7 @@ mod tests {
             "provider": {
                 "openai": {
                     "api_key": "test-key",
-                    "api_style": "openai-compatible",
+                    "endpoint": "openai_chat_completions",
                     "options": {
                         "base_url": "https://api.example.test/v1",
                         "timeout_ms": 120000

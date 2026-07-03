@@ -1,4 +1,4 @@
-use agent_os_sys::ModelCapabilities;
+﻿use agent_os_sys::ModelCapabilities;
 
 pub(crate) fn default_model_capabilities(
     provider_id: &str,
@@ -11,9 +11,9 @@ pub(crate) fn default_model_capabilities(
         ("openai", "gpt-4o") => Some(openai_multimodal()),
         ("openai", "gpt-4o-mini") => Some(openai_multimodal()),
         ("anthropic", "claude-sonnet-4-20250514") => Some(anthropic_multimodal()),
-        ("tongyi", "qwen3.6-plus") => Some(openai_compatible_multimodal()),
-        ("zhipuai", "glm-5.2") => Some(openai_compatible_text_only()),
-        ("xiaomi", "mimo-v2.5-pro") => Some(openai_compatible_text_only()),
+        ("tongyi", "qwen3.6-plus") => Some(openai_chat_completions_multimodal()),
+        ("zhipuai", "glm-5.2") => Some(openai_chat_completions_text_only()),
+        ("xiaomi", "mimo-v2.5-pro") => Some(openai_chat_completions_text_only()),
         _ => None,
     }
 }
@@ -39,7 +39,7 @@ fn anthropic_multimodal() -> ModelCapabilities {
     }
 }
 
-fn openai_compatible_multimodal() -> ModelCapabilities {
+fn openai_chat_completions_multimodal() -> ModelCapabilities {
     ModelCapabilities {
         streaming: true,
         tool_calling: true,
@@ -50,7 +50,7 @@ fn openai_compatible_multimodal() -> ModelCapabilities {
     }
 }
 
-fn openai_compatible_text_only() -> ModelCapabilities {
+fn openai_chat_completions_text_only() -> ModelCapabilities {
     ModelCapabilities {
         streaming: true,
         tool_calling: true,

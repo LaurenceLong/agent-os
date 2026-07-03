@@ -282,6 +282,7 @@ impl Kernel {
             provider_id: alias.provider_id.clone(),
             provider_model_name: alias.provider_model_name.clone(),
             model_capabilities: alias.capabilities,
+            model_limit: alias.limit,
             credential_ref_id: profile.credential_ref.credential_ref_id.clone(),
             resolved_at: now_rfc3339(),
         })

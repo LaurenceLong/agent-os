@@ -1,4 +1,7 @@
-use crate::{AutomationScheduleKind, ResourceSessionType, SecurityLevel, ThreadStatus, TurnStatus};
+use crate::{
+    AutomationScheduleKind, CredentialSource, LlmApiStyle, ModelCapabilities, ModelLimit,
+    ResourceSessionType, SecurityLevel, ThreadStatus, TurnStatus,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -33,7 +36,7 @@ pub enum ClientKind {
     Ide,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ClientThread {
     pub client_thread_id: String,
     pub agent_thread_id: String,
@@ -43,6 +46,7 @@ pub struct ClientThread {
     pub status: ThreadStatus,
     pub active_turn_id: Option<String>,
     pub archived: bool,
+    pub deleted: bool,
     pub updated_at: String,
 }
 
@@ -186,7 +190,79 @@ pub struct EvidenceIndexProjection {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AppConfigProjection {
+    pub config_path: String,
+    pub data_dir: String,
+    pub state_dir: String,
+    pub cache_dir: String,
+    pub log_dir: String,
+    pub project: Option<AppProjectProjection>,
+    pub model: String,
+    pub small_model: Option<String>,
+    pub providers: Vec<AppProviderProjection>,
+    pub global_config_recovery: Option<AppConfigRecoveryProjection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppProjectProjection {
+    pub canonical_root: String,
+    pub slug: String,
+    pub hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppConfigRecoveryProjection {
+    pub primary_path: String,
+    pub backup_path: String,
+    pub primary_error: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AppProviderProjection {
+    pub provider_id: String,
+    pub endpoint: LlmApiStyle,
+    pub base_url: String,
+    pub timeout_ms: Option<u64>,
+    pub credential: AppCredentialProjection,
+    pub models: Vec<AppModelProjection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppCredentialProjection {
+    pub source: CredentialSource,
+    pub name: String,
+    pub redacted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AppModelProjection {
+    pub id: String,
+    pub provider_id: String,
+    pub model_id: String,
+    pub provider_model_name: String,
+    pub endpoint: LlmApiStyle,
+    pub base_url: String,
+    pub timeout_ms: Option<u64>,
+    pub capabilities: ModelCapabilities,
+    pub limit: ModelLimit,
+    pub options: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AppProviderCapabilitiesProjection {
+    pub provider_id: String,
+    pub models: Vec<AppModelProjection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AppProviderUsageProjection {
+    pub query: StatsQuery,
+    pub snapshot: StatsSnapshot,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppRequestEnvelope {
+    pub protocol: String,
     pub request_id: String,
     pub client: ClientConnection,
     #[serde(flatten)]
@@ -195,12 +271,14 @@ pub struct AppRequestEnvelope {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppResponseEnvelope {
+    pub protocol: String,
     pub request_id: String,
     pub response: AppResponse,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppNotificationEnvelope {
+    pub protocol: String,
     pub subscription_id: Option<String>,
     pub cursor: ProjectionCursor,
     pub notification: AppNotification,
@@ -226,6 +304,15 @@ pub enum AppRequest {
     ThreadSearch { query: String },
     #[serde(rename = "thread/archive")]
     ThreadArchive { client_thread_id: String },
+    #[serde(rename = "thread/unarchive")]
+    ThreadUnarchive { client_thread_id: String },
+    #[serde(rename = "thread/delete")]
+    ThreadDelete { client_thread_id: String },
+    #[serde(rename = "thread/name/set")]
+    ThreadNameSet {
+        client_thread_id: String,
+        title: String,
+    },
     #[serde(rename = "task/bundle/export")]
     TaskBundleExport { client_thread_id: String },
     #[serde(rename = "turn/start")]
@@ -265,6 +352,19 @@ pub enum AppRequest {
     AutomationRunList { schedule_id: Option<String> },
     #[serde(rename = "stats/read")]
     StatsRead { query: StatsQuery },
+    #[serde(rename = "config/read")]
+    ConfigRead { workspace: Option<String> },
+    #[serde(rename = "model/list")]
+    ModelList { workspace: Option<String> },
+    #[serde(rename = "provider/capabilities/read")]
+    ProviderCapabilitiesRead {
+        workspace: Option<String>,
+        provider_id: Option<String>,
+    },
+    #[serde(rename = "provider/usage/read")]
+    ProviderUsageRead { query: StatsQuery },
+    #[serde(rename = "permission_profile/list")]
+    PermissionProfileList,
     #[serde(rename = "subscribe")]
     Subscribe { cursor: Option<ProjectionCursor> },
     #[serde(rename = "unsubscribe")]
@@ -312,12 +412,14 @@ pub enum AppNotification {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app_protocol_version;
     use crate::SecurityLevel;
     use serde_json::json;
 
     #[test]
     fn app_request_envelope_uses_protocol_method_names_and_client_identity() {
         let envelope = AppRequestEnvelope {
+            protocol: app_protocol_version(),
             request_id: "req_1".to_string(),
             client: human_client(),
             request: AppRequest::StatsRead {
@@ -331,6 +433,7 @@ mod tests {
         let encoded = serde_json::to_value(&envelope).unwrap();
 
         assert_eq!(encoded["request_id"], "req_1");
+        assert_eq!(encoded["protocol"], "agent-os.app.v1");
         assert_eq!(encoded["client"]["client_id"], "human_1");
         assert_eq!(encoded["method"], "stats/read");
         assert_eq!(
@@ -342,6 +445,7 @@ mod tests {
     #[test]
     fn automation_schedule_request_uses_protocol_method_name() {
         let envelope = AppRequestEnvelope {
+            protocol: app_protocol_version(),
             request_id: "req_auto_1".to_string(),
             client: human_client(),
             request: AppRequest::AutomationScheduleCreate {
@@ -366,6 +470,7 @@ mod tests {
     #[test]
     fn task_bundle_export_request_uses_protocol_method_name() {
         let envelope = AppRequestEnvelope {
+            protocol: app_protocol_version(),
             request_id: "req_bundle_1".to_string(),
             client: human_client(),
             request: AppRequest::TaskBundleExport {
@@ -382,6 +487,7 @@ mod tests {
     #[test]
     fn initialize_request_takes_client_identity_from_envelope() {
         let decoded: AppRequestEnvelope = serde_json::from_value(json!({
+            "protocol": "agent-os.app.v1",
             "request_id": "req_init",
             "client": human_client(),
             "method": "initialize"
@@ -395,6 +501,7 @@ mod tests {
     #[test]
     fn notification_envelope_uses_stable_type_names_and_cursor() {
         let envelope = AppNotificationEnvelope {
+            protocol: app_protocol_version(),
             subscription_id: Some("sub_1".to_string()),
             cursor: ProjectionCursor {
                 last_event_ordinal: 7,
@@ -407,6 +514,7 @@ mod tests {
 
         let encoded = serde_json::to_value(&envelope).unwrap();
 
+        assert_eq!(encoded["protocol"], "agent-os.app.v1");
         assert_eq!(encoded["subscription_id"], "sub_1");
         assert_eq!(encoded["cursor"]["last_event_ordinal"], 7);
         assert_eq!(encoded["notification"]["type"], "stats_updated");

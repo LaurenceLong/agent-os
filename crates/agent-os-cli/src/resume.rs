@@ -171,12 +171,14 @@ fn resume_thread_recovery_from_host(
         connected_at: now_rfc3339(),
     };
     let response = server.handle_envelope(AppRequestEnvelope {
+        protocol: agent_os_sys::app_protocol_version(),
         request_id: new_id("req_"),
         client: client.clone(),
         request: AppRequest::Initialize,
     });
     assert!(matches!(response.response, AppResponse::Accepted(_)));
     let response = server.handle_envelope(AppRequestEnvelope {
+        protocol: agent_os_sys::app_protocol_version(),
         request_id: new_id("req_"),
         client,
         request: AppRequest::ThreadResume {

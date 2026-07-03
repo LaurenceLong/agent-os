@@ -3,10 +3,10 @@
 This directory turns the manifesto, collaboration theory, implementation
 snapshot, and decision records into a development contract.
 
-The documentation is intentionally split into foundation, research, kernel
-design, implementation, and decision records. Current code and future changes
-should be reviewed against these documents before accepting new subsystems,
-dependencies, or runtime behavior.
+The documentation is intentionally split into foundation, kernel design,
+implementation, and decision records. Current code and future changes should be
+reviewed against these documents before accepting new subsystems, dependencies,
+or runtime behavior.
 
 ## Directory Structure
 
@@ -16,10 +16,6 @@ docs/
     agent-os-manifesto.md
     agent-collaboration-theory.md
     architecture-principles.md
-  05-research/
-    agent-thread-source-study.md
-    agent-optimization-statistics-study.md
-    long-running-kernel-app-server-gap-study.md
   10-kernel-design/
     system-architecture.md
     overall-architecture-mermaid.md
@@ -57,13 +53,11 @@ Foundation documents define non-negotiable principles. They should change rarely
 
 The English versions under `docs/00-foundation/` are the canonical foundation documents used by the implementation documentation. The original Chinese source documents may be archived outside the root when desired.
 
-Research documents record source study and design intake. They are not kernel contracts by themselves. Normative design documents and ADRs decide what Agent-OS actually adopts.
-
 Kernel design documents define module boundaries, state contracts, syscalls, schemas, and runtime behavior. They are the primary reference for implementation.
 
 Implementation documents define iteration sequence, acceptance gates, and quality requirements.
 
-Architecture decision records capture decisions that are easy to accidentally reopen, such as whether PostgreSQL belongs in the kernel or whether the Agent Thread Runtime can be delegated to an open-source framework.
+Architecture decision records capture decisions that are easy to accidentally reopen, such as whether PostgreSQL belongs in the kernel or whether the Agent Thread Runtime is native Agent-OS core infrastructure.
 
 ## Vocabulary
 

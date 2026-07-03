@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn make_request(workspace: &std::path::Path) -> ModelTurnRequest {
+pub(crate) fn make_request(workspace: &std::path::Path) -> ModelTurnRequest {
     let (_kernel, request) = make_kernel_request(workspace);
     request
 }

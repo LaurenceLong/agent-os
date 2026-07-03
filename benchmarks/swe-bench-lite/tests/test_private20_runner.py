@@ -12,7 +12,7 @@ from private20_runner import (
     ProviderSpec,
     agent_os_config_model_id,
     build_agent_os_command,
-    build_opencode_command,
+    build_external_agent_command,
     build_swebench_harness_command,
     build_task_process_env,
     build_task_prompt,
@@ -30,7 +30,7 @@ from private20_runner import (
     resolve_required_config_value,
     run_command_to_log,
     run_agent_os_task,
-    run_opencode_task,
+    run_external_agent_task,
     swebench_report_passed,
     write_agent_os_provider_config,
     write_predictions_jsonl,
@@ -110,7 +110,7 @@ class Private20RunnerTests(unittest.TestCase):
         self.assertIn("Repo: django/django", prompt)
         self.assertIn("UsernameValidator allows trailing newline.", prompt)
         self.assertIn("auth_tests.test_validators.UsernameValidatorsTests", prompt)
-        self.assertIn("Use Agent-OS/OpenCode tools", prompt)
+        self.assertIn("Use the available agent tools", prompt)
         self.assertIn("hidden or locally absent tests", prompt)
         self.assertIn("after one focused search", prompt)
         self.assertIn("Do not inspect git history", prompt)
@@ -462,7 +462,7 @@ class Private20RunnerTests(unittest.TestCase):
                 "VIRTUAL_ENV": str(venv),
                 "PYTHONPATH": "/stale/workspace",
                 "PYTHONHOME": "/stale/python",
-                "OPENCODE_CONFIG": "keep",
+                "EXTERNAL_AGENT_CONFIG": "keep",
             }
 
             env = build_task_process_env(base_env)
@@ -472,7 +472,7 @@ class Private20RunnerTests(unittest.TestCase):
         self.assertNotIn("PYTHONHOME", env)
         self.assertEqual(env["PATH"], str(other_bin))
         self.assertEqual(env["PYTHONNOUSERSITE"], "1")
-        self.assertEqual(env["OPENCODE_CONFIG"], "keep")
+        self.assertEqual(env["EXTERNAL_AGENT_CONFIG"], "keep")
 
     def test_build_task_process_env_prepends_benchmark_tool_bin(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
@@ -542,15 +542,15 @@ class Private20RunnerTests(unittest.TestCase):
         self.assertIn("/out/prompts/django.md", command)
         self.assertNotIn("Solve this task", command)
 
-    def test_build_opencode_command_attaches_prompt_file_and_model(self):
-        command = build_opencode_command(
-            opencode_bin="opencode",
+    def test_build_external_agent_command_attaches_prompt_file_and_model(self):
+        command = build_external_agent_command(
+            external_agent_bin="external-agent",
             workspace=Path("/work/django"),
             prompt_file=Path("/work/django/SWE_BENCH_TASK.md"),
             model="provider-alias/qwen3.6-plus",
         )
 
-        self.assertEqual(command[:2], ["opencode", "run"])
+        self.assertEqual(command[:2], ["external-agent", "run"])
         self.assertIn("--dir", command)
         self.assertIn("/work/django", command)
         self.assertIn("--model", command)
@@ -628,7 +628,7 @@ class Private20RunnerTests(unittest.TestCase):
         self.assertIn("12", captured["command"])
         self.assertEqual(captured["timeout_seconds"], 34)
 
-    def test_run_opencode_task_writes_prompt_log_patch_and_record(self):
+    def test_run_external_agent_task_writes_prompt_log_patch_and_record(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             root = Path(tmp)
             repo_cache, commit = self.make_cached_repo(root)
@@ -639,16 +639,16 @@ class Private20RunnerTests(unittest.TestCase):
                 captured["command"] = command
                 captured["env"] = env
                 captured["timeout_seconds"] = timeout_seconds
-                (Path(cwd) / "bug.txt").write_text("after-opencode\n", encoding="utf-8")
-                Path(log_path).write_text("fake opencode log\n", encoding="utf-8")
+                (Path(cwd) / "bug.txt").write_text("after-external-agent\n", encoding="utf-8")
+                Path(log_path).write_text("fake external-agent log\n", encoding="utf-8")
                 return 0
 
-            record = run_opencode_task(
+            record = run_external_agent_task(
                 task=task,
                 dataset_row={"problem_statement": "Fix the bug."},
                 repo_cache=repo_cache,
                 output_root=root / "out",
-                opencode_bin="opencode",
+                external_agent_bin="external-agent",
                 model="provider-alias/qwen3.6-plus",
                 task_timeout_seconds=56,
                 executor=fake_executor,
@@ -657,8 +657,8 @@ class Private20RunnerTests(unittest.TestCase):
             patch = Path(record["patch_path"]).read_text(encoding="utf-8")
 
         self.assertEqual(record["exit_code"], 0)
-        self.assertIn("+after-opencode", patch)
-        self.assertEqual(captured["command"][:2], ["opencode", "run"])
+        self.assertIn("+after-external-agent", patch)
+        self.assertEqual(captured["command"][:2], ["external-agent", "run"])
         self.assertNotIn("VIRTUAL_ENV", captured["env"])
         self.assertEqual(captured["env"]["PYTHONPATH"], record["workspace"])
         self.assertEqual(captured["env"]["PYTHONNOUSERSITE"], "1")

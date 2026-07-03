@@ -78,9 +78,9 @@ impl ProjectionState {
                 let session: ProviderStreamSession = serde_json::from_value(event.payload.clone())?;
                 self.apply_provider_usage(&session, event);
             }
-            "ThreadArchived" => {
+            "ThreadArchived" | "ThreadUnarchived" | "ThreadDeleted" | "ThreadRenamed" => {
                 let thread: ClientThread = serde_json::from_value(event.payload.clone())?;
-                self.apply_thread_archive(thread, event);
+                self.apply_client_thread_update(thread, event);
             }
             "TurnInputRecorded" => {
                 let input: TurnInputRecord = serde_json::from_value(event.payload.clone())?;
@@ -143,15 +143,19 @@ impl ProjectionState {
 
     fn apply_thread(&mut self, thread: &AgentControlBlock, event: &EventEnvelope) {
         let active_turn_id = thread.active_turn.turn_id.clone();
+        let existing = self.threads.get(&thread.thread_id);
         let client_thread = ClientThread {
             client_thread_id: thread.thread_id.clone(),
             agent_thread_id: thread.thread_id.clone(),
             task_id: Some(thread.task.task_id.clone()),
             goal_id: Some(thread.task.goal_id.clone()),
-            title: thread.task.goal.clone(),
+            title: existing
+                .map(|thread| thread.title.clone())
+                .unwrap_or_else(|| thread.task.goal.clone()),
             status: thread.status,
             active_turn_id: active_turn_id.clone(),
-            archived: false,
+            archived: existing.map(|thread| thread.archived).unwrap_or(false),
+            deleted: existing.map(|thread| thread.deleted).unwrap_or(false),
             updated_at: event.created_at.clone(),
         };
         self.threads
@@ -209,8 +213,7 @@ impl ProjectionState {
         );
     }
 
-    fn apply_thread_archive(&mut self, mut thread: ClientThread, event: &EventEnvelope) {
-        thread.archived = true;
+    fn apply_client_thread_update(&mut self, mut thread: ClientThread, event: &EventEnvelope) {
         thread.updated_at = event.created_at.clone();
         self.threads
             .insert(thread.client_thread_id.clone(), thread.clone());
@@ -222,7 +225,7 @@ impl ProjectionState {
                 agent_id: Some(thread.agent_thread_id.clone()),
                 task_id: thread.task_id.clone(),
                 turn_id: thread.active_turn_id.clone(),
-                summary: format!("ThreadArchived {}", thread.client_thread_id),
+                summary: format!("{} {}", event.event_type, thread.client_thread_id),
             },
         );
     }

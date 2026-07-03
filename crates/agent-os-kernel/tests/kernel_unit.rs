@@ -55,7 +55,7 @@ fn fixture() -> (Kernel, Goal, Task, AgentControlBlock, CapabilityToken) {
 }
 
 #[test]
-fn default_provider_profile_uses_nonzero_retry_backoff() {
+fn default_provider_profile_uses_explicit_retry_backoff_policy() {
     let kernel = Kernel::new();
     let state = kernel.state_snapshot().unwrap();
     let profile = state
@@ -65,7 +65,8 @@ fn default_provider_profile_uses_nonzero_retry_backoff() {
     let retry_policy = profile.retry_policy.as_ref().expect("retry policy");
 
     assert_eq!(retry_policy["max_attempts"], json!(2));
-    assert_eq!(retry_policy["backoff_ms"], json!(30_000));
+    assert_eq!(retry_policy["initial_backoff_ms"], json!(30_000));
+    assert_eq!(retry_policy["max_backoff_ms"], json!(30_000));
 }
 
 #[test]
@@ -142,6 +143,39 @@ fn emit_updates_store_projections_without_rebuild() {
     assert!(timeline
         .iter()
         .any(|item| item.item_type == TimelineItemType::TurnStarted));
+}
+
+#[test]
+fn thread_app_fields_survive_status_updates_and_replay() {
+    let (kernel, _, _, agent, _) = fixture();
+
+    kernel
+        .rename_thread(&agent.thread_id, "Renamed thread".to_string())
+        .unwrap();
+    kernel.archive_thread(&agent.thread_id).unwrap();
+    kernel
+        .transition_thread(&agent.thread_id, ThreadStatus::Ready, None)
+        .unwrap();
+
+    let projected = kernel
+        .store()
+        .thread_summaries()
+        .unwrap()
+        .into_iter()
+        .find(|thread| thread.client_thread_id == agent.thread_id)
+        .unwrap();
+    assert_eq!(projected.title, "Renamed thread");
+    assert!(projected.archived);
+
+    let replayed = Kernel::from_events(&kernel.events().unwrap()).unwrap();
+    let replayed_thread = replayed
+        .store()
+        .thread_summaries()
+        .unwrap()
+        .into_iter()
+        .find(|thread| thread.client_thread_id == agent.thread_id)
+        .unwrap();
+    assert_eq!(replayed_thread, projected);
 }
 
 #[test]

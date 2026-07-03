@@ -335,7 +335,7 @@ The progress hook periodically injects the prompt into the child agent and route
 
 ## 6.2 Parent Permission Requests
 
-Agent-OS follows the same subset-grant pattern as Codex `request_permissions`: a child asks for a concrete permission profile, the parent may grant only a subset, omitted fields are denied, and the grant is scoped to the current turn or session.
+Agent-OS uses a subset-grant pattern for permission requests: a child asks for a concrete permission profile, the parent may grant only a subset, omitted fields are denied, and the grant is scoped to the current turn or session.
 
 `request_permissions` input:
 

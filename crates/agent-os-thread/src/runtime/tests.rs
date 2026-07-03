@@ -2245,6 +2245,57 @@ fn runtime_resumes_with_persisted_tool_results_and_artifacts() {
 }
 
 #[test]
+fn context_budget_prunes_only_old_non_evidence_tool_results() {
+    let mut context = ModelContextProjection {
+        tool_results: (0..7)
+            .map(|index| ToolExecutionRecord {
+                call_id: format!("call_{index}"),
+                tool_name: "read_file".to_string(),
+                status: ToolCallStatus::Completed,
+                input: Some(json!({"path": format!("large-{index}.txt")})),
+                output: Some(json!({"content": "x".repeat(12_000)})),
+                evidence_ids: if index == 1 {
+                    vec!["ev_keep".to_string()]
+                } else {
+                    Vec::new()
+                },
+                evidence_claim: None,
+            })
+            .collect(),
+        ..ModelContextProjection::default()
+    };
+    let limit = ModelLimit {
+        context: 8_000,
+        input: Some(4_000),
+        output: 1_000,
+    };
+
+    let report = super::context_projection::prune_context_for_model_limit(&mut context, &limit);
+
+    assert!(report.pruned());
+    assert!(report.pruned_refs.iter().any(|r| r == "tool_result:call_0"));
+    assert!(!report.pruned_refs.iter().any(|r| r == "tool_result:call_1"));
+    assert!(context.tool_results[0]
+        .output
+        .as_ref()
+        .and_then(|output| output.get("projection_pruned"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false));
+    assert!(context.tool_results[1]
+        .output
+        .as_ref()
+        .and_then(|output| output.get("content"))
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|content| content.len() == 12_000));
+    assert!(context.tool_results[6]
+        .output
+        .as_ref()
+        .and_then(|output| output.get("content"))
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|content| content.len() == 12_000));
+}
+
+#[test]
 fn runtime_retries_model_call_from_provider_profile_policy() {
     struct FailsOnceThenFinishes {
         calls: u32,
@@ -2255,7 +2306,7 @@ fn runtime_retries_model_call_from_provider_profile_policy() {
             self.calls += 1;
             if self.calls == 1 {
                 return Err(AgentOsError::Validation(
-                    "temporary provider failure".to_string(),
+                    "provider API error kind=transient retryable=true".to_string(),
                 ));
             }
             if request.context.tool_results.is_empty() {
@@ -2345,6 +2396,57 @@ fn runtime_retries_model_call_from_provider_profile_policy() {
         .unwrap();
     assert_eq!(report.status, ThreadStatus::Completed);
     assert!(kernel.events().unwrap().iter().any(|event| {
+        event.event_type == "ProviderStreamEventRecorded"
+            && event.payload["stream_events"]
+                .as_array()
+                .is_some_and(|events| {
+                    events
+                        .iter()
+                        .any(|stream_event| stream_event["event_type"] == json!("ProviderRetry"))
+                })
+    }));
+    let _ = fs::remove_dir_all(workspace);
+}
+
+#[test]
+fn runtime_does_not_retry_non_retryable_provider_failure() {
+    struct FailsWithInvalidRequest {
+        calls: Arc<std::sync::atomic::AtomicU32>,
+    }
+
+    impl ModelClient for FailsWithInvalidRequest {
+        fn next(&mut self, _request: &ModelTurnRequest) -> AgentOsResult<ModelTurnResponse> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Err(AgentOsError::Validation(
+                "provider API error kind=invalid_request retryable=false".to_string(),
+            ))
+        }
+    }
+
+    let workspace = env::temp_dir().join(format!(
+        "agent-os-thread-runtime-no-retry-{}-{}",
+        std::process::id(),
+        new_id("case_")
+    ));
+    fs::create_dir_all(&workspace).unwrap();
+    let kernel = Kernel::new();
+    let agent = spawn_runtime_agent(&kernel, &workspace, "Fail once without retry");
+    let calls = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let mut runtime = ThreadRuntime::new(
+        kernel.clone(),
+        agent.thread_id,
+        FailsWithInvalidRequest {
+            calls: calls.clone(),
+        },
+    );
+
+    let error = runtime
+        .run_to_completion(RuntimeConfig::workspace_write(&workspace))
+        .unwrap_err();
+
+    assert!(error.to_string().contains("retryable=false"));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(!kernel.events().unwrap().iter().any(|event| {
         event.event_type == "ProviderStreamEventRecorded"
             && event.payload["stream_events"]
                 .as_array()

@@ -86,34 +86,46 @@ impl Kernel {
     }
 
     pub fn archive_thread(&self, thread_id: &str) -> AgentOsResult<ClientThread> {
-        let acb = self
-            .read_state()?
-            .threads
-            .get(thread_id)
-            .cloned()
-            .ok_or_else(|| AgentOsError::NotFound(format!("thread {thread_id}")))?;
-        let archived = ClientThread {
-            client_thread_id: acb.thread_id.clone(),
-            agent_thread_id: acb.thread_id.clone(),
-            task_id: Some(acb.task.task_id.clone()),
-            goal_id: Some(acb.task.goal_id.clone()),
-            title: acb.task.goal.clone(),
-            status: acb.status,
-            active_turn_id: acb.active_turn.turn_id.clone(),
-            archived: true,
-            updated_at: now_rfc3339(),
-        };
-        self.emit(
-            "ThreadArchived",
-            "thread",
-            &acb.thread_id,
-            Some(acb.agent_id),
-            Some(acb.task.task_id),
-            None,
-            Some(acb.task.goal_id),
-            &archived,
-        )?;
-        Ok(archived)
+        let acb = self.thread_for_app_update(thread_id)?;
+        let mut thread = self.current_client_thread(&acb)?;
+        thread.archived = true;
+        thread.updated_at = now_rfc3339();
+        self.emit_client_thread_update("ThreadArchived", &acb, &thread)?;
+        Ok(thread)
+    }
+
+    pub fn unarchive_thread(&self, thread_id: &str) -> AgentOsResult<ClientThread> {
+        let acb = self.thread_for_app_update(thread_id)?;
+        let mut thread = self.current_client_thread(&acb)?;
+        thread.archived = false;
+        thread.updated_at = now_rfc3339();
+        self.emit_client_thread_update("ThreadUnarchived", &acb, &thread)?;
+        Ok(thread)
+    }
+
+    pub fn delete_thread(&self, thread_id: &str) -> AgentOsResult<ClientThread> {
+        let acb = self.thread_for_app_update(thread_id)?;
+        let mut thread = self.current_client_thread(&acb)?;
+        thread.archived = true;
+        thread.deleted = true;
+        thread.updated_at = now_rfc3339();
+        self.emit_client_thread_update("ThreadDeleted", &acb, &thread)?;
+        Ok(thread)
+    }
+
+    pub fn rename_thread(&self, thread_id: &str, title: String) -> AgentOsResult<ClientThread> {
+        let title = title.trim().to_string();
+        if title.is_empty() {
+            return Err(AgentOsError::Validation(
+                "thread title must not be empty".to_string(),
+            ));
+        }
+        let acb = self.thread_for_app_update(thread_id)?;
+        let mut thread = self.current_client_thread(&acb)?;
+        thread.title = title;
+        thread.updated_at = now_rfc3339();
+        self.emit_client_thread_update("ThreadRenamed", &acb, &thread)?;
+        Ok(thread)
     }
 
     pub fn record_turn_input(
@@ -155,6 +167,70 @@ impl Kernel {
             &record,
         )?;
         Ok(record)
+    }
+
+    fn thread_for_app_update(&self, thread_id: &str) -> AgentOsResult<AgentControlBlock> {
+        let acb = self
+            .read_state()?
+            .threads
+            .get(thread_id)
+            .cloned()
+            .ok_or_else(|| AgentOsError::NotFound(format!("thread {thread_id}")))?;
+        let current = self.current_client_thread(&acb)?;
+        if current.deleted {
+            return Err(AgentOsError::InvalidTransition(format!(
+                "thread {thread_id} is deleted"
+            )));
+        }
+        Ok(acb)
+    }
+
+    fn current_client_thread(&self, acb: &AgentControlBlock) -> AgentOsResult<ClientThread> {
+        let existing = self
+            .store()
+            .thread_summaries()?
+            .into_iter()
+            .find(|thread| thread.client_thread_id == acb.thread_id);
+        Ok(ClientThread {
+            client_thread_id: acb.thread_id.clone(),
+            agent_thread_id: acb.thread_id.clone(),
+            task_id: Some(acb.task.task_id.clone()),
+            goal_id: Some(acb.task.goal_id.clone()),
+            title: existing
+                .as_ref()
+                .map(|thread| thread.title.clone())
+                .unwrap_or_else(|| acb.task.goal.clone()),
+            status: acb.status,
+            active_turn_id: acb.active_turn.turn_id.clone(),
+            archived: existing
+                .as_ref()
+                .map(|thread| thread.archived)
+                .unwrap_or(false),
+            deleted: existing
+                .as_ref()
+                .map(|thread| thread.deleted)
+                .unwrap_or(false),
+            updated_at: now_rfc3339(),
+        })
+    }
+
+    fn emit_client_thread_update(
+        &self,
+        event_type: &str,
+        acb: &AgentControlBlock,
+        thread: &ClientThread,
+    ) -> AgentOsResult<()> {
+        self.emit(
+            event_type,
+            "thread",
+            &acb.thread_id,
+            Some(acb.agent_id.clone()),
+            Some(acb.task.task_id.clone()),
+            None,
+            Some(acb.task.goal_id.clone()),
+            thread,
+        )?;
+        Ok(())
     }
 
     pub fn record_checkpoint(

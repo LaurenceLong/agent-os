@@ -143,8 +143,8 @@ gate instead of treating the failure as a benchmark result.
 
 Ecosystem conformance tests MUST verify:
 
-- nearest project `AGENTS.md`/`CLAUDE.md` rule import and precedence
-- global Agent-OS/OpenCode/Claude/Agents imports do not bypass kernel events
+- nearest project rule import and precedence
+- global and project instruction imports do not bypass kernel events
 - skill name/description extraction, Markdown fallback summaries, duplicate
   same-content coalescing, and duplicate different-content rejection
 - command frontmatter import, `$1`/`$ARGUMENTS` expansion, and shell

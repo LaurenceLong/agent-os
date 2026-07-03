@@ -1,4 +1,4 @@
-use super::{schema, BuiltinTool, FOREGROUND_TIMEOUT};
+﻿use super::{schema, BuiltinTool, FOREGROUND_TIMEOUT};
 use crate::*;
 use agent_os_sys::*;
 use serde_json::{json, Value};
@@ -26,7 +26,7 @@ fn descriptor(now: &str) -> ToolDescriptor {
             examples: vec![schema::example(
                 "Ask the human for a blocking product decision.",
                 json!({
-                    "question": "Should this benchmark gate run against the OpenAI-compatible provider or Anthropic-compatible provider?",
+                    "question": "Should this benchmark gate run against the openai_chat_completions provider or anthropic_messages provider?",
                     "message_type": "HumanQuestion"
                 }),
                 "Routes the question through the human communication channel.",

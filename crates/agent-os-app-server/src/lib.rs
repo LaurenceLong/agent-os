@@ -4,9 +4,9 @@
 //! changes are delegated to the host service behind `AppKernelService`.
 
 use agent_os_sys::{
-    AgentOsError, AgentOsResult, AppNotificationEnvelope, AppRequest, AppRequestEnvelope,
-    AppResponse, AppResponseEnvelope, ClientConnection, ClientKind, ProjectionCursor,
-    SecurityLevel,
+    app_protocol_version, AgentOsError, AgentOsResult, AppNotificationEnvelope, AppRequest,
+    AppRequestEnvelope, AppResponse, AppResponseEnvelope, ClientConnection, ClientKind,
+    ProjectionCursor, SecurityLevel,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -124,6 +124,7 @@ where
         request: AppRequest,
     ) -> AgentOsResult<AppResponseEnvelope> {
         let envelope = AppRequestEnvelope {
+            protocol: app_protocol_version(),
             request_id: request_id.into(),
             client: self.client.clone(),
             request,
@@ -188,6 +189,7 @@ where
         let response = match serde_json::from_str::<AppRequestEnvelope>(line) {
             Ok(envelope) => self.handle_envelope(envelope),
             Err(error) => AppResponseEnvelope {
+                protocol: app_protocol_version(),
                 request_id: String::new(),
                 response: reject("invalid_json", error.to_string()),
             },
@@ -198,23 +200,30 @@ where
 
     pub fn handle_envelope(&mut self, envelope: AppRequestEnvelope) -> AppResponseEnvelope {
         let request_id = envelope.request_id.clone();
-        let response = match envelope.request {
-            AppRequest::Initialize => self.initialize(envelope.client),
-            AppRequest::Subscribe { cursor } => {
-                self.with_initialized_client(&envelope.client, |server| server.subscribe(cursor))
-            }
-            AppRequest::Unsubscribe { subscription_id } => self
-                .with_initialized_client(&envelope.client, |server| {
-                    server.unsubscribe(subscription_id)
+        let response = if envelope.protocol != agent_os_sys::APP_PROTOCOL_VERSION {
+            reject(
+                "unsupported_protocol",
+                format!("expected protocol {}", agent_os_sys::APP_PROTOCOL_VERSION),
+            )
+        } else {
+            match envelope.request {
+                AppRequest::Initialize => self.initialize(envelope.client),
+                AppRequest::Subscribe { cursor } => self
+                    .with_initialized_client(&envelope.client, |server| server.subscribe(cursor)),
+                AppRequest::Unsubscribe { subscription_id } => self
+                    .with_initialized_client(&envelope.client, |server| {
+                        server.unsubscribe(subscription_id)
+                    }),
+                request => self.with_initialized_client(&envelope.client, |server| {
+                    match server.service.handle_app_request(&envelope.client, request) {
+                        Ok(response) => response,
+                        Err(error) => error_response(error),
+                    }
                 }),
-            request => self.with_initialized_client(&envelope.client, |server| {
-                match server.service.handle_app_request(&envelope.client, request) {
-                    Ok(response) => response,
-                    Err(error) => error_response(error),
-                }
-            }),
+            }
         };
         AppResponseEnvelope {
+            protocol: app_protocol_version(),
             request_id,
             response,
         }
@@ -353,6 +362,7 @@ fn reject(code: impl Into<String>, message: impl Into<String>) -> AppResponse {
 
 fn fallback_serialization_error(message: String) -> String {
     let value: Value = json!({
+        "protocol": agent_os_sys::APP_PROTOCOL_VERSION,
         "request_id": "",
         "response": {
             "status": "Rejected",
@@ -380,6 +390,7 @@ mod tests {
         let mut server = AppServer::new(FakeService::default());
 
         let response = server.handle_envelope(AppRequestEnvelope {
+            protocol: app_protocol_version(),
             request_id: "req_stats".to_string(),
             client: human_client(),
             request: AppRequest::StatsRead {
@@ -398,11 +409,33 @@ mod tests {
     }
 
     #[test]
+    fn rejects_unsupported_protocol_version() {
+        let mut server = AppServer::new(FakeService::default());
+
+        let response = server.handle_envelope(AppRequestEnvelope {
+            protocol: "agent-os.app.v0".to_string(),
+            request_id: "req_init".to_string(),
+            client: human_client(),
+            request: AppRequest::Initialize,
+        });
+
+        assert_eq!(response.protocol, agent_os_sys::APP_PROTOCOL_VERSION);
+        assert_eq!(
+            response.response,
+            AppResponse::Rejected {
+                code: "unsupported_protocol".to_string(),
+                message: "expected protocol agent-os.app.v1".to_string()
+            }
+        );
+    }
+
+    #[test]
     fn initializes_human_client_and_dispatches_stats_request() {
         let mut server = AppServer::new(FakeService::default());
         initialize(&mut server);
 
         let response = server.handle_envelope(AppRequestEnvelope {
+            protocol: app_protocol_version(),
             request_id: "req_stats".to_string(),
             client: human_client(),
             request: AppRequest::StatsRead {
@@ -427,6 +460,7 @@ mod tests {
         initialize(&mut server);
 
         let subscribed = server.handle_envelope(AppRequestEnvelope {
+            protocol: app_protocol_version(),
             request_id: "req_subscribe".to_string(),
             client: human_client(),
             request: AppRequest::Subscribe {
@@ -442,6 +476,7 @@ mod tests {
         assert_eq!(body["cursor"]["last_event_ordinal"], 9);
 
         let unsubscribed = server.handle_envelope(AppRequestEnvelope {
+            protocol: app_protocol_version(),
             request_id: "req_unsubscribe".to_string(),
             client: human_client(),
             request: AppRequest::Unsubscribe { subscription_id },
@@ -459,6 +494,7 @@ mod tests {
         initialize(&mut server);
 
         let subscribed = server.handle_envelope(AppRequestEnvelope {
+            protocol: app_protocol_version(),
             request_id: "req_subscribe".to_string(),
             client: human_client(),
             request: AppRequest::Subscribe {
@@ -490,12 +526,14 @@ mod tests {
         let input = format!(
             "{}\n{}\n",
             serde_json::to_string(&AppRequestEnvelope {
+                protocol: app_protocol_version(),
                 request_id: "req_init".to_string(),
                 client: human_client(),
                 request: AppRequest::Initialize,
             })
             .unwrap(),
             serde_json::to_string(&AppRequestEnvelope {
+                protocol: app_protocol_version(),
                 request_id: "req_stats".to_string(),
                 client: human_client(),
                 request: AppRequest::StatsRead {
@@ -527,12 +565,14 @@ mod tests {
         let input = format!(
             "{}\n{}\n",
             serde_json::to_string(&AppRequestEnvelope {
+                protocol: app_protocol_version(),
                 request_id: "req_init".to_string(),
                 client: human_client(),
                 request: AppRequest::Initialize,
             })
             .unwrap(),
             serde_json::to_string(&AppRequestEnvelope {
+                protocol: app_protocol_version(),
                 request_id: "req_subscribe".to_string(),
                 client: human_client(),
                 request: AppRequest::Subscribe {
@@ -565,6 +605,7 @@ mod tests {
     #[test]
     fn jsonl_app_client_writes_request_envelope_and_reads_response() {
         let response = AppResponseEnvelope {
+            protocol: app_protocol_version(),
             request_id: "req_0000000000000001".to_string(),
             response: AppResponse::Accepted(json!({"initialized": true})),
         };
@@ -586,6 +627,7 @@ mod tests {
     #[test]
     fn jsonl_app_client_reads_notification_after_response_line() {
         let response = AppResponseEnvelope {
+            protocol: app_protocol_version(),
             request_id: "req_0000000000000001".to_string(),
             response: AppResponse::Accepted(json!({"subscription_id": "sub_1"})),
         };
@@ -663,6 +705,7 @@ mod tests {
 
     fn initialize(server: &mut AppServer<FakeService>) {
         let response = server.handle_envelope(AppRequestEnvelope {
+            protocol: app_protocol_version(),
             request_id: "req_init".to_string(),
             client: human_client(),
             request: AppRequest::Initialize,
@@ -682,6 +725,7 @@ mod tests {
 
     fn notification_at(ordinal: u64, provider_calls: u64) -> AppNotificationEnvelope {
         AppNotificationEnvelope {
+            protocol: app_protocol_version(),
             subscription_id: None,
             cursor: ProjectionCursor {
                 last_event_ordinal: ordinal,

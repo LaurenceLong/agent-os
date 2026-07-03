@@ -1,4 +1,4 @@
-use super::support::*;
+﻿use super::support::*;
 use super::*;
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
@@ -125,281 +125,281 @@ fn live_env_file_parser_handles_bom_comments_quotes_and_precedence() {
 }
 
 #[test]
-#[ignore = "requires AGENT_OS_LIVE_OPENAI_API_KEY and a live OpenAI-compatible endpoint"]
-fn live_openai_compatible_llm_e2e_writes_file_and_logs_interaction() {
+#[ignore = "requires AGENT_OS_LIVE_OPENAI_API_KEY and a live openai_chat_completions endpoint"]
+fn live_openai_chat_completions_llm_e2e_writes_file_and_logs_interaction() {
     run_live_llm_e2e(
-        "openai-compatible",
-        LlmApiStyle::OpenAiCompatible,
+        "openai_chat_completions",
+        LlmApiStyle::OpenAiChatCompletions,
         "AGENT_OS_LIVE_OPENAI_API_KEY",
         "AGENT_OS_LIVE_OPENAI_MODEL",
         "AGENT_OS_LIVE_OPENAI_BASE_URL",
-        "live-openai-compatible-e2e-interaction.jsonl",
+        "live-openai_chat_completions-e2e-interaction.jsonl",
     );
 }
 
 #[test]
-#[ignore = "requires AGENT_OS_LIVE_ANTHROPIC_API_KEY and a live Anthropic-compatible endpoint"]
-fn live_anthropic_compatible_llm_e2e_writes_file_and_logs_interaction() {
+#[ignore = "requires AGENT_OS_LIVE_ANTHROPIC_API_KEY and a live anthropic_messages endpoint"]
+fn live_anthropic_messages_llm_e2e_writes_file_and_logs_interaction() {
     run_live_llm_e2e(
-        "anthropic-compatible",
-        LlmApiStyle::AnthropicCompatible,
+        "anthropic_messages",
+        LlmApiStyle::AnthropicMessages,
         "AGENT_OS_LIVE_ANTHROPIC_API_KEY",
         "AGENT_OS_LIVE_ANTHROPIC_MODEL",
         "AGENT_OS_LIVE_ANTHROPIC_BASE_URL",
-        "live-anthropic-compatible-e2e-interaction.jsonl",
+        "live-anthropic_messages-e2e-interaction.jsonl",
     );
 }
 
 #[test]
-#[ignore = "requires AGENT_OS_LIVE_OPENAI_API_KEY and a live OpenAI-compatible endpoint"]
-fn live_openai_compatible_llm_goal_driven_workspace_e2e() {
+#[ignore = "requires AGENT_OS_LIVE_OPENAI_API_KEY and a live openai_chat_completions endpoint"]
+fn live_openai_chat_completions_llm_goal_driven_workspace_e2e() {
     run_live_llm_goal_driven_workspace_e2e(
-        "openai-compatible",
-        LlmApiStyle::OpenAiCompatible,
+        "openai_chat_completions",
+        LlmApiStyle::OpenAiChatCompletions,
         "AGENT_OS_LIVE_OPENAI_API_KEY",
         "AGENT_OS_LIVE_OPENAI_MODEL",
         "AGENT_OS_LIVE_OPENAI_BASE_URL",
-        "live-openai-compatible-goal-workspace.jsonl",
+        "live-openai_chat_completions-goal-workspace.jsonl",
     );
 }
 
 #[test]
-#[ignore = "requires AGENT_OS_LIVE_ANTHROPIC_API_KEY and a live Anthropic-compatible endpoint"]
-fn live_anthropic_compatible_llm_goal_driven_workspace_e2e() {
+#[ignore = "requires AGENT_OS_LIVE_ANTHROPIC_API_KEY and a live anthropic_messages endpoint"]
+fn live_anthropic_messages_llm_goal_driven_workspace_e2e() {
     run_live_llm_goal_driven_workspace_e2e(
-        "anthropic-compatible",
-        LlmApiStyle::AnthropicCompatible,
+        "anthropic_messages",
+        LlmApiStyle::AnthropicMessages,
         "AGENT_OS_LIVE_ANTHROPIC_API_KEY",
         "AGENT_OS_LIVE_ANTHROPIC_MODEL",
         "AGENT_OS_LIVE_ANTHROPIC_BASE_URL",
-        "live-anthropic-compatible-goal-workspace.jsonl",
+        "live-anthropic_messages-goal-workspace.jsonl",
     );
 }
 
 #[test]
-#[ignore = "requires AGENT_OS_LIVE_OPENAI_API_KEY and a live OpenAI-compatible endpoint"]
-fn live_openai_compatible_llm_goal_driven_control_plane_e2e() {
+#[ignore = "requires AGENT_OS_LIVE_OPENAI_API_KEY and a live openai_chat_completions endpoint"]
+fn live_openai_chat_completions_llm_goal_driven_control_plane_e2e() {
     run_live_llm_goal_driven_control_plane_e2e(
-        "openai-compatible",
-        LlmApiStyle::OpenAiCompatible,
+        "openai_chat_completions",
+        LlmApiStyle::OpenAiChatCompletions,
         "AGENT_OS_LIVE_OPENAI_API_KEY",
         "AGENT_OS_LIVE_OPENAI_MODEL",
         "AGENT_OS_LIVE_OPENAI_BASE_URL",
-        "live-openai-compatible-goal-control-plane.jsonl",
+        "live-openai_chat_completions-goal-control-plane.jsonl",
     );
 }
 
 #[test]
-#[ignore = "requires AGENT_OS_LIVE_ANTHROPIC_API_KEY and a live Anthropic-compatible endpoint"]
-fn live_anthropic_compatible_llm_goal_driven_control_plane_e2e() {
+#[ignore = "requires AGENT_OS_LIVE_ANTHROPIC_API_KEY and a live anthropic_messages endpoint"]
+fn live_anthropic_messages_llm_goal_driven_control_plane_e2e() {
     run_live_llm_goal_driven_control_plane_e2e(
-        "anthropic-compatible",
-        LlmApiStyle::AnthropicCompatible,
+        "anthropic_messages",
+        LlmApiStyle::AnthropicMessages,
         "AGENT_OS_LIVE_ANTHROPIC_API_KEY",
         "AGENT_OS_LIVE_ANTHROPIC_MODEL",
         "AGENT_OS_LIVE_ANTHROPIC_BASE_URL",
-        "live-anthropic-compatible-goal-control-plane.jsonl",
+        "live-anthropic_messages-goal-control-plane.jsonl",
     );
 }
 
 #[test]
-#[ignore = "requires AGENT_OS_LIVE_OPENAI_API_KEY and a live OpenAI-compatible endpoint"]
-fn live_openai_compatible_llm_goal_driven_full_tool_surface_e2e() {
+#[ignore = "requires AGENT_OS_LIVE_OPENAI_API_KEY and a live openai_chat_completions endpoint"]
+fn live_openai_chat_completions_llm_goal_driven_full_tool_surface_e2e() {
     run_live_llm_goal_driven_full_tool_surface_e2e(
-        "openai-compatible",
-        LlmApiStyle::OpenAiCompatible,
+        "openai_chat_completions",
+        LlmApiStyle::OpenAiChatCompletions,
         "AGENT_OS_LIVE_OPENAI_API_KEY",
         "AGENT_OS_LIVE_OPENAI_MODEL",
         "AGENT_OS_LIVE_OPENAI_BASE_URL",
-        "live-openai-compatible-goal-full-tool-surface.jsonl",
+        "live-openai_chat_completions-goal-full-tool-surface.jsonl",
     );
 }
 
 #[test]
-#[ignore = "requires AGENT_OS_LIVE_ANTHROPIC_API_KEY and a live Anthropic-compatible endpoint"]
-fn live_anthropic_compatible_llm_goal_driven_full_tool_surface_e2e() {
+#[ignore = "requires AGENT_OS_LIVE_ANTHROPIC_API_KEY and a live anthropic_messages endpoint"]
+fn live_anthropic_messages_llm_goal_driven_full_tool_surface_e2e() {
     run_live_llm_goal_driven_full_tool_surface_e2e(
-        "anthropic-compatible",
-        LlmApiStyle::AnthropicCompatible,
+        "anthropic_messages",
+        LlmApiStyle::AnthropicMessages,
         "AGENT_OS_LIVE_ANTHROPIC_API_KEY",
         "AGENT_OS_LIVE_ANTHROPIC_MODEL",
         "AGENT_OS_LIVE_ANTHROPIC_BASE_URL",
-        "live-anthropic-compatible-goal-full-tool-surface.jsonl",
+        "live-anthropic_messages-goal-full-tool-surface.jsonl",
     );
 }
 
 #[test]
-#[ignore = "requires AGENT_OS_LIVE_OPENAI_API_KEY and a live OpenAI-compatible endpoint"]
-fn live_openai_compatible_llm_goal_driven_agent_control_lifecycle_success_e2e() {
+#[ignore = "requires AGENT_OS_LIVE_OPENAI_API_KEY and a live openai_chat_completions endpoint"]
+fn live_openai_chat_completions_llm_goal_driven_agent_control_lifecycle_success_e2e() {
     run_live_llm_goal_driven_agent_control_lifecycle_success_e2e(
-        "openai-compatible",
-        LlmApiStyle::OpenAiCompatible,
+        "openai_chat_completions",
+        LlmApiStyle::OpenAiChatCompletions,
         "AGENT_OS_LIVE_OPENAI_API_KEY",
         "AGENT_OS_LIVE_OPENAI_MODEL",
         "AGENT_OS_LIVE_OPENAI_BASE_URL",
-        "live-openai-compatible-goal-agent-control-lifecycle-success.jsonl",
+        "live-openai_chat_completions-goal-agent-control-lifecycle-success.jsonl",
     );
 }
 
 #[test]
-#[ignore = "requires AGENT_OS_LIVE_ANTHROPIC_API_KEY and a live Anthropic-compatible endpoint"]
-fn live_anthropic_compatible_llm_goal_driven_agent_control_lifecycle_success_e2e() {
+#[ignore = "requires AGENT_OS_LIVE_ANTHROPIC_API_KEY and a live anthropic_messages endpoint"]
+fn live_anthropic_messages_llm_goal_driven_agent_control_lifecycle_success_e2e() {
     run_live_llm_goal_driven_agent_control_lifecycle_success_e2e(
-        "anthropic-compatible",
-        LlmApiStyle::AnthropicCompatible,
+        "anthropic_messages",
+        LlmApiStyle::AnthropicMessages,
         "AGENT_OS_LIVE_ANTHROPIC_API_KEY",
         "AGENT_OS_LIVE_ANTHROPIC_MODEL",
         "AGENT_OS_LIVE_ANTHROPIC_BASE_URL",
-        "live-anthropic-compatible-goal-agent-control-lifecycle-success.jsonl",
+        "live-anthropic_messages-goal-agent-control-lifecycle-success.jsonl",
     );
 }
 
 #[test]
-#[ignore = "requires AGENT_OS_LIVE_OPENAI_API_KEY and a live OpenAI-compatible endpoint"]
-fn live_openai_compatible_llm_goal_driven_ecosystem_e2e() {
+#[ignore = "requires AGENT_OS_LIVE_OPENAI_API_KEY and a live openai_chat_completions endpoint"]
+fn live_openai_chat_completions_llm_goal_driven_ecosystem_e2e() {
     run_live_llm_goal_driven_ecosystem_e2e(
-        "openai-compatible",
-        LlmApiStyle::OpenAiCompatible,
+        "openai_chat_completions",
+        LlmApiStyle::OpenAiChatCompletions,
         "AGENT_OS_LIVE_OPENAI_API_KEY",
         "AGENT_OS_LIVE_OPENAI_MODEL",
         "AGENT_OS_LIVE_OPENAI_BASE_URL",
-        "live-openai-compatible-goal-ecosystem.jsonl",
+        "live-openai_chat_completions-goal-ecosystem.jsonl",
     );
 }
 
 #[test]
-#[ignore = "requires AGENT_OS_LIVE_ANTHROPIC_API_KEY and a live Anthropic-compatible endpoint"]
-fn live_anthropic_compatible_llm_goal_driven_ecosystem_e2e() {
+#[ignore = "requires AGENT_OS_LIVE_ANTHROPIC_API_KEY and a live anthropic_messages endpoint"]
+fn live_anthropic_messages_llm_goal_driven_ecosystem_e2e() {
     run_live_llm_goal_driven_ecosystem_e2e(
-        "anthropic-compatible",
-        LlmApiStyle::AnthropicCompatible,
+        "anthropic_messages",
+        LlmApiStyle::AnthropicMessages,
         "AGENT_OS_LIVE_ANTHROPIC_API_KEY",
         "AGENT_OS_LIVE_ANTHROPIC_MODEL",
         "AGENT_OS_LIVE_ANTHROPIC_BASE_URL",
-        "live-anthropic-compatible-goal-ecosystem.jsonl",
+        "live-anthropic_messages-goal-ecosystem.jsonl",
     );
 }
 
 #[test]
-#[ignore = "requires a live OpenAI-compatible image-capable model"]
-fn live_openai_compatible_llm_read_image_success_e2e() {
+#[ignore = "requires a live openai_chat_completions image-capable model"]
+fn live_openai_chat_completions_llm_read_image_success_e2e() {
     run_live_llm_read_image_success_e2e(
-        "openai-compatible",
-        LlmApiStyle::OpenAiCompatible,
+        "openai_chat_completions",
+        LlmApiStyle::OpenAiChatCompletions,
         "AGENT_OS_LIVE_OPENAI_API_KEY",
         "AGENT_OS_LIVE_OPENAI_MODEL",
         "AGENT_OS_LIVE_OPENAI_BASE_URL",
-        "live-openai-compatible-read-image-success.jsonl",
+        "live-openai_chat_completions-read-image-success.jsonl",
     );
 }
 
 #[test]
-#[ignore = "requires a live Anthropic-compatible image-capable model"]
-fn live_anthropic_compatible_llm_read_image_success_e2e() {
+#[ignore = "requires a live anthropic_messages image-capable model"]
+fn live_anthropic_messages_llm_read_image_success_e2e() {
     run_live_llm_read_image_success_e2e(
-        "anthropic-compatible",
-        LlmApiStyle::AnthropicCompatible,
+        "anthropic_messages",
+        LlmApiStyle::AnthropicMessages,
         "AGENT_OS_LIVE_ANTHROPIC_API_KEY",
         "AGENT_OS_LIVE_ANTHROPIC_MODEL",
         "AGENT_OS_LIVE_ANTHROPIC_BASE_URL",
-        "live-anthropic-compatible-read-image-success.jsonl",
+        "live-anthropic_messages-read-image-success.jsonl",
     );
 }
 
 #[test]
-#[ignore = "requires a live OpenAI-compatible text-only model"]
-fn live_openai_compatible_llm_read_image_unsupported_e2e() {
+#[ignore = "requires a live openai_chat_completions text-only model"]
+fn live_openai_chat_completions_llm_read_image_unsupported_e2e() {
     run_live_llm_read_image_unsupported_e2e(
-        "openai-compatible",
-        LlmApiStyle::OpenAiCompatible,
+        "openai_chat_completions",
+        LlmApiStyle::OpenAiChatCompletions,
         "AGENT_OS_LIVE_OPENAI_API_KEY",
         "AGENT_OS_LIVE_OPENAI_MODEL",
         "AGENT_OS_LIVE_OPENAI_BASE_URL",
-        "live-openai-compatible-read-image-unsupported.jsonl",
+        "live-openai_chat_completions-read-image-unsupported.jsonl",
     );
 }
 
 #[test]
-#[ignore = "requires a live Anthropic-compatible text-only model"]
-fn live_anthropic_compatible_llm_read_image_unsupported_e2e() {
+#[ignore = "requires a live anthropic_messages text-only model"]
+fn live_anthropic_messages_llm_read_image_unsupported_e2e() {
     run_live_llm_read_image_unsupported_e2e(
-        "anthropic-compatible",
-        LlmApiStyle::AnthropicCompatible,
+        "anthropic_messages",
+        LlmApiStyle::AnthropicMessages,
         "AGENT_OS_LIVE_ANTHROPIC_API_KEY",
         "AGENT_OS_LIVE_ANTHROPIC_MODEL",
         "AGENT_OS_LIVE_ANTHROPIC_BASE_URL",
-        "live-anthropic-compatible-read-image-unsupported.jsonl",
+        "live-anthropic_messages-read-image-unsupported.jsonl",
     );
 }
 
 #[test]
-#[ignore = "requires a live OpenAI-compatible text-only model"]
-fn live_openai_compatible_llm_switches_read_image_context_to_text_only_model() {
+#[ignore = "requires a live openai_chat_completions text-only model"]
+fn live_openai_chat_completions_llm_switches_read_image_context_to_text_only_model() {
     run_live_llm_switch_read_image_context_to_text_only_model(
-        "openai-compatible",
-        LlmApiStyle::OpenAiCompatible,
+        "openai_chat_completions",
+        LlmApiStyle::OpenAiChatCompletions,
         "AGENT_OS_LIVE_OPENAI_API_KEY",
         "AGENT_OS_LIVE_OPENAI_MODEL",
         "AGENT_OS_LIVE_OPENAI_BASE_URL",
-        "live-openai-compatible-read-image-switch-text-only.jsonl",
+        "live-openai_chat_completions-read-image-switch-text-only.jsonl",
     );
 }
 
 #[test]
-#[ignore = "requires a live Anthropic-compatible text-only model"]
-fn live_anthropic_compatible_llm_switches_read_image_context_to_text_only_model() {
+#[ignore = "requires a live anthropic_messages text-only model"]
+fn live_anthropic_messages_llm_switches_read_image_context_to_text_only_model() {
     run_live_llm_switch_read_image_context_to_text_only_model(
-        "anthropic-compatible",
-        LlmApiStyle::AnthropicCompatible,
+        "anthropic_messages",
+        LlmApiStyle::AnthropicMessages,
         "AGENT_OS_LIVE_ANTHROPIC_API_KEY",
         "AGENT_OS_LIVE_ANTHROPIC_MODEL",
         "AGENT_OS_LIVE_ANTHROPIC_BASE_URL",
-        "live-anthropic-compatible-read-image-switch-text-only.jsonl",
+        "live-anthropic_messages-read-image-switch-text-only.jsonl",
     );
 }
 
 #[test]
-#[ignore = "requires a live OpenAI-compatible text-only model"]
-fn live_openai_compatible_llm_forced_image_payload_returns_provider_error() {
+#[ignore = "requires a live openai_chat_completions text-only model"]
+fn live_openai_chat_completions_llm_forced_image_payload_returns_provider_error() {
     run_live_llm_forced_image_payload_returns_provider_error(
-        "openai-compatible",
-        LlmApiStyle::OpenAiCompatible,
+        "openai_chat_completions",
+        LlmApiStyle::OpenAiChatCompletions,
         "AGENT_OS_LIVE_OPENAI_API_KEY",
         "AGENT_OS_LIVE_OPENAI_MODEL",
         "AGENT_OS_LIVE_OPENAI_BASE_URL",
-        "live-openai-compatible-read-image-forced-text-model-error.jsonl",
+        "live-openai_chat_completions-read-image-forced-text-model-error.jsonl",
     );
 }
 
 #[test]
-#[ignore = "requires a live Anthropic-compatible text-only model"]
-fn live_anthropic_compatible_llm_forced_image_payload_returns_provider_error() {
+#[ignore = "requires a live anthropic_messages text-only model"]
+fn live_anthropic_messages_llm_forced_image_payload_returns_provider_error() {
     run_live_llm_forced_image_payload_returns_provider_error(
-        "anthropic-compatible",
-        LlmApiStyle::AnthropicCompatible,
+        "anthropic_messages",
+        LlmApiStyle::AnthropicMessages,
         "AGENT_OS_LIVE_ANTHROPIC_API_KEY",
         "AGENT_OS_LIVE_ANTHROPIC_MODEL",
         "AGENT_OS_LIVE_ANTHROPIC_BASE_URL",
-        "live-anthropic-compatible-read-image-forced-text-model-error.jsonl",
+        "live-anthropic_messages-read-image-forced-text-model-error.jsonl",
     );
 }
 
 #[test]
-#[ignore = "requires a live Anthropic-compatible text-only model with gateway compatibility behavior"]
-fn live_anthropic_compatible_llm_forced_image_payload_observes_gateway_behavior() {
+#[ignore = "requires a live anthropic_messages text-only model with gateway compatibility behavior"]
+fn live_anthropic_messages_llm_forced_image_payload_observes_gateway_behavior() {
     run_live_llm_forced_image_payload_observes_gateway_behavior(
-        "anthropic-compatible",
-        LlmApiStyle::AnthropicCompatible,
+        "anthropic_messages",
+        LlmApiStyle::AnthropicMessages,
         "AGENT_OS_LIVE_ANTHROPIC_API_KEY",
         "AGENT_OS_LIVE_ANTHROPIC_MODEL",
         "AGENT_OS_LIVE_ANTHROPIC_BASE_URL",
-        "live-anthropic-compatible-read-image-forced-text-model-observed.jsonl",
+        "live-anthropic_messages-read-image-forced-text-model-observed.jsonl",
     );
 }
 
 fn run_live_llm_goal_driven_ecosystem_e2e(
     provider: &str,
-    api_style: LlmApiStyle,
+    endpoint: LlmApiStyle,
     api_key_env: &str,
     model_env: &str,
     base_env: &str,
@@ -433,7 +433,7 @@ fn run_live_llm_goal_driven_ecosystem_e2e(
     );
     let client = OpenAiModelClient::new(api_key, model.clone())
         .with_api_base(api_base.clone())
-        .with_api_style(api_style)
+        .with_endpoint(endpoint)
         .with_max_tokens(2048)
         .with_audit_log(audit_log_path.clone());
     append_jsonl(
@@ -640,7 +640,7 @@ fn assert_ecosystem_final_summary(report: &RuntimeRunReport, skill_marker: &str,
 
 fn run_live_llm_read_image_success_e2e(
     provider: &str,
-    api_style: LlmApiStyle,
+    endpoint: LlmApiStyle,
     api_key_env: &str,
     model_env: &str,
     base_env: &str,
@@ -675,7 +675,7 @@ fn run_live_llm_read_image_success_e2e(
     );
     let client = OpenAiModelClient::new(api_key, model.clone())
         .with_api_base(api_base.clone())
-        .with_api_style(api_style)
+        .with_endpoint(endpoint)
         .with_max_tokens(2048)
         .with_audit_log(audit_log_path.clone());
     append_jsonl(
@@ -717,7 +717,7 @@ fn run_live_llm_read_image_success_e2e(
 
 fn run_live_llm_read_image_unsupported_e2e(
     provider: &str,
-    api_style: LlmApiStyle,
+    endpoint: LlmApiStyle,
     api_key_env: &str,
     model_env: &str,
     base_env: &str,
@@ -751,7 +751,7 @@ fn run_live_llm_read_image_unsupported_e2e(
     register_live_model_alias(&kernel, &request, LIVE_TEXT_ONLY_MODEL_ALIAS, &model, false);
     let client = OpenAiModelClient::new(api_key, model.clone())
         .with_api_base(api_base.clone())
-        .with_api_style(api_style)
+        .with_endpoint(endpoint)
         .with_max_tokens(2048)
         .with_audit_log(audit_log_path.clone());
     append_jsonl(
@@ -796,7 +796,7 @@ fn run_live_llm_read_image_unsupported_e2e(
 
 fn run_live_llm_switch_read_image_context_to_text_only_model(
     provider: &str,
-    api_style: LlmApiStyle,
+    endpoint: LlmApiStyle,
     api_key_env: &str,
     model_env: &str,
     base_env: &str,
@@ -817,7 +817,7 @@ fn run_live_llm_switch_read_image_context_to_text_only_model(
     );
     let mut client = OpenAiModelClient::new(api_key, model.clone())
         .with_api_base(api_base.clone())
-        .with_api_style(api_style)
+        .with_endpoint(endpoint)
         .with_max_tokens(512)
         .with_audit_log(audit_log_path.clone());
     append_jsonl(
@@ -861,7 +861,7 @@ fn run_live_llm_switch_read_image_context_to_text_only_model(
 
 fn run_live_llm_forced_image_payload_returns_provider_error(
     provider: &str,
-    api_style: LlmApiStyle,
+    endpoint: LlmApiStyle,
     api_key_env: &str,
     model_env: &str,
     base_env: &str,
@@ -882,7 +882,7 @@ fn run_live_llm_forced_image_payload_returns_provider_error(
     );
     let mut client = OpenAiModelClient::new(api_key, model.clone())
         .with_api_base(api_base.clone())
-        .with_api_style(api_style)
+        .with_endpoint(endpoint)
         .with_max_tokens(512)
         .with_audit_log(audit_log_path.clone());
     append_jsonl(
@@ -925,7 +925,7 @@ fn run_live_llm_forced_image_payload_returns_provider_error(
 
 fn run_live_llm_forced_image_payload_observes_gateway_behavior(
     provider: &str,
-    api_style: LlmApiStyle,
+    endpoint: LlmApiStyle,
     api_key_env: &str,
     model_env: &str,
     base_env: &str,
@@ -946,7 +946,7 @@ fn run_live_llm_forced_image_payload_observes_gateway_behavior(
     );
     let mut client = OpenAiModelClient::new(api_key, model.clone())
         .with_api_base(api_base.clone())
-        .with_api_style(api_style)
+        .with_endpoint(endpoint)
         .with_max_tokens(512)
         .with_audit_log(audit_log_path.clone());
     append_jsonl(
@@ -1225,7 +1225,7 @@ fn read_audit_jsonl(path: &Path) -> Vec<Value> {
 
 fn run_live_llm_e2e(
     provider: &str,
-    api_style: LlmApiStyle,
+    endpoint: LlmApiStyle,
     api_key_env: &str,
     model_env: &str,
     base_env: &str,
@@ -1269,7 +1269,7 @@ fn run_live_llm_e2e(
     );
     let client = OpenAiModelClient::new(api_key, model.clone())
         .with_api_base(api_base)
-        .with_api_style(api_style)
+        .with_endpoint(endpoint)
         .with_max_tokens(2048)
         .with_audit_log(audit_log_path.clone());
     let mut runtime = ThreadRuntime::new(kernel.clone(), request.thread.thread_id.clone(), client);
@@ -1297,7 +1297,7 @@ fn run_live_llm_e2e(
 
 fn run_live_llm_goal_driven_workspace_e2e(
     provider: &str,
-    api_style: LlmApiStyle,
+    endpoint: LlmApiStyle,
     api_key_env: &str,
     model_env: &str,
     base_env: &str,
@@ -1349,7 +1349,7 @@ fn run_live_llm_goal_driven_workspace_e2e(
     );
     let client = OpenAiModelClient::new(api_key, model.clone())
         .with_api_base(api_base.clone())
-        .with_api_style(api_style)
+        .with_endpoint(endpoint)
         .with_max_tokens(2048)
         .with_audit_log(audit_log_path.clone());
     append_jsonl(
@@ -1393,7 +1393,7 @@ fn run_live_llm_goal_driven_workspace_e2e(
 
 fn run_live_llm_goal_driven_control_plane_e2e(
     provider: &str,
-    api_style: LlmApiStyle,
+    endpoint: LlmApiStyle,
     api_key_env: &str,
     model_env: &str,
     base_env: &str,
@@ -1423,7 +1423,7 @@ fn run_live_llm_goal_driven_control_plane_e2e(
         );
     let client = OpenAiModelClient::new(api_key, model.clone())
         .with_api_base(api_base.clone())
-        .with_api_style(api_style)
+        .with_endpoint(endpoint)
         .with_max_tokens(2048)
         .with_audit_log(audit_log_path.clone());
     append_jsonl(
@@ -1468,7 +1468,7 @@ fn run_live_llm_goal_driven_control_plane_e2e(
 
 fn run_live_llm_goal_driven_full_tool_surface_e2e(
     provider: &str,
-    api_style: LlmApiStyle,
+    endpoint: LlmApiStyle,
     api_key_env: &str,
     model_env: &str,
     base_env: &str,
@@ -1513,7 +1513,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
         );
     let workspace_client = OpenAiModelClient::new(api_key.clone(), model.clone())
         .with_api_base(api_base.clone())
-        .with_api_style(api_style)
+        .with_endpoint(endpoint)
         .with_max_tokens(2048)
         .with_audit_log(audit_log_path.clone());
     let mut workspace_runtime = ThreadRuntime::new(
@@ -1566,7 +1566,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
         );
     let control_client = OpenAiModelClient::new(api_key.clone(), model.clone())
         .with_api_base(api_base.clone())
-        .with_api_style(api_style)
+        .with_endpoint(endpoint)
         .with_max_tokens(2048)
         .with_audit_log(audit_log_path.clone());
     let mut control_runtime = ThreadRuntime::new(
@@ -1704,7 +1704,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
     .unwrap();
     let status_client = OpenAiModelClient::new(api_key.clone(), model.clone())
         .with_api_base(api_base.clone())
-        .with_api_style(api_style)
+        .with_endpoint(endpoint)
         .with_max_tokens(1536)
         .with_audit_log(audit_log_path.clone());
     let mut status_runtime = ThreadRuntime::new(
@@ -1766,7 +1766,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
     .unwrap();
     let mutation_client = OpenAiModelClient::new(api_key.clone(), model.clone())
         .with_api_base(api_base.clone())
-        .with_api_style(api_style)
+        .with_endpoint(endpoint)
         .with_max_tokens(1536)
         .with_audit_log(audit_log_path.clone());
     let mut mutation_runtime = ThreadRuntime::new(
@@ -1834,7 +1834,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
         approve_live_tool_risk(&lifecycle_kernel, &terminal_task, &terminal_supervisor);
     let terminal_client = OpenAiModelClient::new(api_key, model.clone())
         .with_api_base(api_base.clone())
-        .with_api_style(api_style)
+        .with_endpoint(endpoint)
         .with_max_tokens(1536)
         .with_audit_log(audit_log_path.clone());
     let mut terminal_runtime = ThreadRuntime::new(
@@ -1878,7 +1878,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
 
 fn run_live_llm_goal_driven_agent_control_lifecycle_success_e2e(
     provider: &str,
-    api_style: LlmApiStyle,
+    endpoint: LlmApiStyle,
     api_key_env: &str,
     model_env: &str,
     base_env: &str,
@@ -1887,7 +1887,7 @@ fn run_live_llm_goal_driven_agent_control_lifecycle_success_e2e(
     for action in ["delete_session", "purge_state"] {
         run_live_llm_goal_driven_single_lifecycle_success_agent_control_e2e(
             provider,
-            api_style,
+            endpoint,
             api_key_env,
             model_env,
             base_env,
@@ -1899,7 +1899,7 @@ fn run_live_llm_goal_driven_agent_control_lifecycle_success_e2e(
 
 fn run_live_llm_goal_driven_single_lifecycle_success_agent_control_e2e(
     provider: &str,
-    api_style: LlmApiStyle,
+    endpoint: LlmApiStyle,
     api_key_env: &str,
     model_env: &str,
     base_env: &str,
@@ -1968,7 +1968,7 @@ fn run_live_llm_goal_driven_single_lifecycle_success_agent_control_e2e(
     let approval_id = approve_live_tool_risk(&kernel, &task, &supervisor);
     let client = OpenAiModelClient::new(api_key, model.clone())
         .with_api_base(api_base.clone())
-        .with_api_style(api_style)
+        .with_endpoint(endpoint)
         .with_max_tokens(1024)
         .with_audit_log(audit_log_path.clone());
     append_jsonl(

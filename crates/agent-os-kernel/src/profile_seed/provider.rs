@@ -1,4 +1,4 @@
-use agent_os_sys::*;
+﻿use agent_os_sys::*;
 use serde_json::json;
 
 pub(super) fn default_routing_policy(now: &str) -> RoutingPolicy {
@@ -37,10 +37,11 @@ pub(super) fn default_provider_profile(now: &str) -> ProviderProfile {
         },
         retry_policy: Some(json!({
             "max_attempts": 2,
-            "backoff_ms": 30_000
+            "initial_backoff_ms": 30_000,
+            "max_backoff_ms": 30_000
         })),
         transform_policy: Some(json!({
-            "adapter_style": "openai-compatible"
+            "adapter_style": "openai_chat_completions"
         })),
         reasoning_defaults: json!({}),
         tool_visibility_profile: None,
@@ -68,10 +69,11 @@ pub(super) fn strict_text_provider_profile(now: &str) -> ProviderProfile {
         },
         retry_policy: Some(json!({
             "max_attempts": 1,
-            "backoff_ms": 0
+            "initial_backoff_ms": 0,
+            "max_backoff_ms": 0
         })),
         transform_policy: Some(json!({
-            "adapter_style": "openai-compatible"
+            "adapter_style": "openai_chat_completions"
         })),
         reasoning_defaults: json!({}),
         tool_visibility_profile: None,

@@ -52,6 +52,52 @@ fn state_replay_rebuilds_kernel_projection() {
 }
 
 #[test]
+fn thread_app_lifecycle_projection_is_replayable_current_contract() {
+    let fx = fixture();
+
+    fx.kernel
+        .rename_thread(&fx.worker.thread_id, "Contract thread".to_string())
+        .unwrap();
+    fx.kernel.archive_thread(&fx.worker.thread_id).unwrap();
+    fx.kernel.unarchive_thread(&fx.worker.thread_id).unwrap();
+    fx.kernel
+        .transition_thread(&fx.worker.thread_id, ThreadStatus::Ready, None)
+        .unwrap();
+
+    let projected = fx
+        .kernel
+        .store()
+        .thread_summaries()
+        .unwrap()
+        .into_iter()
+        .find(|thread| thread.client_thread_id == fx.worker.thread_id)
+        .unwrap();
+    assert_eq!(projected.title, "Contract thread");
+    assert!(!projected.archived);
+    assert!(!projected.deleted);
+    assert_eq!(projected.status, ThreadStatus::Ready);
+
+    let replayed = Kernel::from_events(&fx.kernel.events().unwrap()).unwrap();
+    let replayed_thread = replayed
+        .store()
+        .thread_summaries()
+        .unwrap()
+        .into_iter()
+        .find(|thread| thread.client_thread_id == fx.worker.thread_id)
+        .unwrap();
+    assert_eq!(replayed_thread, projected);
+
+    let deleted = fx.kernel.delete_thread(&fx.worker.thread_id).unwrap();
+    assert!(deleted.deleted);
+    assert!(deleted.archived);
+    let err = fx
+        .kernel
+        .rename_thread(&fx.worker.thread_id, "after delete".to_string())
+        .unwrap_err();
+    assert!(matches!(err, AgentOsError::InvalidTransition(_)));
+}
+
+#[test]
 fn agent_thread_handle_admits_turns_and_rejects_stale_steering() {
     let fx = fixture();
     let handle = AgentThreadHandle::new(fx.kernel.clone(), fx.worker.thread_id.clone());

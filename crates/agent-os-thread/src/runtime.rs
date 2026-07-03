@@ -3,7 +3,8 @@ use crate::{
     ToolExecutionRecord,
 };
 use agent_os_kernel::{
-    CommitArtifactInput, CompleteTaskInput, Kernel, ToolInvokeInput, UpdateTaskInput,
+    CommitArtifactInput, CompactContextInput, CompleteTaskInput, Kernel, ToolInvokeInput,
+    UpdateTaskInput,
 };
 use agent_os_sys::*;
 use serde_json::{json, Value};
@@ -21,7 +22,7 @@ mod report;
 #[path = "runtime/tool_policy.rs"]
 mod tool_policy;
 
-use context_projection::project_tool_results;
+use context_projection::{project_tool_results, prune_context_for_model_limit};
 use feedback::*;
 pub use job::{RuntimeJob, RuntimeJobRecord, RuntimeJobStatus};
 pub use report::{RuntimeConfig, RuntimeRunOverrides, RuntimeRunReport};
@@ -241,44 +242,70 @@ impl<C: ModelClient> ThreadRuntime<C> {
                         acb.config_snapshot.provider_profile_id
                     ))
                 })?;
-            let max_attempts = provider_profile
-                .retry_policy
-                .as_ref()
-                .and_then(|policy| policy.get("max_attempts"))
-                .and_then(Value::as_u64)
-                .unwrap_or(1)
-                .max(1);
-            let backoff_ms = provider_profile
-                .retry_policy
-                .as_ref()
-                .and_then(|policy| policy.get("backoff_ms"))
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
+            let mut context = ModelContextProjection {
+                tool_results: projected_tool_results,
+                artifacts: projected_artifacts,
+                context_snapshots,
+                memory_records,
+                context_compactions,
+                tool_descriptors: ecosystem_projection.tool_descriptors,
+                instruction_documents: ecosystem_projection.instruction_documents,
+                skill_definitions: ecosystem_projection.skill_definitions,
+                command_definitions: ecosystem_projection.command_definitions,
+                mcp_tools: ecosystem_projection.mcp_tools,
+                imported_agent_profiles: ecosystem_projection.imported_agent_profiles,
+            };
+            let context_budget =
+                prune_context_for_model_limit(&mut context, &stream.route_decision.model_limit);
+            if context_budget.pruned() {
+                let compaction = self.kernel.compact_context(CompactContextInput {
+                    thread_id: acb.thread_id.clone(),
+                    agent_id: acb.agent_id.clone(),
+                    task_id: acb.task.task_id.clone(),
+                    summary_artifact_id: None,
+                    superseded_refs: context_budget.pruned_refs.clone(),
+                    token_estimate: context_budget.before_tokens,
+                })?;
+                self.kernel.record_provider_stream_event(
+                    &stream.session_id,
+                    ProviderStreamEventType::ProviderWarning,
+                    json!({
+                        "type": "context_pruned",
+                        "compaction_id": compaction.compaction_id,
+                        "before_tokens": context_budget.before_tokens,
+                        "after_tokens": context_budget.after_tokens,
+                        "usable_input_tokens": context_budget.usable_input_tokens,
+                        "pruned_refs": context_budget.pruned_refs
+                    }),
+                )?;
+            }
+            if context_budget.over_budget_after_prune {
+                let message = format!(
+                    "model context projection remains over budget after prune: estimated={} usable={}",
+                    context_budget.after_tokens, context_budget.usable_input_tokens
+                );
+                self.kernel
+                    .fail_stream_session(&stream.session_id, message.clone())?;
+                return Err(AgentOsError::BudgetExhausted(message));
+            }
             let request = ModelTurnRequest {
                 thread: acb.clone(),
                 workspace_root: config.workspace_root.clone(),
                 step_index,
                 model_capabilities: stream.route_decision.model_capabilities.clone(),
-                context: ModelContextProjection {
-                    tool_results: projected_tool_results,
-                    artifacts: projected_artifacts,
-                    context_snapshots,
-                    memory_records,
-                    context_compactions,
-                    tool_descriptors: ecosystem_projection.tool_descriptors,
-                    instruction_documents: ecosystem_projection.instruction_documents,
-                    skill_definitions: ecosystem_projection.skill_definitions,
-                    command_definitions: ecosystem_projection.command_definitions,
-                    mcp_tools: ecosystem_projection.mcp_tools,
-                    imported_agent_profiles: ecosystem_projection.imported_agent_profiles,
-                },
+                context,
             };
+            let retry_policy =
+                RuntimeRetryPolicy::from_json(provider_profile.retry_policy.as_ref());
             let mut attempt = 1;
             let response = loop {
                 match self.model_client.next(&request) {
                     Ok(response) => break response,
                     Err(error) => {
-                        if attempt >= max_attempts {
+                        let retry_after_ms = retry_after_ms_from_error(&error);
+                        if !retry_policy.should_retry(&error)
+                            || attempt >= retry_policy.max_attempts
+                        {
                             self.kernel
                                 .fail_stream_session(&stream.session_id, error.to_string())?;
                             return Err(error);
@@ -288,12 +315,15 @@ impl<C: ModelClient> ThreadRuntime<C> {
                             ProviderStreamEventType::ProviderRetry,
                             json!({
                                 "attempt": attempt,
-                                "max_attempts": max_attempts,
+                                "max_attempts": retry_policy.max_attempts,
+                                "retry_after_ms": retry_after_ms,
                                 "error": error.to_string()
                             }),
                         )?;
-                        if backoff_ms > 0 {
-                            std::thread::sleep(std::time::Duration::from_millis(backoff_ms));
+                        let sleep_ms = retry_after_ms
+                            .unwrap_or_else(|| retry_policy.backoff_ms_for_attempt(attempt));
+                        if sleep_ms > 0 {
+                            std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
                         }
                         attempt += 1;
                     }
@@ -979,6 +1009,69 @@ fn scope_pattern_allows(allowed: &str, requested: &str) -> bool {
                 .strip_prefix(prefix)
                 .is_some_and(|rest| rest.starts_with(':'))
     })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RuntimeRetryPolicy {
+    max_attempts: u64,
+    initial_backoff_ms: u64,
+    max_backoff_ms: u64,
+}
+
+impl RuntimeRetryPolicy {
+    fn from_json(value: Option<&Value>) -> Self {
+        let max_attempts = value
+            .and_then(|policy| policy.get("max_attempts"))
+            .and_then(Value::as_u64)
+            .unwrap_or(1)
+            .max(1);
+        let initial_backoff_ms = value
+            .and_then(|policy| policy.get("initial_backoff_ms"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let max_backoff_ms = value
+            .and_then(|policy| policy.get("max_backoff_ms"))
+            .and_then(Value::as_u64)
+            .unwrap_or(initial_backoff_ms)
+            .max(initial_backoff_ms);
+        Self {
+            max_attempts,
+            initial_backoff_ms,
+            max_backoff_ms,
+        }
+    }
+
+    fn should_retry(&self, error: &AgentOsError) -> bool {
+        match error {
+            AgentOsError::ResourceConflict(message)
+            | AgentOsError::Validation(message)
+            | AgentOsError::Serialization(message) => message.contains("retryable=true"),
+            _ => false,
+        }
+    }
+
+    fn backoff_ms_for_attempt(&self, attempt: u64) -> u64 {
+        if self.initial_backoff_ms == 0 {
+            return 0;
+        }
+        let multiplier = 1_u64
+            .checked_shl((attempt.saturating_sub(1)) as u32)
+            .unwrap_or(u64::MAX);
+        self.initial_backoff_ms
+            .saturating_mul(multiplier)
+            .min(self.max_backoff_ms)
+    }
+}
+
+fn retry_after_ms_from_error(error: &AgentOsError) -> Option<u64> {
+    let message = error.to_string();
+    let marker = "retry_after_ms=";
+    let start = message.find(marker)? + marker.len();
+    let digits = message[start..]
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect::<String>();
+    digits.parse::<u64>().ok().filter(|value| *value > 0)
 }
 
 #[cfg(test)]

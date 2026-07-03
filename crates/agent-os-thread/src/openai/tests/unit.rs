@@ -489,6 +489,47 @@ fn parse_anthropic_response_extracts_tool_use() {
 }
 
 #[test]
+fn parse_openai_responses_response_extracts_function_call() {
+    let tmp = std::env::temp_dir().join(format!("aos-openai-resp-fn-{}", new_id("t_")));
+    let request = make_request(&tmp);
+    let body = json!({
+        "output": [
+            {
+                "type": "message",
+                "content": [{"type": "output_text", "text": "I will inspect the file."}]
+            },
+            {
+                "type": "function_call",
+                "call_id": "call_read",
+                "name": "read_file",
+                "arguments": "{\"path\":\"src/lib.rs\"}"
+            }
+        ],
+        "usage": {"input_tokens": 30, "output_tokens": 7}
+    });
+
+    let response = parse_openai_responses_response(&body, &request).unwrap();
+
+    assert_eq!(response.usage.input_tokens, 30);
+    assert_eq!(response.actions.len(), 2);
+    match &response.actions[0] {
+        ModelAction::OutputText { text } => assert!(text.contains("inspect")),
+        _ => panic!("expected OutputText"),
+    }
+    match &response.actions[1] {
+        ModelAction::ToolCall(action) => {
+            assert_eq!(action.tool_name, "read_file");
+            assert_eq!(action.input["path"], "src/lib.rs");
+            assert_eq!(
+                action.input["workspace_root"],
+                tmp.to_string_lossy().to_string()
+            );
+        }
+        _ => panic!("expected ToolCall"),
+    }
+}
+
+#[test]
 fn parse_response_extracts_submit_final() {
     let tmp = std::env::temp_dir().join(format!("aos-openai-sf-{}", new_id("t_")));
     let base_request = make_request(&tmp);
@@ -665,6 +706,10 @@ fn tool_definitions_include_all_core_tools() {
     assert!(!names.contains(&"write_file"));
     assert!(!names.contains(&"replace_text"));
     assert!(!names.contains(&"delete_file"));
+    assert!(!names.contains(&"todo"));
+    assert!(!names.contains(&"glob"));
+    assert!(!names.contains(&"lsp"));
+    assert!(!names.contains(&"webfetch"));
     for tool in &tools {
         let name = tool
             .pointer("/function/name")
@@ -1088,22 +1133,61 @@ fn map_function_call_supports_skill_and_mcp_tools() {
 }
 
 #[test]
-fn api_style_parses_explicit_and_base_url_values() {
+fn endpoint_parses_only_canonical_values() {
     assert_eq!(
-        LlmApiStyle::from_value("openai-compatible").unwrap(),
-        LlmApiStyle::OpenAiCompatible
+        LlmApiStyle::from_value("openai_chat_completions").unwrap(),
+        LlmApiStyle::OpenAiChatCompletions
     );
     assert_eq!(
-        LlmApiStyle::from_value("anthropic").unwrap(),
-        LlmApiStyle::AnthropicCompatible
+        LlmApiStyle::from_value("openai_responses").unwrap(),
+        LlmApiStyle::OpenAiResponses
     );
     assert_eq!(
-        LlmApiStyle::from_base_url("https://provider.example/anthropic"),
-        LlmApiStyle::AnthropicCompatible
+        LlmApiStyle::from_value("anthropic_messages").unwrap(),
+        LlmApiStyle::AnthropicMessages
     );
+    assert!(LlmApiStyle::from_value("openai-compatible").is_err());
+    assert!(LlmApiStyle::from_value("openai-chat-completions").is_err());
+    assert!(LlmApiStyle::from_value("responses").is_err());
+}
+
+#[test]
+fn openai_responses_transform_uses_endpoint_specific_wire_shape() {
+    let tmp = std::env::temp_dir().join(format!("aos-openai-responses-{}", new_id("t_")));
+    let request = make_request(&tmp);
+    let provider_request = build_provider_request(
+        ProviderRequestConfig {
+            endpoint: LlmApiStyle::OpenAiResponses,
+            api_base: "https://api.example.test/v1",
+            api_key: "test-key",
+            model: "gpt-responses",
+            max_tokens: 777,
+            temperature: Some(0.2),
+            model_options: &std::collections::BTreeMap::from([(
+                "reasoning".to_string(),
+                json!({"effort": "medium"}),
+            )]),
+            system_prompt_override: &None,
+        },
+        &request,
+    )
+    .unwrap();
+
+    assert_eq!(provider_request.provider_label, "openai_responses");
+    assert_eq!(provider_request.endpoint_path, "/responses");
     assert_eq!(
-        LlmApiStyle::from_base_url("https://provider.example/v1"),
-        LlmApiStyle::OpenAiCompatible
+        provider_request.url,
+        "https://api.example.test/v1/responses"
+    );
+    assert_eq!(provider_request.body["model"], "gpt-responses");
+    assert_eq!(provider_request.body["max_output_tokens"], 777);
+    assert!(provider_request.body.get("messages").is_none());
+    assert!(provider_request.body["input"].as_array().unwrap().len() >= 2);
+    assert_eq!(provider_request.body["tools"][0]["type"], "function");
+    assert_eq!(provider_request.body["tools"][0]["strict"], false);
+    assert_eq!(
+        provider_request.body["reasoning"],
+        json!({"effort": "medium"})
     );
 }
 

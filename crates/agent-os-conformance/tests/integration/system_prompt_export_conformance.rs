@@ -59,22 +59,22 @@ struct ModelVisibleContextMarkdown<'a> {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ProviderCase {
-    OpenAiCompatible,
-    AnthropicCompatible,
+    OpenAiChatCompletions,
+    AnthropicMessages,
 }
 
 impl ProviderCase {
     fn label(self) -> &'static str {
         match self {
-            Self::OpenAiCompatible => "openai-compatible",
-            Self::AnthropicCompatible => "anthropic-compatible",
+            Self::OpenAiChatCompletions => "openai_chat_completions",
+            Self::AnthropicMessages => "anthropic_messages",
         }
     }
 
-    fn api_style(self) -> common::LlmApiStyle {
+    fn endpoint(self) -> common::LlmApiStyle {
         match self {
-            Self::OpenAiCompatible => common::LlmApiStyle::OpenAiCompatible,
-            Self::AnthropicCompatible => common::LlmApiStyle::AnthropicCompatible,
+            Self::OpenAiChatCompletions => common::LlmApiStyle::OpenAiChatCompletions,
+            Self::AnthropicMessages => common::LlmApiStyle::AnthropicMessages,
         }
     }
 }
@@ -102,8 +102,8 @@ fn runtime_exports_real_system_prompt_review_bundle_for_core_roles() {
         },
     ];
     let providers = [
-        ProviderCase::OpenAiCompatible,
-        ProviderCase::AnthropicCompatible,
+        ProviderCase::OpenAiChatCompletions,
+        ProviderCase::AnthropicMessages,
     ];
     let mut index_entries = Vec::new();
 
@@ -213,7 +213,7 @@ fn runtime_exports_real_system_prompt_review_bundle_for_core_roles() {
                 canonical_tool_names = Some(tool_names.clone());
             }
 
-            if provider == ProviderCase::OpenAiCompatible {
+            if provider == ProviderCase::OpenAiChatCompletions {
                 assert!(!markdown.contains("run_command(program"));
                 for (step_index, provider_request) in provider_requests.iter().enumerate() {
                     let step_number = step_index + 1;
@@ -300,21 +300,23 @@ fn runtime_exports_real_system_prompt_review_bundle_for_core_roles() {
     assert!(!index_markdown.contains("You are Agent-OS,"));
     assert!(!index_markdown.contains("# Agent-OS Runtime Contract"));
     assert!(index_markdown.contains("runtime-system-prompt-producer.md"));
-    assert!(index_markdown.contains("runtime-provider-request-producer-openai-compatible.jsonl"));
-    assert!(index_markdown.contains("runtime-provider-request-producer-anthropic-compatible.jsonl"));
+    assert!(
+        index_markdown.contains("runtime-provider-request-producer-openai_chat_completions.jsonl")
+    );
+    assert!(index_markdown.contains("runtime-provider-request-producer-anthropic_messages.jsonl"));
     assert!(index_markdown.contains("runtime-model-visible-context-producer-step-01.md"));
     assert!(index_markdown.contains("runtime-tools-supervisor-step-01.md"));
     assert!(!audit_dir
-        .join("runtime-system-prompt-producer-openai-compatible.md")
+        .join("runtime-system-prompt-producer-openai_chat_completions.md")
         .exists());
     assert!(!audit_dir
-        .join("runtime-tools-producer-openai-compatible-step-01.md")
+        .join("runtime-tools-producer-openai_chat_completions-step-01.md")
         .exists());
     assert!(!audit_dir
-        .join("runtime-messages-producer-anthropic-compatible-step-01.md")
+        .join("runtime-messages-producer-anthropic_messages-step-01.md")
         .exists());
     assert!(!audit_dir
-        .join("runtime-system-prompt-worker-openai-compatible.md")
+        .join("runtime-system-prompt-worker-openai_chat_completions.md")
         .exists());
     let markdown_count = fs::read_dir(&audit_dir)
         .unwrap()
@@ -513,7 +515,7 @@ fn run_prompt_export_case(
 
     let client = agent_os_thread::OpenAiModelClient::new("test-key", "prompt-export-model")
         .with_api_base(endpoint)
-        .with_api_style(provider.api_style())
+        .with_endpoint(provider.endpoint())
         .with_request_timeout(Duration::from_secs(5))
         .with_audit_log(audit_log);
     let mut runtime = agent_os_thread::ThreadRuntime::new(kernel, agent.thread_id, client);
@@ -710,16 +712,16 @@ fn serve_prompt_export_endpoint(
             .unwrap();
         let request = read_http_json(&mut stream);
         let response = match (provider, step_index) {
-            (ProviderCase::OpenAiCompatible, 0) => openai_read_response(),
-            (ProviderCase::OpenAiCompatible, 1) => openai_load_skill_response(),
-            (ProviderCase::OpenAiCompatible, 2) => openai_mcp_response(),
-            (ProviderCase::OpenAiCompatible, _) => {
+            (ProviderCase::OpenAiChatCompletions, 0) => openai_read_response(),
+            (ProviderCase::OpenAiChatCompletions, 1) => openai_load_skill_response(),
+            (ProviderCase::OpenAiChatCompletions, 2) => openai_mcp_response(),
+            (ProviderCase::OpenAiChatCompletions, _) => {
                 openai_final_response(evidence_refs_from_provider_request(&request, provider))
             }
-            (ProviderCase::AnthropicCompatible, 0) => anthropic_read_response(),
-            (ProviderCase::AnthropicCompatible, 1) => anthropic_load_skill_response(),
-            (ProviderCase::AnthropicCompatible, 2) => anthropic_mcp_response(),
-            (ProviderCase::AnthropicCompatible, _) => {
+            (ProviderCase::AnthropicMessages, 0) => anthropic_read_response(),
+            (ProviderCase::AnthropicMessages, 1) => anthropic_load_skill_response(),
+            (ProviderCase::AnthropicMessages, 2) => anthropic_mcp_response(),
+            (ProviderCase::AnthropicMessages, _) => {
                 anthropic_final_response(evidence_refs_from_provider_request(&request, provider))
             }
         };
@@ -939,7 +941,7 @@ fn find_header_end(bytes: &[u8]) -> Option<usize> {
 
 fn evidence_refs_from_provider_request(request: &Value, provider: ProviderCase) -> Vec<String> {
     match provider {
-        ProviderCase::OpenAiCompatible => request["messages"]
+        ProviderCase::OpenAiChatCompletions => request["messages"]
             .as_array()
             .into_iter()
             .flatten()
@@ -948,7 +950,7 @@ fn evidence_refs_from_provider_request(request: &Value, provider: ProviderCase) 
             .filter_map(|content| serde_json::from_str::<Value>(content).ok())
             .flat_map(evidence_ids_from_tool_result_content)
             .collect(),
-        ProviderCase::AnthropicCompatible => request["messages"]
+        ProviderCase::AnthropicMessages => request["messages"]
             .as_array()
             .into_iter()
             .flatten()
@@ -983,27 +985,27 @@ fn read_jsonl_entries(path: &Path) -> Vec<Value> {
 
 fn system_prompt_from_provider_request(provider_request: &Value, provider: ProviderCase) -> &str {
     match provider {
-        ProviderCase::OpenAiCompatible => provider_request["body"]["messages"]
+        ProviderCase::OpenAiChatCompletions => provider_request["body"]["messages"]
             .as_array()
             .unwrap()
             .iter()
             .find(|message| message["role"] == "system")
             .and_then(|message| message["content"].as_str())
             .unwrap(),
-        ProviderCase::AnthropicCompatible => provider_request["body"]["system"].as_str().unwrap(),
+        ProviderCase::AnthropicMessages => provider_request["body"]["system"].as_str().unwrap(),
     }
 }
 
 fn system_prompt_from_raw_request(request: &Value, provider: ProviderCase) -> &str {
     match provider {
-        ProviderCase::OpenAiCompatible => request["messages"]
+        ProviderCase::OpenAiChatCompletions => request["messages"]
             .as_array()
             .unwrap()
             .iter()
             .find(|message| message["role"] == "system")
             .and_then(|message| message["content"].as_str())
             .unwrap(),
-        ProviderCase::AnthropicCompatible => request["system"].as_str().unwrap(),
+        ProviderCase::AnthropicMessages => request["system"].as_str().unwrap(),
     }
 }
 
@@ -1011,8 +1013,8 @@ fn provider_tool_names(provider_request: &Value, provider: ProviderCase) -> Vec<
     provider_tools(provider_request, provider)
         .iter()
         .filter_map(|tool| match provider {
-            ProviderCase::OpenAiCompatible => tool["function"]["name"].as_str(),
-            ProviderCase::AnthropicCompatible => tool["name"].as_str(),
+            ProviderCase::OpenAiChatCompletions => tool["function"]["name"].as_str(),
+            ProviderCase::AnthropicMessages => tool["name"].as_str(),
         })
         .map(str::to_string)
         .collect()
@@ -1020,15 +1022,15 @@ fn provider_tool_names(provider_request: &Value, provider: ProviderCase) -> Vec<
 
 fn provider_tool_description(tool: &Value, provider: ProviderCase) -> &str {
     match provider {
-        ProviderCase::OpenAiCompatible => tool["function"]["description"].as_str().unwrap(),
-        ProviderCase::AnthropicCompatible => tool["description"].as_str().unwrap(),
+        ProviderCase::OpenAiChatCompletions => tool["function"]["description"].as_str().unwrap(),
+        ProviderCase::AnthropicMessages => tool["description"].as_str().unwrap(),
     }
 }
 
 fn provider_tool_name(tool: &Value, provider: ProviderCase) -> &str {
     match provider {
-        ProviderCase::OpenAiCompatible => tool["function"]["name"].as_str().unwrap(),
-        ProviderCase::AnthropicCompatible => tool["name"].as_str().unwrap(),
+        ProviderCase::OpenAiChatCompletions => tool["function"]["name"].as_str().unwrap(),
+        ProviderCase::AnthropicMessages => tool["name"].as_str().unwrap(),
     }
 }
 
@@ -1173,8 +1175,8 @@ fn write_model_visible_context_markdown(input: ModelVisibleContextMarkdown<'_>) 
 
 fn provider_tool_schema(tool: &Value, provider: ProviderCase) -> Value {
     match provider {
-        ProviderCase::OpenAiCompatible => tool["function"]["parameters"].clone(),
-        ProviderCase::AnthropicCompatible => tool["input_schema"].clone(),
+        ProviderCase::OpenAiChatCompletions => tool["function"]["parameters"].clone(),
+        ProviderCase::AnthropicMessages => tool["input_schema"].clone(),
     }
 }
 

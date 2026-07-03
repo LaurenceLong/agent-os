@@ -188,7 +188,7 @@ project `.agent-os/config.json` overlays are never masked by the global backup,
 because project config remains repository-owned non-secret policy and must be
 fixed at the project boundary.
 
-The current runtime config uses an OpenCode-inspired provider/model surface:
+The current runtime config uses an explicit Agent-OS provider/model surface:
 
 ```json
 {

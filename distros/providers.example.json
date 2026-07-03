@@ -1,10 +1,10 @@
-{
+﻿{
   "model": "openai/gpt-4o",
   "small_model": "openai/gpt-4o-mini",
   "provider": {
     "openai": {
       "api_key": "replace-with-your-api-key",
-      "api_style": "openai-compatible",
+      "endpoint": "openai_chat_completions",
       "options": {
         "base_url": "https://api.openai.com/v1",
         "timeout_ms": 120000
@@ -28,7 +28,7 @@
     },
     "anthropic": {
       "api_key": "replace-with-your-api-key",
-      "api_style": "anthropic-compatible",
+      "endpoint": "anthropic_messages",
       "options": {
         "base_url": "https://api.anthropic.com",
         "timeout_ms": 120000

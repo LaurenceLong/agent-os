@@ -5,37 +5,49 @@ use serde_json::Value;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LlmApiStyle {
-    OpenAiCompatible,
-    AnthropicCompatible,
+    OpenAiChatCompletions,
+    OpenAiResponses,
+    AnthropicMessages,
 }
 
 impl LlmApiStyle {
     pub fn from_value(value: &str) -> AgentOsResult<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "openai" | "openai-compatible" | "openai_compatible" | "chat-completions"
-            | "chat_completions" => Ok(Self::OpenAiCompatible),
-            "anthropic" | "anthropic-compatible" | "anthropic_compatible" | "messages" => {
-                Ok(Self::AnthropicCompatible)
-            }
+        match value {
+            "openai_chat_completions" => Ok(Self::OpenAiChatCompletions),
+            "openai_responses" => Ok(Self::OpenAiResponses),
+            "anthropic_messages" => Ok(Self::AnthropicMessages),
             other => Err(AgentOsError::Validation(format!(
-                "unsupported api_style {other}; expected openai-compatible or anthropic-compatible"
+                "unsupported provider endpoint {other}; expected openai_chat_completions, openai_responses, or anthropic_messages"
             ))),
         }
     }
 
-    pub fn from_base_url(api_base: &str) -> Self {
-        if api_base
-            .trim_end_matches('/')
-            .to_ascii_lowercase()
-            .ends_with("/anthropic")
-        {
-            return Self::AnthropicCompatible;
+    pub fn provider_label(self) -> &'static str {
+        match self {
+            Self::OpenAiChatCompletions => "openai_chat_completions",
+            Self::OpenAiResponses => "openai_responses",
+            Self::AnthropicMessages => "anthropic_messages",
         }
-        Self::OpenAiCompatible
+    }
+
+    pub fn request_path(self) -> &'static str {
+        match self {
+            Self::OpenAiChatCompletions => "/chat/completions",
+            Self::OpenAiResponses => "/responses",
+            Self::AnthropicMessages => "/v1/messages",
+        }
+    }
+
+    pub fn is_openai_family(self) -> bool {
+        matches!(self, Self::OpenAiChatCompletions | Self::OpenAiResponses)
+    }
+
+    pub fn is_anthropic_messages(self) -> bool {
+        self == Self::AnthropicMessages
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CredentialRef {
     pub credential_ref_id: String,
     pub source: CredentialSource,
@@ -192,6 +204,7 @@ pub struct ProviderRouteDecision {
     pub provider_id: String,
     pub provider_model_name: String,
     pub model_capabilities: ModelCapabilities,
+    pub model_limit: ModelLimit,
     pub credential_ref_id: String,
     pub resolved_at: String,
 }
