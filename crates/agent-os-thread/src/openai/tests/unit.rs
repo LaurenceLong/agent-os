@@ -1310,6 +1310,46 @@ fn map_function_call_supports_agent_control_actions() {
 }
 
 #[test]
+fn map_function_call_assigns_agent_control_risk_by_action_family() {
+    let tmp = std::env::temp_dir().join(format!("aos-openai-ac-risk-{}", new_id("t_")));
+    let (_kernel, request) = make_kernel_request_for_role(
+        &tmp,
+        "role_supervisor",
+        "inspect agent control action risks",
+        vec!["agent control risk mapping is stable".to_string()],
+    );
+    let expected = [
+        ("status", 1),
+        ("output", 1),
+        ("export_trace", 1),
+        ("start", 4),
+        ("set_hook", 4),
+        ("send", 4),
+        ("resume", 4),
+        ("stop", 4),
+        ("set_timeout", 4),
+        ("approve_permission", 4),
+        ("deny_permission", 4),
+        ("kill", 6),
+        ("delete_session", 6),
+        ("purge_state", 6),
+    ];
+
+    for (action, expected_risk) in expected {
+        let (tool_name, input, risk) = map_function_call(
+            "agent_control",
+            json!({"action": action, "payload": {"thread_id": "thread_example"}}),
+            &request,
+        )
+        .unwrap();
+
+        assert_eq!(tool_name, "agent_control");
+        assert_eq!(input["action"], action);
+        assert_eq!(risk, expected_risk, "unexpected risk for {action}");
+    }
+}
+
+#[test]
 fn map_function_call_supports_skill_and_mcp_tools() {
     let tmp = std::env::temp_dir().join(format!("aos-openai-ecosystem-map-{}", new_id("t_")));
     let mut request = make_request(&tmp);

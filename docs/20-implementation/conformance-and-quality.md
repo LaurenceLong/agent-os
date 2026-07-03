@@ -372,6 +372,9 @@ deterministic system-prompt export conformance additionally writes
 context snapshots and context compactions appear in provider-visible prompt
 content across Chat Completions, OpenAI Responses, and Anthropic Messages
 provider wire shapes.
+Parser-level unit coverage additionally locks the model adapter
+`agent_control` action-to-risk mapping for read-only, mutation, terminal,
+cleanup, and permission action families before requests reach the kernel guard.
 
 The 2026-06-30 long-running kernel refactor gate used the all-scenario command
 above from WSL with exported provider variables. The observed result was 10
