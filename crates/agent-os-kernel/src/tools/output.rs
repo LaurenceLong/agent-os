@@ -6,9 +6,9 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 
-const DEFAULT_NEW_LINES: usize = 200;
-const DEFAULT_PAGE_LINES: usize = 200;
-const MAX_LINES: usize = 1000;
+const DEFAULT_NEW_LINES: usize = TOOL_OUTPUT_DEFAULT_NEW_LINES as usize;
+const DEFAULT_PAGE_LINES: usize = TOOL_OUTPUT_DEFAULT_PAGE_LINES as usize;
+const MAX_LINES: usize = TOOL_OUTPUT_MAX_LINES as usize;
 
 pub(super) fn attach_output_management(
     kernel: &Kernel,
@@ -49,7 +49,7 @@ pub(super) fn attach_output_management(
             "default_new_lines": DEFAULT_NEW_LINES,
             "default_page_lines": DEFAULT_PAGE_LINES,
             "max_lines": MAX_LINES,
-            "max_window_bytes": super::builtin::run_command::OUTPUT_PREVIEW_CHARS,
+            "max_window_bytes": TOOL_OUTPUT_MAX_WINDOW_BYTES,
             "fields": fields
         }),
     );
@@ -432,7 +432,7 @@ fn window_json(window: super::StreamWindow) -> Value {
 }
 
 fn max_window_bytes() -> usize {
-    super::builtin::run_command::OUTPUT_PREVIEW_CHARS
+    TOOL_OUTPUT_MAX_WINDOW_BYTES as usize
 }
 
 fn first_lines(window: super::StreamWindow, line_limit: usize) -> super::StreamWindow {

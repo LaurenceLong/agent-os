@@ -1,4 +1,4 @@
-use super::{read_file, schema, BuiltinTool, FOREGROUND_TIMEOUT};
+use super::{read_file, schema, BuiltinTool};
 use crate::*;
 use agent_os_sys::*;
 use serde_json::{json, Value};
@@ -8,7 +8,6 @@ pub(super) fn tool() -> BuiltinTool {
         name: "read_skill_resource",
         descriptor,
         execute,
-        foreground_timeout: FOREGROUND_TIMEOUT,
     }
 }
 

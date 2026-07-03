@@ -265,7 +265,24 @@ fn local_stdio_mcp_registers_and_executes_with_kernel_permissions() {
     let state = fx.kernel.state_snapshot().unwrap();
     let tool = state.mcp_tools.get("mcp__echo__echo").unwrap();
     assert_eq!(tool.server_name, "echo");
-    assert!(state.tool_descriptors.contains_key("mcp__echo__echo"));
+    let descriptor = state.tool_descriptors.get("mcp__echo__echo").unwrap();
+    assert_eq!(descriptor.driver_class, ToolDriverClass::Mcp);
+    assert_eq!(
+        descriptor.lifecycle.foreground_timeout_ms,
+        DEFAULT_TOOL_FOREGROUND_TIMEOUT_MS
+    );
+    assert_eq!(
+        descriptor.lifecycle.background_execution,
+        ToolBackgroundExecution::KernelWorker
+    );
+    assert_eq!(
+        descriptor.lifecycle.output_management.mode,
+        ToolOutputManagementMode::ManagedTextFields
+    );
+    assert_eq!(
+        descriptor.lifecycle.output_management.max_window_bytes,
+        TOOL_OUTPUT_MAX_WINDOW_BYTES
+    );
 
     let _lease = attach_writable_environment(&fx);
     let allowed = fx

@@ -26,9 +26,6 @@ mod update_checklist;
 use crate::*;
 use agent_os_sys::*;
 use serde_json::Value;
-use std::time::Duration;
-
-pub(super) const FOREGROUND_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Clone, Copy)]
 pub(super) struct BuiltinTool {
@@ -36,7 +33,6 @@ pub(super) struct BuiltinTool {
     pub descriptor: fn(&str) -> ToolDescriptor,
     pub execute:
         fn(&Kernel, &SyscallEnvelope, &ToolDescriptor, &str, &Value) -> AgentOsResult<Value>,
-    pub foreground_timeout: Duration,
 }
 
 pub(crate) fn core_tool_descriptors(now: &str) -> Vec<ToolDescriptor> {
@@ -82,6 +78,35 @@ mod tests {
 
         assert_eq!(descriptors.len(), all_tools().len());
         for descriptor in descriptors {
+            assert_eq!(
+                descriptor.lifecycle.foreground_timeout_ms, DEFAULT_TOOL_FOREGROUND_TIMEOUT_MS,
+                "{} must declare the default foreground timeout",
+                descriptor.name
+            );
+            assert_eq!(
+                descriptor.lifecycle.background_execution,
+                ToolBackgroundExecution::KernelWorker,
+                "{} must declare kernel-worker background execution",
+                descriptor.name
+            );
+            assert_eq!(
+                descriptor.lifecycle.recovery,
+                ToolRecoveryPolicy::CancelOrphanRunning,
+                "{} must declare orphan-running recovery behavior",
+                descriptor.name
+            );
+            assert_eq!(
+                descriptor.lifecycle.output_management.mode,
+                ToolOutputManagementMode::ManagedTextFields,
+                "{} must declare managed text output behavior",
+                descriptor.name
+            );
+            assert_eq!(
+                descriptor.lifecycle.output_management.max_window_bytes,
+                TOOL_OUTPUT_MAX_WINDOW_BYTES,
+                "{} must declare the managed output byte window",
+                descriptor.name
+            );
             assert!(
                 !descriptor.examples.is_empty(),
                 "{} must define at least one example in its owner file",

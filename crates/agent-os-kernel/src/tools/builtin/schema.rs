@@ -1,6 +1,6 @@
 use agent_os_sys::{
     EvidenceType, IdempotencyMode, ToolDescriptor, ToolDriverClass, ToolExample,
-    ToolRuntimeInputPolicy,
+    ToolLifecyclePolicy, ToolRuntimeInputPolicy,
 };
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -33,6 +33,7 @@ pub(super) fn descriptor(now: &str, spec: DescriptorSpec) -> ToolDescriptor {
         examples: spec.examples,
         output_schema: spec.output_schema,
         runtime_input_policy: spec.runtime_input_policy,
+        lifecycle: ToolLifecyclePolicy::default(),
         idempotency: spec.idempotency,
         evidence_type: spec.evidence_type,
         created_at: now.to_string(),

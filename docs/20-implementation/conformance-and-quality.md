@@ -103,6 +103,8 @@ Tool driver tests MUST verify:
 - output schema validation
 - risk declaration
 - idempotency declaration
+- descriptor lifecycle policy declaration, including foreground timeout,
+  background continuation, managed output limits, and orphan-running recovery
 - audit event emission
 - evidence capture when applicable
 - secret redaction behavior
@@ -117,7 +119,8 @@ Tool driver tests MUST verify:
 - local stdio MCP fixtures cover `tools/list`, dynamic tool registration,
   `tools/call`, schema validation, and permission denial
 - every managed text tool-output field is queryable through the unified
-  tool-output manager without inlining the full value into model context
+  tool-output manager without inlining the full value into model context, and
+  those output limits match descriptor lifecycle policy
 - `tool_call_id` output lookup defaults to new output, supports bounded
   `head`/`tail` windows, and supports `full=true` with `offset`/`limit` line
   paging over the complete spooled field

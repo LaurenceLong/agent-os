@@ -200,6 +200,10 @@ manual_compensation_required
 
 Non-idempotent high-risk tool calls SHOULD require approval.
 
+Tool descriptors MUST also declare lifecycle policy: foreground timeout,
+background continuation, managed output limits, and recovery behavior. Replay
+uses lifecycle events, not live worker state, as the source of truth.
+
 `ToolCallProgressed` records non-terminal progress for a started invocation.
 The canonical use is the 15 second foreground wait cap: the invocation becomes
 `Running`, model-visible output includes `tool_call_id`, and the background

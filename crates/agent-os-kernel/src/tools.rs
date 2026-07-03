@@ -10,6 +10,7 @@ use crate::*;
 use agent_os_sys::*;
 use serde_json::json;
 use std::sync::mpsc;
+use std::time::Duration;
 
 #[derive(Debug, Clone, Copy)]
 pub(in crate::tools) enum ToolOutputStream {
@@ -201,9 +202,7 @@ impl Kernel {
         invocation: ToolInvocation,
         causation_id: Option<String>,
     ) -> AgentOsResult<ToolInvocation> {
-        let foreground_timeout = builtin::tool(&descriptor.name)
-            .map(|tool| tool.foreground_timeout)
-            .unwrap_or(builtin::FOREGROUND_TIMEOUT);
+        let foreground_timeout = Duration::from_millis(descriptor.lifecycle.foreground_timeout_ms);
         let call_id = invocation.call_id.clone();
         let running_snapshot = invocation.clone();
         self.register_tool_worker(&invocation)?;

@@ -1063,6 +1063,39 @@ fn default_tool_registry_is_minimal() {
             "submit_final",
         ])
     );
+    let run_command = state.tool_descriptors.get("run_command").unwrap();
+    assert_eq!(
+        run_command.lifecycle.foreground_timeout_ms,
+        DEFAULT_TOOL_FOREGROUND_TIMEOUT_MS
+    );
+    assert_eq!(
+        run_command.lifecycle.background_execution,
+        ToolBackgroundExecution::KernelWorker
+    );
+    assert_eq!(
+        run_command.lifecycle.recovery,
+        ToolRecoveryPolicy::CancelOrphanRunning
+    );
+    assert_eq!(
+        run_command.lifecycle.output_management.mode,
+        ToolOutputManagementMode::ManagedTextFields
+    );
+    assert_eq!(
+        run_command.lifecycle.output_management.default_new_lines,
+        TOOL_OUTPUT_DEFAULT_NEW_LINES
+    );
+    assert_eq!(
+        run_command.lifecycle.output_management.default_page_lines,
+        TOOL_OUTPUT_DEFAULT_PAGE_LINES
+    );
+    assert_eq!(
+        run_command.lifecycle.output_management.max_lines,
+        TOOL_OUTPUT_MAX_LINES
+    );
+    assert_eq!(
+        run_command.lifecycle.output_management.max_window_bytes,
+        TOOL_OUTPUT_MAX_WINDOW_BYTES
+    );
 }
 
 #[test]
@@ -1111,6 +1144,35 @@ fn tool_invocation_rejects_input_schema_violations_before_side_effects() {
         .unwrap()
         .iter()
         .any(|event| event.event_type == "ToolCallStarted"));
+}
+
+#[test]
+fn tool_descriptor_registration_rejects_invalid_lifecycle_policy() {
+    let fx = fixture();
+    let err = fx
+        .kernel
+        .register_tool_descriptor(ToolDescriptor {
+            tool_id: "tool_bad_lifecycle".to_string(),
+            name: "bad_lifecycle".to_string(),
+            version: "0.3.0".to_string(),
+            driver_class: ToolDriverClass::KernelBuiltin,
+            risk_level: 1,
+            input_schema: json!({"type": "object"}),
+            output_schema: json!({"type": "object"}),
+            lifecycle: ToolLifecyclePolicy {
+                foreground_timeout_ms: 0,
+                ..ToolLifecyclePolicy::default()
+            },
+            idempotency: IdempotencyMode::KernelDeduplicated,
+            evidence_type: None,
+            created_at: now_rfc3339(),
+            ..ToolDescriptor::default()
+        })
+        .unwrap_err();
+    assert!(
+        matches!(err, AgentOsError::Validation(ref message) if message.contains("foreground timeout")),
+        "{err:?}"
+    );
 }
 
 #[test]

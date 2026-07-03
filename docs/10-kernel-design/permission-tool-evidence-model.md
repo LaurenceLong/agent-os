@@ -207,7 +207,10 @@ Local stdio MCP tools are registered as dynamic model-visible tools named
 `mcp__server__tool`. Their `ToolDescriptor` comes from the kernel registry and
 uses driver class `mcp`. MCP authorization is controlled by driver class and
 resource scope, especially `mcp:<server>:<tool>`, because the exact model tool
-names are discovered at runtime.
+names are discovered at runtime. Dynamic MCP descriptors use the same lifecycle
+policy ABI as built-in tools: foreground wait cap, kernel-worker continuation,
+managed text output limits, and orphan-running recovery are descriptor data
+rather than adapter-local behavior.
 
 `set_goal` and `agent_control` require `security_level <= 1` and explicit tool authority. S2+ agents MUST NOT gain these tools through permission grants. `request_permissions` remains available to lower-level child agents when their permission set allows it; it records a durable parent-directed request and does not execute the requested operation. `accomplish_goal` is visible to execution agents and marks the caller's local goal accomplished before final submission. `submit_final` is a model-visible lifecycle action, not a filesystem driver, and MUST execute through the Tool Broker as the last tool call in a session. Privileged `agent_control` actions require explicit Supervisor permission and MUST NOT appear in normal ProducerAgent tool views.
 
@@ -230,9 +233,11 @@ Tool Broker responsibilities:
 - check risk level
 - check environment attachment and writable lease state where applicable
 - check budget admission
+- enforce descriptor-declared lifecycle policy for foreground waits,
+  background continuation, output management, and recovery
 - request approval when required
 - execute through the registered tool owner or dynamic MCP driver
-- enforce the 15 second foreground wait cap for every tool invocation
+- enforce the descriptor foreground wait cap for every tool invocation
 - return `Running` with `tool_call_id` when a tool exceeds the foreground wait
   cap while it continues in a background worker
 - capture bounded stdout, stderr, return code, and structured output

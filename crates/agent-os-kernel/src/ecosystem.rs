@@ -162,6 +162,7 @@ pub fn mcp_tool_descriptor(
             required_resource_scopes: vec![format!("mcp:{}:{}", server.name, tool_name)],
             ..ToolRuntimeInputPolicy::default()
         },
+        lifecycle: ToolLifecyclePolicy::default(),
         driver_config: json!({
             "server_name": server.name,
             "tool_name": tool_name,

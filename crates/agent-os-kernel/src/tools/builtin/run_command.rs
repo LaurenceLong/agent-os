@@ -1,16 +1,15 @@
-use super::{schema, BuiltinTool, FOREGROUND_TIMEOUT};
+use super::{schema, BuiltinTool};
 use crate::*;
 use agent_os_sys::*;
 use serde_json::{json, Value};
 
-pub(in crate::tools) const OUTPUT_PREVIEW_CHARS: usize = 8_000;
+pub(in crate::tools) const OUTPUT_PREVIEW_CHARS: usize = TOOL_OUTPUT_MAX_WINDOW_BYTES as usize;
 
 pub(super) fn tool() -> BuiltinTool {
     BuiltinTool {
         name: "run_command",
         descriptor,
         execute,
-        foreground_timeout: FOREGROUND_TIMEOUT,
     }
 }
 
