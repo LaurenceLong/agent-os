@@ -951,6 +951,70 @@ mod tests {
     }
 
     #[test]
+    fn discovery_reads_ignore_rules_when_gitignore_exists() {
+        let root = std::env::temp_dir().join(format!(
+            "agent-os-discovery-gitignore-plus-ignore-unit-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("target")).unwrap();
+        fs::create_dir_all(root.join("node_modules")).unwrap();
+        fs::write(root.join(".gitignore"), "").unwrap();
+        fs::write(root.join(".ignore"), "target/\nnode_modules/\n").unwrap();
+        fs::write(root.join("visible.txt"), "needle visible\n").unwrap();
+        fs::write(root.join("target/generated.txt"), "needle target\n").unwrap();
+        fs::write(root.join("node_modules/package.txt"), "needle module\n").unwrap();
+
+        let glob = parse_glob_request(&json!({
+            "pattern": "**/*.txt",
+            "limit": 20
+        }))
+        .unwrap();
+        let glob_output = run_glob(
+            &ToolDescriptor {
+                tool_id: "test".to_string(),
+                name: "glob_files".to_string(),
+                ..ToolDescriptor::default()
+            },
+            &json!({}),
+            &root,
+            &root,
+            fs::metadata(&root).unwrap(),
+            glob,
+        )
+        .unwrap();
+        assert_eq!(glob_output["matches"][0]["path"], "visible.txt");
+        assert_eq!(glob_output["files_skipped"], 2);
+
+        let grep = parse_grep_request(&json!({
+            "pattern": "needle",
+            "include": "**/*.txt",
+            "limit": 20
+        }))
+        .unwrap();
+        let grep_output = run_grep(
+            &ToolDescriptor {
+                tool_id: "test".to_string(),
+                name: "grep_files".to_string(),
+                ..ToolDescriptor::default()
+            },
+            &json!({}),
+            &root,
+            &root,
+            fs::metadata(&root).unwrap(),
+            grep,
+        )
+        .unwrap();
+        assert_eq!(grep_output["matches"][0]["path"], "visible.txt");
+        assert_eq!(grep_output["files_skipped"], 2);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn discovery_reads_ignore_file_without_disabling_default_dirs() {
         let root = std::env::temp_dir().join(format!(
             "agent-os-discovery-ignore-file-unit-{}-{}",
