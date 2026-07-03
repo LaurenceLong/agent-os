@@ -36,6 +36,7 @@ pub struct KernelState {
     pub communication_profiles: HashMap<String, CommunicationProfile>,
     pub capabilities: HashMap<String, CapabilityToken>,
     pub tool_descriptors: HashMap<String, ToolDescriptor>,
+    pub tool_plans: HashMap<String, ToolPlan>,
     pub tool_invocations: HashMap<String, ToolInvocation>,
     pub environments: HashMap<String, ExecutionEnvironment>,
     pub environment_leases: HashMap<String, EnvironmentLease>,

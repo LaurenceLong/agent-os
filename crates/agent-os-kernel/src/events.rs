@@ -232,6 +232,10 @@ impl Kernel {
                     .tool_descriptors
                     .insert(descriptor.name.clone(), descriptor);
             }
+            "ToolPlanCreated" => {
+                let plan: ToolPlan = parse_payload(&event.payload)?;
+                state.tool_plans.insert(plan.plan_id.clone(), plan);
+            }
             "ToolCallProposed" | "ToolCallStarted" | "ToolCallProgressed" | "ToolCallCompleted"
             | "ToolCallFailed" | "ToolCallDenied" | "ToolCallReconciled" => {
                 let invocation: ToolInvocation = parse_payload(&event.payload)?;

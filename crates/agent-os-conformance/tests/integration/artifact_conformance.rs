@@ -2047,6 +2047,36 @@ fn kernel_tool_plan_projects_direct_hidden_and_disabled_tools() {
         .find(|entry| entry.descriptor.name == "apply_patch")
         .unwrap();
     assert_eq!(apply_patch.exposure, ToolExposure::Hidden);
+
+    let events = fx.kernel.events().unwrap();
+    assert!(events.iter().any(|event| {
+        event.event_type == "ToolPlanCreated" && event.aggregate_id == producer_plan.plan_id
+    }));
+    let replayed = Kernel::from_events(&events).unwrap();
+    let replayed_state = replayed.state_snapshot().unwrap();
+    let replayed_plan = replayed_state
+        .tool_plans
+        .get(&producer_plan.plan_id)
+        .unwrap();
+    assert_eq!(replayed_plan.thread_id, fx.worker.thread_id);
+    assert_eq!(replayed_plan.agent_id, fx.worker.agent_id);
+    assert_eq!(replayed_plan.task_id, fx.task.task_id);
+    assert_eq!(replayed_plan.mode, ToolPlanningMode::Normal);
+    assert!(replayed_plan
+        .entries
+        .iter()
+        .any(|entry| entry.descriptor.name == "tool_search"
+            && entry.exposure == ToolExposure::Direct));
+    assert!(replayed_plan
+        .entries
+        .iter()
+        .any(|entry| entry.descriptor.name == "mcp__echo__echo"
+            && entry.exposure == ToolExposure::Deferred));
+    assert!(replayed_plan
+        .entries
+        .iter()
+        .any(|entry| entry.descriptor.name == "read_image"
+            && entry.exposure == ToolExposure::Disabled));
 }
 
 #[test]

@@ -72,7 +72,7 @@ impl Kernel {
             }
         }
 
-        Ok(ToolPlan {
+        let plan = ToolPlan {
             plan_id: new_id("tool_plan_"),
             thread_id: thread.thread_id.clone(),
             agent_id: thread.agent_id.clone(),
@@ -81,7 +81,18 @@ impl Kernel {
             model_capabilities,
             entries,
             created_at: now_rfc3339(),
-        })
+        };
+        self.emit(
+            "ToolPlanCreated",
+            "tool_plan",
+            &plan.plan_id,
+            Some(plan.agent_id.clone()),
+            Some(plan.task_id.clone()),
+            None,
+            None,
+            &plan,
+        )?;
+        Ok(plan)
     }
 
     fn plan_tool_exposure(
