@@ -229,9 +229,14 @@ fn openai_chat_completions_mock_adapter_runs_every_core_tool() {
     let tool_calls = vec![
         ("call_read", "read_file", json!({"path": "read.txt"})),
         (
-            "call_search",
-            "search_files",
-            json!({"query": "read me", "mode": "content", "limit": 10}),
+            "call_glob",
+            "glob_files",
+            json!({"pattern": "read.txt", "limit": 10}),
+        ),
+        (
+            "call_grep",
+            "grep_files",
+            json!({"pattern": "read me", "path": "read.txt", "limit": 10}),
         ),
         ("call_image", "read_image", json!({"path": "shot.png"})),
         (
@@ -391,7 +396,7 @@ fn openai_chat_completions_mock_adapter_runs_every_core_tool() {
             }),
         ],
     );
-    assert_eq!(messages.iter().filter(|m| m["role"] == "tool").count(), 15);
+    assert_eq!(messages.iter().filter(|m| m["role"] == "tool").count(), 16);
     let first_args: Value = serde_json::from_str(
         messages[2]["tool_calls"][0]["function"]["arguments"]
             .as_str()
@@ -433,7 +438,8 @@ fn anthropic_messages_mock_adapter_runs_every_core_tool() {
         "role": "assistant",
         "content": [
             {"type": "tool_use", "id": "toolu_read", "name": "read_file", "input": {"path": "read.txt"}},
-            {"type": "tool_use", "id": "toolu_search", "name": "search_files", "input": {"query": "read me", "mode": "content", "limit": 10}},
+            {"type": "tool_use", "id": "toolu_glob", "name": "glob_files", "input": {"pattern": "read.txt", "limit": 10}},
+            {"type": "tool_use", "id": "toolu_grep", "name": "grep_files", "input": {"pattern": "read me", "path": "read.txt", "limit": 10}},
             {"type": "tool_use", "id": "toolu_image", "name": "read_image", "input": {"path": "shot.png"}},
             {"type": "tool_use", "id": "toolu_write", "name": "apply_patch", "input": {"patch": "*** Begin Patch\n*** Add File: created.txt\n+created by provider mock\n*** End Patch\n"}},
             {"type": "tool_use", "id": "toolu_replace", "name": "apply_patch", "input": {"patch": "*** Begin Patch\n*** Update File: edit.txt\n@@\n-alpha old beta\n+alpha new beta\n*** End Patch\n"}},
@@ -542,7 +548,7 @@ fn anthropic_messages_mock_adapter_runs_every_core_tool() {
                     .is_some_and(|content| content.iter().any(|part| part["type"] == "tool_result"))
             })
             .count(),
-        15
+        16
     );
     assert_eq!(messages[1]["content"][0]["type"], "tool_use");
     assert_eq!(messages[2]["content"][0]["type"], "tool_result");

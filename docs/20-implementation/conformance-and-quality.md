@@ -110,7 +110,7 @@ Tool driver tests MUST verify:
 - secret redaction behavior
 - failure semantics
 - provider capability declaration for model-facing tools where applicable
-- Host OS tool surface contains exactly `search_files`, `read_file`, `read_image`, `apply_patch`, and `run_command`; `read_image` is visible only for image-capable model aliases, `search_files` provides shell-free workspace path/content discovery, and `apply_patch` covers workspace file creation, update, and deletion with exactly one file operation per call
+- Host OS tool surface contains exactly `glob_files`, `grep_files`, `read_file`, `read_image`, `apply_patch`, and `run_command`; `read_image` is visible only for image-capable model aliases, `glob_files` provides shell-free workspace path discovery by glob, `grep_files` provides shell-free UTF-8 content discovery by literal text, and `apply_patch` covers workspace file creation, update, and deletion with exactly one file operation per call
 - Agent-OS control-plane tools are grouped by work state, communication, permission request, agent supervision, privileged administration, and session lifecycle
 - `wait_agent` is absent from the core surface; child progress reporting is covered by `agent_control(action=set_hook)`
 - model-visible tools are filtered by effective permission set and S-level; `agent_control` and `set_goal` are hidden from S2+ views

@@ -11,7 +11,7 @@ pub(in crate::tools) const MAX_VISITED_FILES: usize = 20_000;
 
 pub(super) fn tool() -> BuiltinTool {
     BuiltinTool {
-        name: "search_files",
+        name: "grep_files",
         descriptor,
         execute,
     }
@@ -21,44 +21,44 @@ fn descriptor(now: &str) -> ToolDescriptor {
     schema::descriptor(
         now,
         schema::DescriptorSpec {
-            tool_id: "tool_search_files",
-            name: "search_files",
-            description: "Search workspace file paths and text content without shelling out. Use it before read_file when the relevant files are unknown.",
+            tool_id: "tool_grep_files",
+            name: "grep_files",
+            description: "Search UTF-8 workspace file contents by literal text without shelling out. Use include to narrow candidate file paths by glob.",
             driver_class: ToolDriverClass::Filesystem,
             risk_level: 1,
             input_schema: schema::object(
-            &["workspace_root", "query"],
+            &["workspace_root", "pattern"],
             json!({
                 "workspace_root": {"type": "string"},
-                "query": {"type": "string"},
+                "pattern": {"type": "string"},
                 "path": {"type": "string"},
-                "mode": {"enum": ["path", "content", "both"]},
+                "include": {"type": "string"},
                 "case_sensitive": {"type": "boolean"},
                 "offset": {"type": "integer", "minimum": 0},
                 "limit": {"type": "integer", "minimum": 1, "maximum": MAX_LIMIT}
             }),
         ),
             model_input_schema: schema::object(
-            &["query"],
+            &["pattern"],
             json!({
-                "query": {"type": "string", "description": "Literal substring to find in workspace-relative paths and/or UTF-8 text file lines."},
+                "pattern": {"type": "string", "description": "Literal text to find in UTF-8 workspace file lines. This is not a regular expression."},
                 "path": {"type": "string", "description": "Optional workspace-relative file or directory scope. Defaults to the workspace root. Do not use absolute paths or '..'."},
-                "mode": {"enum": ["path", "content", "both"], "description": "Defaults to both. Path mode matches workspace-relative paths; content mode matches UTF-8 file lines."},
+                "include": {"type": "string", "description": "Optional file glob relative to the search scope, such as \"**/*.rs\". Defaults to all files."},
                 "case_sensitive": {"type": "boolean", "description": "Defaults to false."},
                 "offset": {"type": "integer", "minimum": 0, "description": "Zero-based result offset. Defaults to 0."},
-                "limit": {"type": "integer", "minimum": 1, "maximum": MAX_LIMIT, "description": "Maximum results to return. Defaults to 50 and is capped at 200."}
+                "limit": {"type": "integer", "minimum": 1, "maximum": MAX_LIMIT, "description": "Maximum matches to return. Defaults to 50 and is capped at 200."}
             }),
         ),
             examples: vec![
                 schema::example(
-                    "Find files or lines mentioning a Rust symbol.",
-                    json!({"query": "ToolDescriptor", "path": "crates", "mode": "both", "limit": 50}),
-                    "Returns bounded path/content matches with workspace-relative paths and line numbers for content matches.",
+                    "Find lines mentioning a Rust symbol.",
+                    json!({"pattern": "ToolDescriptor", "path": "crates", "include": "**/*.rs", "limit": 50}),
+                    "Returns bounded content matches with workspace-relative paths, line numbers, and line previews.",
                 ),
                 schema::example(
-                    "Find candidate instruction files by path.",
-                    json!({"query": "AGENTS.md", "mode": "path"}),
-                    "Returns matching workspace-relative paths without running a shell command.",
+                    "Find instruction text anywhere in the workspace.",
+                    json!({"pattern": "forward-only", "limit": 20}),
+                    "Returns matching UTF-8 file lines without running a shell command.",
                 ),
             ],
             output_schema: schema::object(
@@ -67,8 +67,8 @@ fn descriptor(now: &str) -> ToolDescriptor {
                 "status",
                 "input",
                 "driver_class",
-                "query",
-                "mode",
+                "pattern",
+                "path",
                 "offset",
                 "limit",
                 "total_matches",
@@ -83,9 +83,10 @@ fn descriptor(now: &str) -> ToolDescriptor {
                 "status": {"enum": ["ok"]},
                 "input": {"type": "object"},
                 "driver_class": {"type": "string"},
-                "query": {"type": "string"},
-                "mode": {"enum": ["path", "content", "both"]},
+                "pattern": {"type": "string"},
                 "path": {"type": "string"},
+                "include": {"type": ["string", "null"]},
+                "case_sensitive": {"type": "boolean"},
                 "offset": {"type": "integer"},
                 "limit": {"type": "integer"},
                 "total_matches": {"type": "integer"},
@@ -95,12 +96,11 @@ fn descriptor(now: &str) -> ToolDescriptor {
                     "type": "array",
                     "items": {
                         "type": "object",
-                        "required": ["path", "match_kind"],
+                        "required": ["path", "line_number", "line"],
                         "properties": {
                             "path": {"type": "string"},
-                            "match_kind": {"enum": ["path", "content"]},
-                            "line_number": {"type": ["integer", "null"]},
-                            "line": {"type": ["string", "null"]}
+                            "line_number": {"type": "integer"},
+                            "line": {"type": "string"}
                         },
                         "additionalProperties": false
                     }
@@ -124,7 +124,7 @@ fn execute(
     _tool_call_id: &str,
     input: &Value,
 ) -> AgentOsResult<Value> {
-    super::super::driver::workspace::run_workspace_search_files(kernel, syscall, descriptor, input)
+    super::super::driver::workspace::run_workspace_grep_files(kernel, syscall, descriptor, input)
 }
 
 #[cfg(test)]
@@ -132,12 +132,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn schema_exposes_search_contract_and_hides_workspace_root() {
+    fn schema_exposes_grep_contract_and_hides_workspace_root() {
         let descriptor = descriptor("now");
         let model_schema = descriptor.model_input_schema.as_ref().unwrap();
 
-        assert!(model_schema.pointer("/properties/query").is_some());
-        assert!(model_schema.pointer("/properties/path").is_some());
+        assert!(model_schema.pointer("/properties/pattern").is_some());
+        assert!(model_schema.pointer("/properties/include").is_some());
         assert!(model_schema.pointer("/properties/workspace_root").is_none());
         assert_eq!(
             descriptor
@@ -147,8 +147,9 @@ mod tests {
                 .map(String::as_str),
             Some("workspace_root")
         );
-        assert!(descriptor.examples.iter().any(|example| {
-            example.parameters == json!({"query": "AGENTS.md", "mode": "path"})
-        }));
+        assert!(descriptor
+            .examples
+            .iter()
+            .any(|example| example.parameters.get("include").is_some()));
     }
 }

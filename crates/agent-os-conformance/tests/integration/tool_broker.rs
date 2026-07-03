@@ -57,16 +57,26 @@ fn tool_broker_integration_runs_all_model_visible_tool_families() {
         }),
         Some("source file was inspected"),
     );
-    let search = tools.invoke(
+    let glob = tools.invoke(
         1,
-        "search_files",
+        "glob_files",
         json!({
             "workspace_root": workspace.to_string_lossy(),
-            "query": "read me",
-            "mode": "content",
+            "pattern": "read.txt",
             "limit": 10
         }),
-        Some("workspace search located source content"),
+        Some("workspace glob located source path"),
+    );
+    let grep = tools.invoke(
+        1,
+        "grep_files",
+        json!({
+            "workspace_root": workspace.to_string_lossy(),
+            "pattern": "read me",
+            "path": "read.txt",
+            "limit": 10
+        }),
+        Some("workspace grep located source content"),
     );
     let image = tools.invoke(
         1,
@@ -239,10 +249,16 @@ fn tool_broker_integration_runs_all_model_visible_tool_families() {
             .trim(),
         "env-visible"
     );
-    assert_eq!(search.status, ToolCallStatus::Completed);
-    assert_eq!(search.output.as_ref().unwrap()["returned_matches"], 1);
+    assert_eq!(glob.status, ToolCallStatus::Completed);
+    assert_eq!(glob.output.as_ref().unwrap()["returned_matches"], 1);
     assert_eq!(
-        search.output.as_ref().unwrap()["matches"][0]["path"],
+        glob.output.as_ref().unwrap()["matches"][0]["path"],
+        "read.txt"
+    );
+    assert_eq!(grep.status, ToolCallStatus::Completed);
+    assert_eq!(grep.output.as_ref().unwrap()["returned_matches"], 1);
+    assert_eq!(
+        grep.output.as_ref().unwrap()["matches"][0]["path"],
         "read.txt"
     );
 
@@ -259,6 +275,8 @@ fn tool_broker_integration_runs_all_model_visible_tool_families() {
             "agent_control",
             "apply_patch",
             "ask_human",
+            "glob_files",
+            "grep_files",
             "post_blackboard",
             "read_file",
             "read_image",
@@ -266,7 +284,6 @@ fn tool_broker_integration_runs_all_model_visible_tool_families() {
             "request_permissions",
             "report_supervisor",
             "run_command",
-            "search_files",
             "set_goal",
             "accomplish_goal",
             "submit_final",

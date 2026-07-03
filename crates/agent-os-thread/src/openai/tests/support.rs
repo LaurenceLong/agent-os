@@ -241,7 +241,8 @@ pub(super) fn assert_core_tool_mock_effects(
     assert!(!workspace.join("delete.txt").exists());
     for expected in [
         "apply_patch",
-        "search_files",
+        "glob_files",
+        "grep_files",
         "read_file",
         "read_image",
         "run_command",
@@ -270,8 +271,10 @@ pub(super) fn assert_core_tool_mock_effects(
         output_for("set_goal")["goal"],
         "complete provider-neutral all-tool mock adapter coverage"
     );
-    assert_eq!(output_for("search_files")["returned_matches"], 1);
-    assert_eq!(output_for("search_files")["matches"][0]["path"], "read.txt");
+    assert_eq!(output_for("glob_files")["returned_matches"], 1);
+    assert_eq!(output_for("glob_files")["matches"][0]["path"], "read.txt");
+    assert_eq!(output_for("grep_files")["returned_matches"], 1);
+    assert_eq!(output_for("grep_files")["matches"][0]["path"], "read.txt");
     assert_eq!(output_for("read_image")["mime_type"], "image/png");
     assert_eq!(output_for("read_image")["bytes_read"], 8);
     assert_eq!(output_for("accomplish_goal")["goal_accomplished"], true);

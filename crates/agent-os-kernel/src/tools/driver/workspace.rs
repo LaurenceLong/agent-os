@@ -202,22 +202,38 @@ pub(in crate::tools) fn run_workspace_read_image(
     }))
 }
 
-pub(in crate::tools) fn run_workspace_search_files(
+pub(in crate::tools) fn run_workspace_glob_files(
     kernel: &Kernel,
     syscall: &SyscallEnvelope,
     descriptor: &ToolDescriptor,
     input: &Value,
 ) -> AgentOsResult<Value> {
     let workspace_root = PathBuf::from(required_string(input, "workspace_root")?);
-    let request = super::workspace_search::parse_search_request(input)?;
+    let request = super::workspace_discovery::parse_glob_request(input)?;
     let relative_scope = PathBuf::from(request.path.as_deref().unwrap_or("."));
     let (root, scope) = resolve_workspace_path(&workspace_root, &relative_scope)?;
     ensure_environment_lease_for_path(kernel, syscall, &root, false)?;
     ensure_workspace_target_contained(&root, &scope)?;
-    let metadata = fs::metadata(&scope).map_err(|error| {
-        AgentOsError::Validation(format!("stat workspace search path: {error}"))
-    })?;
-    super::workspace_search::run_search(descriptor, input, &root, &scope, metadata, request)
+    let metadata = fs::metadata(&scope)
+        .map_err(|error| AgentOsError::Validation(format!("stat workspace glob path: {error}")))?;
+    super::workspace_discovery::run_glob(descriptor, input, &root, &scope, metadata, request)
+}
+
+pub(in crate::tools) fn run_workspace_grep_files(
+    kernel: &Kernel,
+    syscall: &SyscallEnvelope,
+    descriptor: &ToolDescriptor,
+    input: &Value,
+) -> AgentOsResult<Value> {
+    let workspace_root = PathBuf::from(required_string(input, "workspace_root")?);
+    let request = super::workspace_discovery::parse_grep_request(input)?;
+    let relative_scope = PathBuf::from(request.path.as_deref().unwrap_or("."));
+    let (root, scope) = resolve_workspace_path(&workspace_root, &relative_scope)?;
+    ensure_environment_lease_for_path(kernel, syscall, &root, false)?;
+    ensure_workspace_target_contained(&root, &scope)?;
+    let metadata = fs::metadata(&scope)
+        .map_err(|error| AgentOsError::Validation(format!("stat workspace grep path: {error}")))?;
+    super::workspace_discovery::run_grep(descriptor, input, &root, &scope, metadata, request)
 }
 
 pub(in crate::tools) fn run_process(

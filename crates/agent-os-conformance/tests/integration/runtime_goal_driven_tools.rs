@@ -31,11 +31,20 @@ fn goal_driven_runtime_integration_covers_tools_and_agent_control_actions() {
             1,
         ),
         tool(
-            "search_files",
+            "glob_files",
             json!({
                 "workspace_root": workspace_root.clone(),
-                "query": "read me",
-                "mode": "content",
+                "pattern": "read.txt",
+                "limit": 10
+            }),
+            1,
+        ),
+        tool(
+            "grep_files",
+            json!({
+                "workspace_root": workspace_root.clone(),
+                "pattern": "read me",
+                "path": "read.txt",
                 "limit": 10
             }),
             1,
@@ -193,7 +202,7 @@ fn goal_driven_runtime_integration_covers_tools_and_agent_control_actions() {
     let mut runtime =
         ThreadRuntime::new(fx.kernel.clone(), fx.supervisor_thread_id.clone(), script);
     let mut config = RuntimeConfig::workspace_write(&fx.workspace);
-    config.max_steps = 33;
+    config.max_steps = 34;
     config.tool_risk_ceiling = 6;
     config.auto_commit_patch_artifacts = false;
     let overrides = RuntimeRunOverrides {
@@ -210,7 +219,7 @@ fn goal_driven_runtime_integration_covers_tools_and_agent_control_actions() {
 
     assert_eq!(report.status, ThreadStatus::Completed);
     assert!(report.final_submitted);
-    assert_eq!(report.tool_results.len(), 26);
+    assert_eq!(report.tool_results.len(), 27);
     assert_eq!(
         fs::read_to_string(fx.workspace.join("created.txt")).unwrap(),
         "created through goal-driven integration\n"
@@ -232,13 +241,14 @@ fn goal_driven_runtime_integration_covers_tools_and_agent_control_actions() {
             "agent_control",
             "apply_patch",
             "ask_human",
+            "glob_files",
+            "grep_files",
             "post_blackboard",
             "read_file",
             "read_image",
             "record_evidence",
             "report_supervisor",
             "run_command",
-            "search_files",
             "set_goal",
             "accomplish_goal",
             "update_checklist",

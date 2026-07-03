@@ -8,6 +8,8 @@ mod accomplish_goal;
 mod agent_control;
 mod apply_patch;
 mod ask_human;
+pub(super) mod glob_files;
+pub(super) mod grep_files;
 mod load_skill;
 mod post_blackboard;
 pub(super) mod read_file;
@@ -18,7 +20,6 @@ mod report_supervisor;
 mod request_permissions;
 pub(super) mod run_command;
 mod schema;
-pub(super) mod search_files;
 mod set_goal;
 mod submit_final;
 mod update_checklist;
@@ -49,10 +50,11 @@ pub(super) fn tool(name: &str) -> Option<BuiltinTool> {
 fn all_tools() -> Vec<BuiltinTool> {
     vec![
         apply_patch::tool(),
+        glob_files::tool(),
+        grep_files::tool(),
         read_file::tool(),
         read_image::tool(),
         run_command::tool(),
-        search_files::tool(),
         set_goal::tool(),
         accomplish_goal::tool(),
         update_checklist::tool(),
