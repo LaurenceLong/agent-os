@@ -474,67 +474,84 @@ fn goal_driven_runtime_integration_rejects_understated_privileged_agent_control_
         }
     }
 
-    let case = RejectionCase {
-        action: "kill",
-        risk_level: 4,
-    };
-    let fx = runtime_fixture(&format!(
-        "agent-os-runtime-integration-reject-{}",
-        case.action
-    ));
-    fs::write(fx.workspace.join("risk_seed.txt"), "risk seed\n").unwrap();
-    let script = UnderstatedRiskRecoveryModel {
-        action: case.action.to_string(),
-        target_thread_id: fx.kill_thread_id.clone(),
-        risk_level: case.risk_level,
-        workspace_root: fx.workspace.to_string_lossy().to_string(),
-        current_exe: std::env::current_exe()
-            .unwrap()
-            .to_string_lossy()
-            .to_string(),
-    };
-    let mut runtime =
-        ThreadRuntime::new(fx.kernel.clone(), fx.supervisor_thread_id.clone(), script);
-    let mut config = RuntimeConfig::workspace_write(&fx.workspace);
-    config.max_steps = 5;
-    config.tool_risk_ceiling = 6;
-    config.auto_commit_patch_artifacts = false;
-    let overrides = RuntimeRunOverrides {
-        sandbox_profile_id: Some("sbox_workspace_write".to_string()),
-        tool_approval_id: Some(fx.tool_approval_id.clone()),
-    };
-    let report = match runtime.run_to_completion_with_overrides(config, overrides) {
-        Ok(report) => report,
-        Err(error) => {
-            let state = fx.kernel.state_snapshot().unwrap();
-            panic!(
-                "runtime failed: {error:?}; tool_invocations={:#?}; evidence={:#?}",
-                state.tool_invocations, state.evidence
-            );
-        }
-    };
-    assert_eq!(report.status, ThreadStatus::Completed);
-    assert!(report.final_submitted);
-
-    let state = fx.kernel.state_snapshot().unwrap();
-    assert!(state.tool_invocations.values().any(|invocation| {
-        invocation.tool_name == "agent_control"
-            && invocation.status == ToolCallStatus::Failed
-            && invocation.input.get("action").and_then(Value::as_str) == Some(case.action)
-    }));
-    write_audit_log(
-        &format!(
-            "goal-driven-agent-control-{}-rejection-integration.jsonl",
+    for case in [
+        RejectionCase {
+            action: "kill",
+            risk_level: 4,
+        },
+        RejectionCase {
+            action: "delete_session",
+            risk_level: 4,
+        },
+        RejectionCase {
+            action: "purge_state",
+            risk_level: 4,
+        },
+    ] {
+        let fx = runtime_fixture(&format!(
+            "agent-os-runtime-integration-reject-{}",
             case.action
-        ),
-        &[
-            json!({"type": "rejection_case", "action": case.action, "risk_level": case.risk_level}),
-            json!({"type": "runtime_report", "report": report}),
-            json!({"type": "tool_invocations", "invocations": state.tool_invocations}),
-            json!({"type": "agent_control_commands", "commands": state.agent_control_commands}),
-        ],
-    );
-    let _ = fs::remove_dir_all(fx.workspace);
+        ));
+        fs::write(fx.workspace.join("risk_seed.txt"), "risk seed\n").unwrap();
+        let target_thread_id = match case.action {
+            "kill" => fx.kill_thread_id.clone(),
+            "delete_session" => fx.resume_thread_id.clone(),
+            "purge_state" => fx.purge_thread_id.clone(),
+            _ => unreachable!("unexpected rejection action {}", case.action),
+        };
+        let script = UnderstatedRiskRecoveryModel {
+            action: case.action.to_string(),
+            target_thread_id,
+            risk_level: case.risk_level,
+            workspace_root: fx.workspace.to_string_lossy().to_string(),
+            current_exe: std::env::current_exe()
+                .unwrap()
+                .to_string_lossy()
+                .to_string(),
+        };
+        let mut runtime =
+            ThreadRuntime::new(fx.kernel.clone(), fx.supervisor_thread_id.clone(), script);
+        let mut config = RuntimeConfig::workspace_write(&fx.workspace);
+        config.max_steps = 5;
+        config.tool_risk_ceiling = 6;
+        config.auto_commit_patch_artifacts = false;
+        let overrides = RuntimeRunOverrides {
+            sandbox_profile_id: Some("sbox_workspace_write".to_string()),
+            tool_approval_id: Some(fx.tool_approval_id.clone()),
+        };
+        let report = match runtime.run_to_completion_with_overrides(config, overrides) {
+            Ok(report) => report,
+            Err(error) => {
+                let state = fx.kernel.state_snapshot().unwrap();
+                panic!(
+                    "runtime failed for {}: {error:?}; tool_invocations={:#?}; evidence={:#?}",
+                    case.action, state.tool_invocations, state.evidence
+                );
+            }
+        };
+        assert_eq!(report.status, ThreadStatus::Completed);
+        assert!(report.final_submitted);
+
+        let state = fx.kernel.state_snapshot().unwrap();
+        assert!(state.tool_invocations.values().any(|invocation| {
+            invocation.tool_name == "agent_control"
+                && invocation.status == ToolCallStatus::Failed
+                && invocation.input.get("action").and_then(Value::as_str) == Some(case.action)
+        }));
+        write_audit_log(
+            &format!(
+                "goal-driven-agent-control-{}-rejection-integration.jsonl",
+                case.action
+            ),
+            &[
+                json!({"type": "rejection_case", "action": case.action, "risk_level": case.risk_level}),
+                json!({"type": "runtime_report", "report": report}),
+                json!({"type": "tool_invocations", "invocations": state.tool_invocations}),
+                json!({"type": "agent_control_commands", "commands": state.agent_control_commands}),
+            ],
+        );
+        let _ = fs::remove_dir_all(fx.workspace);
+    }
 }
 
 #[test]
