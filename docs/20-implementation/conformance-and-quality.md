@@ -282,6 +282,10 @@ Scoped context projection:
   cargo test -p agent-os-thread live_anthropic_messages_llm_goal_driven_scoped_context_e2e -- --ignored --nocapture
   expected coverage: scoped context snapshots and context compactions projected into the normal provider prompt and used by the live model through apply_patch, run_command, and submit_final
 
+Context-pressure pruning:
+  cargo test -p agent-os-conformance goal_driven_runtime_integration_prunes_context_pressure_and_records_compaction
+  expected coverage: oversized scoped context is pruned by the normal runtime projection path, retained context is the only snapshot visible to the model request, generated context compaction refs are projected on the next turn, and provider stream warnings record the pruned context refs
+
 OpenAI-compatible image input:
   cargo test -p agent-os-thread live_openai_chat_completions_llm_read_image_success_e2e -- --ignored --nocapture
   cargo test -p agent-os-thread live_openai_chat_completions_llm_read_image_unsupported_e2e -- --ignored --nocapture

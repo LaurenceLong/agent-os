@@ -537,6 +537,289 @@ fn goal_driven_runtime_integration_rejects_understated_privileged_agent_control_
     let _ = fs::remove_dir_all(fx.workspace);
 }
 
+#[test]
+fn goal_driven_runtime_integration_prunes_context_pressure_and_records_compaction() {
+    struct ContextPressureModel {
+        workspace_root: String,
+        pruned_context_ids: Vec<String>,
+        current_marker: String,
+        step: u8,
+    }
+
+    impl ModelClient for ContextPressureModel {
+        fn next(&mut self, request: &ModelTurnRequest) -> AgentOsResult<ModelTurnResponse> {
+            match self.step {
+                0 => {
+                    self.step += 1;
+                    assert_eq!(
+                        request.context.context_snapshots.len(),
+                        1,
+                        "runtime should prune oversized older context before the provider request"
+                    );
+                    let retained = &request.context.context_snapshots[0];
+                    assert!(
+                        retained
+                            .loaded_refs
+                            .iter()
+                            .any(|reference| reference.contains(&self.current_marker)),
+                        "current scoped context marker was not retained: {retained:?}"
+                    );
+                    for pruned_id in &self.pruned_context_ids {
+                        assert!(
+                            request
+                                .context
+                                .context_snapshots
+                                .iter()
+                                .all(|snapshot| snapshot.context_id != *pruned_id),
+                            "pruned context snapshot {pruned_id} leaked into model context"
+                        );
+                    }
+                    Ok(ModelTurnResponse {
+                        actions: vec![ModelAction::ToolCall(ToolAction::new(
+                            "read_file",
+                            json!({
+                                "workspace_root": self.workspace_root,
+                                "path": "seed.txt"
+                            }),
+                            1,
+                            Some("context pressure seed was read".to_string()),
+                        ))],
+                        usage: ProviderUsage {
+                            input_tokens: 1,
+                            output_tokens: 1,
+                            cost: 0.0,
+                        },
+                    })
+                }
+                1 => {
+                    self.step += 1;
+                    let compaction = request
+                        .context
+                        .context_compactions
+                        .iter()
+                        .find(|record| {
+                            self.pruned_context_ids.iter().all(|context_id| {
+                                record.superseded_refs.iter().any(|reference| {
+                                    reference == &format!("context_snapshot:{context_id}")
+                                })
+                            })
+                        })
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "generated context compaction was not projected: {:?}",
+                                request.context.context_compactions
+                            )
+                        });
+                    assert!(compaction.token_estimate > 0);
+                    let evidence_map = request
+                        .context
+                        .tool_results
+                        .iter()
+                        .filter(|result| !result.evidence_ids.is_empty())
+                        .map(|result| {
+                            let claim = result.evidence_claim.clone().ok_or_else(|| {
+                                AgentOsError::Validation(format!(
+                                    "tool {} omitted evidence claim",
+                                    result.tool_name
+                                ))
+                            })?;
+                            Ok(EvidenceMapEntry {
+                                claim,
+                                evidence_refs: result.evidence_ids.clone(),
+                            })
+                        })
+                        .collect::<AgentOsResult<Vec<_>>>()?;
+                    Ok(ModelTurnResponse {
+                        actions: vec![ModelAction::Final {
+                            submission: FinalSubmission {
+                                summary:
+                                    "Context pressure pruning was visible to the runtime model."
+                                        .to_string(),
+                                changed_artifacts: Vec::new(),
+                                evidence_map,
+                                unverified_claims: Vec::new(),
+                                known_risks: Vec::new(),
+                                tests_run: vec![
+                                    "goal_driven_runtime_integration_prunes_context_pressure_and_records_compaction"
+                                        .to_string(),
+                                ],
+                                tests_not_run: Vec::new(),
+                                approvals: Vec::new(),
+                            },
+                        }],
+                        usage: ProviderUsage {
+                            input_tokens: 1,
+                            output_tokens: 1,
+                            cost: 0.0,
+                        },
+                    })
+                }
+                _ => Err(AgentOsError::Validation(
+                    "context pressure model was called after final".to_string(),
+                )),
+            }
+        }
+    }
+
+    let workspace = temp_workspace("agent-os-runtime-context-pressure");
+    fs::create_dir_all(&workspace).unwrap();
+    fs::write(workspace.join("seed.txt"), "context pressure seed\n").unwrap();
+
+    let kernel = Kernel::new();
+    kernel
+        .register_model_alias(
+            "tiny-context",
+            "primary-provider",
+            "primary-tiny-context-model",
+            ModelCapabilities {
+                streaming: true,
+                tool_calling: true,
+                reasoning: true,
+                temperature: true,
+                image_input: true,
+                structured_output: true,
+            },
+            ModelLimit {
+                context: 80_000,
+                input: Some(40_000),
+                output: 1_000,
+            },
+            "prov_default",
+        )
+        .unwrap();
+    let goal = kernel
+        .register_goal(RegisterGoalInput {
+            namespace: "integration".to_string(),
+            created_by: "agent-os-conformance".to_string(),
+            title: "Context pressure pruning".to_string(),
+            description: "Exercise runtime context-pressure pruning".to_string(),
+            acceptance_criteria: vec![
+                "older scoped context is pruned before model context".to_string(),
+                "generated context compaction is replayable".to_string(),
+            ],
+            constraints: Vec::new(),
+            risk_level: 1,
+            deadline: None,
+        })
+        .unwrap();
+    let task = kernel
+        .spawn_task(SpawnTaskInput {
+            goal_id: goal.goal_id.clone(),
+            parent_task_id: None,
+            title: "Prune context".to_string(),
+            description: "Force scoped context pruning before a model request".to_string(),
+            depends_on: Vec::new(),
+            required_artifact_types: Vec::new(),
+            required_evidence_types: Vec::new(),
+            priority: 10,
+            risk_level: 1,
+        })
+        .unwrap();
+    let agent = kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: task.task_id.clone(),
+            role_profile_id: "role_producer".to_string(),
+            owner: "agent-os-conformance".to_string(),
+            goal: "Read the retained context pressure seed and finish with evidence.".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: vec![workspace.to_string_lossy().to_string()],
+        })
+        .unwrap();
+
+    let oversized_ref = "x".repeat(100_000);
+    let old_a = kernel
+        .load_context(LoadContextInput {
+            agent_id: agent.agent_id.clone(),
+            task_id: task.task_id.clone(),
+            loaded_refs: vec![format!("old-context-a-{oversized_ref}")],
+            summary_artifact_id: None,
+            freshness: ContextFreshness::Fresh,
+            pollution_score: 0.0,
+            token_estimate: 100_000,
+        })
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let current_marker = "current-context-pressure-marker".to_string();
+    let current = kernel
+        .load_context(LoadContextInput {
+            agent_id: agent.agent_id.clone(),
+            task_id: task.task_id.clone(),
+            loaded_refs: vec![current_marker.clone()],
+            summary_artifact_id: None,
+            freshness: ContextFreshness::Fresh,
+            pollution_score: 0.0,
+            token_estimate: 128,
+        })
+        .unwrap();
+
+    let script = ContextPressureModel {
+        workspace_root: workspace.to_string_lossy().to_string(),
+        pruned_context_ids: vec![old_a.context_id.clone()],
+        current_marker: current_marker.clone(),
+        step: 0,
+    };
+    let mut runtime = ThreadRuntime::new(kernel.clone(), agent.thread_id.clone(), script);
+    let mut config = RuntimeConfig::workspace_write(&workspace);
+    config.max_steps = 3;
+    config.requested_model_alias = Some("tiny-context".to_string());
+    let report = runtime.run_to_completion(config).unwrap();
+
+    assert_eq!(report.status, ThreadStatus::Completed);
+    assert!(report.final_submitted);
+    let state = kernel.state_snapshot().unwrap();
+    let compaction = state
+        .context_compactions
+        .values()
+        .find(|record| {
+            record
+                .superseded_refs
+                .iter()
+                .any(|reference| reference == &format!("context_snapshot:{}", old_a.context_id))
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "missing context pressure compaction; state compactions={:#?}",
+                state.context_compactions
+            )
+        });
+    assert_eq!(compaction.thread_id, agent.thread_id);
+    assert_eq!(compaction.task_id, task.task_id);
+    assert!(state.provider_stream_sessions.values().any(|session| {
+        session.stream_events.iter().any(|event| {
+            event.event_type == ProviderStreamEventType::ProviderWarning
+                && event.payload.get("type").and_then(Value::as_str) == Some("context_pruned")
+                && event
+                    .payload
+                    .get("pruned_refs")
+                    .and_then(Value::as_array)
+                    .is_some_and(|refs| {
+                        refs.iter().any(|reference| {
+                            reference.as_str()
+                                == Some(&format!("context_snapshot:{}", old_a.context_id))
+                        })
+                    })
+        })
+    }));
+    assert!(state
+        .context_snapshots
+        .get(&current.context_id)
+        .unwrap()
+        .loaded_refs
+        .contains(&current_marker));
+
+    write_audit_log(
+        "goal-driven-context-pressure-pruning-integration.jsonl",
+        &[
+            json!({"type": "runtime_report", "report": report}),
+            json!({"type": "context_compaction", "compaction": compaction}),
+            json!({"type": "retained_context_id", "context_id": current.context_id}),
+        ],
+    );
+    let _ = fs::remove_dir_all(workspace);
+}
+
 #[derive(Clone, Copy)]
 struct RejectionCase {
     action: &'static str,
