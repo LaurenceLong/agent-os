@@ -13,4 +13,5 @@ mod software_distribution_conformance;
 mod state_replay_export_conformance;
 mod system_prompt_export_conformance;
 mod tool_broker;
+mod tool_surface_conformance;
 mod workspace_boundary_conformance;

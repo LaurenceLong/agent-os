@@ -121,6 +121,9 @@ Tool driver tests MUST verify:
 - failure semantics
 - provider capability declaration for model-facing tools where applicable
 - Host OS tool surface contains exactly `glob_files`, `grep_files`, `read_file`, `read_image`, `apply_patch`, `run_command`, and `write_stdin`; `read_image` is visible only for image-capable model aliases, `glob_files` provides shell-free workspace path discovery by glob, `grep_files` provides shell-free UTF-8 content discovery by literal text, `apply_patch` covers workspace file creation, update, and deletion with exactly one file operation per call, and `write_stdin` continues kernel-owned piped process sessions by `process_id`
+- conformance freezes the exact core model-visible tool names and rejects old
+  parallel search/edit surfaces such as `find_files`, `search_files`,
+  `workspace_discovery`, `write_file`, `replace_text`, and `delete_file`
 - Agent-OS control-plane tools are grouped by work state, communication, permission request, agent supervision, privileged administration, and session lifecycle
 - `wait_agent` is absent from the core surface; child progress reporting is covered by `agent_control(action=set_hook)`
 - model-visible tool projection comes from the kernel-owned `ToolPlan`; direct
