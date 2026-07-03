@@ -80,6 +80,8 @@ fn app_protocol_export_freezes_current_agent_os_method_families() {
         "approval/respond",
         "resource/session/open",
         "resource/session/close",
+        "process/stop",
+        "process/kill",
         "automation/schedule/create",
         "automation/schedule/list",
         "automation/run/list",
@@ -137,6 +139,9 @@ fn app_protocol_schema_and_typescript_exports_match_versioned_contract() {
     assert!(request_methods
         .iter()
         .any(|method| method == "provider/capabilities/read"));
+    assert!(request_methods
+        .iter()
+        .any(|method| method == "process/kill"));
     assert!(notification_types
         .iter()
         .any(|kind| kind == "stats_updated"));

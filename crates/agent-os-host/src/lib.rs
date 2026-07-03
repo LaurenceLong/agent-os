@@ -1256,6 +1256,17 @@ mod tests {
     }
 
     #[test]
+    fn app_server_process_stop_and_kill_flow_through_kernel() {
+        let stopped = app_cleanup_running_process("process-stop", AppCleanupAction::Stop);
+        assert_eq!(stopped["state"], "interrupted");
+        assert_eq!(stopped["error"], "test stop");
+
+        let killed = app_cleanup_running_process("process-kill", AppCleanupAction::Kill);
+        assert_eq!(killed["state"], "terminated");
+        assert_eq!(killed["error"], "test kill");
+    }
+
+    #[test]
     fn thread_read_includes_runtime_artifact_and_evidence_projections() {
         let workspace = temp_workspace("runtime-worker-projections");
         let host = AgentOsHost::in_memory();
@@ -2207,6 +2218,7 @@ mod tests {
     #[derive(Debug, Clone)]
     enum ScriptedStep {
         Command { workspace: std::path::PathBuf },
+        LongCommand { workspace: std::path::PathBuf },
         Patch { workspace: std::path::PathBuf },
         Final,
     }
@@ -2220,6 +2232,14 @@ mod tests {
                     },
                     ScriptedStep::Final,
                 ]),
+            }
+        }
+
+        fn long_command(workspace: &std::path::Path) -> Self {
+            Self {
+                steps: VecDeque::from([ScriptedStep::LongCommand {
+                    workspace: workspace.to_path_buf(),
+                }]),
             }
         }
 
@@ -2252,6 +2272,20 @@ mod tests {
                     4,
                     Some("runtime worker command evidence was captured".to_string()),
                 )),
+                ScriptedStep::LongCommand { workspace } => {
+                    let (command, args) = long_running_command();
+                    ModelAction::ToolCall(ToolAction::new(
+                        "run_command",
+                        serde_json::json!({
+                            "command": command,
+                            "mode": "exec",
+                            "args": args,
+                            "cwd": workspace.to_string_lossy(),
+                        }),
+                        4,
+                        Some("runtime worker long command started".to_string()),
+                    ))
+                }
                 ScriptedStep::Patch { workspace } => ModelAction::ToolCall(ToolAction::new(
                     "apply_patch",
                     serde_json::json!({
@@ -2295,6 +2329,87 @@ mod tests {
                 actions: vec![action],
                 usage: ProviderUsage::default(),
             })
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum AppCleanupAction {
+        Stop,
+        Kill,
+    }
+
+    fn app_cleanup_running_process(label: &str, action: AppCleanupAction) -> Value {
+        let workspace = temp_workspace(label);
+        let host = AgentOsHost::in_memory();
+        let mut server = initialized_server_with_host(host.clone());
+        let thread_id = start_thread_with_workspace(&mut server, workspace.to_string_lossy());
+        request(
+            &mut server,
+            "req_turn_start_for_process_cleanup",
+            AppRequest::TurnStart {
+                client_thread_id: thread_id.clone(),
+                input: "start long running process".to_string(),
+            },
+        );
+
+        let report = host
+            .run_next_runtime_job(ScriptedModelClient::long_command(&workspace))
+            .unwrap()
+            .expect("queued runtime job");
+        assert_eq!(report.status, ThreadStatus::WaitingTool);
+
+        let read = request(
+            &mut server,
+            "req_thread_read_running_process",
+            AppRequest::ThreadRead {
+                client_thread_id: thread_id,
+            },
+        );
+        let body = accepted_body(read);
+        let process_id = body["process_sessions"][0]["process_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(body["process_sessions"][0]["state"], "running");
+
+        let cleaned = match action {
+            AppCleanupAction::Stop => request(
+                &mut server,
+                "req_process_stop",
+                AppRequest::ProcessStop {
+                    process_id,
+                    reason: Some("test stop".to_string()),
+                },
+            ),
+            AppCleanupAction::Kill => request(
+                &mut server,
+                "req_process_kill",
+                AppRequest::ProcessKill {
+                    process_id,
+                    reason: Some("test kill".to_string()),
+                },
+            ),
+        };
+        let process_session = accepted_body(cleaned)["process_session"].clone();
+        let _ = fs::remove_dir_all(workspace);
+        process_session
+    }
+
+    fn long_running_command() -> (String, Vec<String>) {
+        if cfg!(windows) {
+            (
+                "powershell".to_string(),
+                vec![
+                    "-NoProfile".to_string(),
+                    "-Command".to_string(),
+                    "Start-Sleep -Seconds 30".to_string(),
+                ],
+            )
+        } else {
+            (
+                "sh".to_string(),
+                vec!["-c".to_string(), "sleep 30".to_string()],
+            )
         }
     }
 }

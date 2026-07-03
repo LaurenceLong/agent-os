@@ -396,6 +396,16 @@ pub enum AppRequest {
     },
     #[serde(rename = "resource/session/close")]
     ResourceSessionClose { session_id: String },
+    #[serde(rename = "process/stop")]
+    ProcessStop {
+        process_id: String,
+        reason: Option<String>,
+    },
+    #[serde(rename = "process/kill")]
+    ProcessKill {
+        process_id: String,
+        reason: Option<String>,
+    },
     #[serde(rename = "automation/schedule/create")]
     AutomationScheduleCreate {
         name: String,
@@ -543,6 +553,25 @@ mod tests {
 
         assert_eq!(encoded["method"], "task/bundle/export");
         assert_eq!(encoded["params"]["client_thread_id"], "thread_1");
+    }
+
+    #[test]
+    fn process_cleanup_requests_use_protocol_method_names() {
+        let stop = serde_json::to_value(AppRequest::ProcessStop {
+            process_id: "proc_1".to_string(),
+            reason: Some("cleanup".to_string()),
+        })
+        .unwrap();
+        let kill = serde_json::to_value(AppRequest::ProcessKill {
+            process_id: "proc_2".to_string(),
+            reason: None,
+        })
+        .unwrap();
+
+        assert_eq!(stop["method"], "process/stop");
+        assert_eq!(stop["params"]["process_id"], "proc_1");
+        assert_eq!(kill["method"], "process/kill");
+        assert!(kill["params"]["reason"].is_null());
     }
 
     #[test]

@@ -35,6 +35,20 @@ pub(crate) struct StatusOptions {
     pub(crate) thread_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProcessAction {
+    Stop,
+    Kill,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ProcessOptions {
+    pub(crate) action: ProcessAction,
+    pub(crate) state_db: Option<PathBuf>,
+    pub(crate) process_id: String,
+    pub(crate) reason: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ResumeOptions {
     pub(crate) state_db: Option<PathBuf>,
@@ -276,6 +290,64 @@ impl StatusOptions {
     }
 }
 
+impl ProcessOptions {
+    pub(crate) fn parse(args: &[String]) -> AgentOsResult<Self> {
+        let action = match args.first().map(String::as_str) {
+            Some("stop") => ProcessAction::Stop,
+            Some("kill") => ProcessAction::Kill,
+            Some("--help") | Some("-h") | None => {
+                return Err(AgentOsError::Validation(
+                    serde_json::to_string(&usage_json()).unwrap_or_default(),
+                ));
+            }
+            Some(other) => {
+                return Err(AgentOsError::Validation(format!(
+                    "unknown process action {other}"
+                )));
+            }
+        };
+        let mut state_db = None;
+        let mut process_id = None;
+        let mut reason = None;
+        let mut index = 1;
+        while index < args.len() {
+            match args[index].as_str() {
+                "--state-db" => {
+                    index += 1;
+                    state_db = Some(PathBuf::from(required_arg(args, index, "--state-db")?));
+                }
+                "--process-id" => {
+                    index += 1;
+                    process_id = Some(required_arg(args, index, "--process-id")?.to_string());
+                }
+                "--reason" => {
+                    index += 1;
+                    reason = Some(required_arg(args, index, "--reason")?.to_string());
+                }
+                "--help" | "-h" => {
+                    return Err(AgentOsError::Validation(
+                        serde_json::to_string(&usage_json()).unwrap_or_default(),
+                    ));
+                }
+                other => {
+                    return Err(AgentOsError::Validation(format!(
+                        "unknown process option {other}"
+                    )));
+                }
+            }
+            index += 1;
+        }
+        Ok(Self {
+            action,
+            state_db,
+            process_id: process_id.ok_or_else(|| {
+                AgentOsError::Validation("--process-id is required for process cleanup".to_string())
+            })?,
+            reason,
+        })
+    }
+}
+
 impl ResumeOptions {
     pub(crate) fn parse(args: &[String]) -> AgentOsResult<Self> {
         let mut state_db = None;
@@ -491,6 +563,7 @@ pub(crate) fn usage_json() -> Value {
             "run": "Run a deterministic end-to-end Agent-OS task.",
             "code": "Apply an exact repository edit and run a test command through Agent-OS.",
             "status": "Inspect a SQLite-backed Agent-OS state database.",
+            "process": "Stop or kill a kernel-owned Agent-OS process session.",
             "resume": "Resume an existing Agent Thread from a SQLite-backed state database."
         },
         "chat_options": {
@@ -531,6 +604,13 @@ pub(crate) fn usage_json() -> Value {
         "status_options": {
             "--state-db": "Optional SQLite event store path. Defaults to the global Agent-OS state store.",
             "--thread-id": "Optional thread id to inspect."
+        },
+        "process_options": {
+            "stop": "Interrupt a running process session.",
+            "kill": "Terminate a running process session.",
+            "--state-db": "Optional SQLite event store path. Defaults to the global Agent-OS state store.",
+            "--process-id": "Required process session id.",
+            "--reason": "Optional cleanup reason recorded on the process session."
         },
         "resume_options": {
             "--state-db": "Optional SQLite event store path. Defaults to the global Agent-OS state store.",
@@ -595,6 +675,32 @@ mod tests {
         let options = ChatOptions::parse(&argv(&["--runtime-timeout-seconds", "3600"])).unwrap();
 
         assert_eq!(options.runtime_timeout_seconds, 3600);
+    }
+
+    #[test]
+    fn process_stop_requires_process_id() {
+        let error = ProcessOptions::parse(&argv(&["stop"])).unwrap_err();
+
+        assert!(error.to_string().contains("--process-id"));
+    }
+
+    #[test]
+    fn process_kill_options_parse_cleanup_request() {
+        let options = ProcessOptions::parse(&argv(&[
+            "kill",
+            "--process-id",
+            "proc_1",
+            "--reason",
+            "test cleanup",
+            "--state-db",
+            "state.sqlite",
+        ]))
+        .unwrap();
+
+        assert_eq!(options.action, ProcessAction::Kill);
+        assert_eq!(options.process_id, "proc_1");
+        assert_eq!(options.reason.as_deref(), Some("test cleanup"));
+        assert_eq!(options.state_db, Some(PathBuf::from("state.sqlite")));
     }
 
     #[test]

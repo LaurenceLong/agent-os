@@ -1,13 +1,16 @@
 mod args;
 mod chat;
 mod code;
+mod process;
 mod resume;
 mod run;
 mod status;
 mod support;
 
 use agent_os_sys::{AgentOsError, AgentOsResult};
-use args::{usage_json, ChatOptions, CodeOptions, ResumeOptions, RunOptions, StatusOptions};
+use args::{
+    usage_json, ChatOptions, CodeOptions, ProcessOptions, ResumeOptions, RunOptions, StatusOptions,
+};
 use serde_json::Value;
 use std::env;
 
@@ -27,6 +30,7 @@ fn dispatch(args: &[String]) -> AgentOsResult<Value> {
         Some("run") => run::run_e2e_task(&RunOptions::parse(&args[1..])?),
         Some("code") => code::run_code_task(&CodeOptions::parse(&args[1..])?),
         Some("status") => status::run_status(&StatusOptions::parse(&args[1..])?),
+        Some("process") => process::run_process(&ProcessOptions::parse(&args[1..])?),
         Some("resume") => resume::run_resume(&ResumeOptions::parse(&args[1..])?),
         Some(other) => Err(AgentOsError::Validation(format!(
             "unknown command {other}; use `agent-os help`"

@@ -67,6 +67,7 @@ pub enum AppProtocolFamily {
     Stats,
     Config,
     Model,
+    Process,
     Provider,
     Permission,
     Subscription,
@@ -95,7 +96,7 @@ pub fn app_protocol_request_methods() -> Vec<AppMethodSpec> {
     use AppMethodLifecycle::Implemented;
     use AppProtocolAuthority::{ClientSession, HumanRoot};
     use AppProtocolFamily::{
-        Approval, Automation, Config, Core, Model, Permission, Provider, Resource, Stats,
+        Approval, Automation, Config, Core, Model, Permission, Process, Provider, Resource, Stats,
         Subscription, Task, Thread, Turn,
     };
 
@@ -132,6 +133,8 @@ pub fn app_protocol_request_methods() -> Vec<AppMethodSpec> {
             ClientSession,
             Implemented,
         ),
+        method("process/stop", Process, ClientSession, Implemented),
+        method("process/kill", Process, ClientSession, Implemented),
         method(
             "automation/schedule/create",
             Automation,
@@ -343,6 +346,7 @@ mod tests {
 
         for method in [
             "thread/start",
+            "process/stop",
             "model/list",
             "provider/capabilities/read",
             "permission_profile/list",

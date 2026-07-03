@@ -112,6 +112,12 @@ impl AppKernelService for AgentOsHost {
             AppRequest::ResourceSessionClose { session_id } => {
                 self.resource_session_close(&session_id)
             }
+            AppRequest::ProcessStop { process_id, reason } => {
+                self.process_stop(client, process_id, reason)
+            }
+            AppRequest::ProcessKill { process_id, reason } => {
+                self.process_kill(client, process_id, reason)
+            }
             AppRequest::AutomationScheduleCreate {
                 name,
                 kind,
@@ -551,6 +557,34 @@ impl AgentOsHost {
     fn resource_session_close(&self, session_id: &str) -> AgentOsResult<AppResponse> {
         let session = self.kernel().close_resource_session(session_id)?;
         accepted("resource_session", session)
+    }
+
+    fn process_stop(
+        &self,
+        client: &ClientConnection,
+        process_id: String,
+        reason: Option<String>,
+    ) -> AgentOsResult<AppResponse> {
+        let reason =
+            reason.unwrap_or_else(|| format!("process stopped by app client {}", client.client_id));
+        let session = self
+            .kernel()
+            .interrupt_process_session(&process_id, &reason)?;
+        accepted("process_session", session)
+    }
+
+    fn process_kill(
+        &self,
+        client: &ClientConnection,
+        process_id: String,
+        reason: Option<String>,
+    ) -> AgentOsResult<AppResponse> {
+        let reason =
+            reason.unwrap_or_else(|| format!("process killed by app client {}", client.client_id));
+        let session = self
+            .kernel()
+            .terminate_process_session(&process_id, &reason)?;
+        accepted("process_session", session)
     }
 
     fn automation_schedule_create(

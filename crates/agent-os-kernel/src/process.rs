@@ -271,7 +271,7 @@ impl Kernel {
         Ok(write)
     }
 
-    pub(crate) fn interrupt_process_session(
+    pub fn interrupt_process_session(
         &self,
         process_id: &str,
         reason: &str,
@@ -284,7 +284,7 @@ impl Kernel {
         )
     }
 
-    pub(crate) fn terminate_process_session(
+    pub fn terminate_process_session(
         &self,
         process_id: &str,
         reason: &str,

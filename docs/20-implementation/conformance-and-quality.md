@@ -146,6 +146,9 @@ Tool driver tests MUST verify:
 - `thread/read` app-server projection includes kernel-owned
   `process_sessions` for the requested thread, and CLI `status --thread-id`
   relays that process lifecycle list
+- app-server `process/stop` and `process/kill` requests route process cleanup
+  through kernel-owned `ProcessSession` interrupt/terminate events, and CLI
+  `process stop|kill --process-id` exposes the same cleanup path
 - descriptor-declared evidence attachment for workspace, command, control-plane,
   and permission tools so final `evidence_map` entries can cite real evidence ids
 
