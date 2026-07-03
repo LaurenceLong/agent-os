@@ -658,6 +658,47 @@ fn parse_openai_responses_response_extracts_function_call() {
 }
 
 #[test]
+fn parse_openai_responses_response_extracts_submit_final() {
+    let tmp = std::env::temp_dir().join(format!("aos-openai-resp-sf-{}", new_id("t_")));
+    let request = make_request(&tmp);
+    let body = json!({
+        "output": [
+            {
+                "type": "message",
+                "content": [{"type": "output_text", "text": "Done via Responses."}]
+            },
+            {
+                "type": "function_call",
+                "call_id": "call_done",
+                "name": "submit_final",
+                "arguments": "{\"summary\":\"Responses task completed\",\"tests_run\":[\"cargo test\"],\"known_risks\":[]}"
+            }
+        ],
+        "usage": {"input_tokens": 42, "output_tokens": 11}
+    });
+
+    let response = parse_openai_responses_response(&body, &request).unwrap();
+
+    assert_eq!(response.usage.input_tokens, 42);
+    assert_eq!(response.usage.output_tokens, 11);
+    assert_eq!(response.actions.len(), 2);
+    match &response.actions[0] {
+        ModelAction::OutputText { text } => assert_eq!(text, "Done via Responses."),
+        _ => panic!("expected OutputText"),
+    }
+    match &response.actions[1] {
+        ModelAction::ToolCall(action) => {
+            assert_eq!(action.tool_name, "submit_final");
+            assert_eq!(action.risk_level, 2);
+            assert_eq!(action.input["summary"], "Responses task completed");
+            assert_eq!(action.input["tests_run"], json!(["cargo test"]));
+            assert_eq!(action.input["known_risks"], json!([]));
+        }
+        _ => panic!("expected submit_final ToolCall"),
+    }
+}
+
+#[test]
 fn parse_response_extracts_submit_final() {
     let tmp = std::env::temp_dir().join(format!("aos-openai-sf-{}", new_id("t_")));
     let base_request = make_request(&tmp);
