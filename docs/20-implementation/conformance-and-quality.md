@@ -420,6 +420,9 @@ Storage driver tests MUST verify:
 - lease expiration
 - replay from persisted events
 - migration version tracking
+- physical schema object coverage for current SQLite tables and indexes that
+  store events, idempotency, projections, app projections, artifacts, evidence,
+  automation, and resource sessions
 
 SQLite and PostgreSQL drivers MUST pass the same logical conformance suite.
 

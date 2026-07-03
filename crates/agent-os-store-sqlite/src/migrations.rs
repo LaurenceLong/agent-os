@@ -181,3 +181,65 @@ pub(crate) fn migrate(conn: &Connection) -> AgentOsResult<()> {
     .map_err(sqlite_error)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn migration_creates_current_schema_objects() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+
+        let tables = schema_objects(&conn, "table");
+        assert_eq!(
+            tables,
+            BTreeSet::from([
+                "approval_queue".to_string(),
+                "artifact_index".to_string(),
+                "automation_runs".to_string(),
+                "automation_schedules".to_string(),
+                "events".to_string(),
+                "evidence_index".to_string(),
+                "idempotency_results".to_string(),
+                "projection_checkpoints".to_string(),
+                "resource_sessions".to_string(),
+                "schema_migrations".to_string(),
+                "stats_rollups".to_string(),
+                "thread_summaries".to_string(),
+                "timeline_items".to_string(),
+                "turn_summaries".to_string(),
+            ])
+        );
+
+        let indexes = schema_objects(&conn, "index");
+        for required in [
+            "idx_automation_runs_schedule",
+            "idx_automation_schedules_due",
+            "idx_events_aggregate",
+            "idx_events_causation",
+            "idx_timeline_thread_created",
+        ] {
+            assert!(indexes.contains(required), "missing index {required}");
+        }
+    }
+
+    fn schema_objects(conn: &Connection, kind: &str) -> BTreeSet<String> {
+        let mut stmt = conn
+            .prepare(
+                "
+                SELECT name
+                FROM sqlite_master
+                WHERE type = ?1
+                  AND name NOT LIKE 'sqlite_%'
+                ORDER BY name
+                ",
+            )
+            .unwrap();
+        stmt.query_map(params![kind], |row| row.get::<_, String>(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+}
