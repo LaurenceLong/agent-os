@@ -409,6 +409,147 @@ fn runtime_rejects_read_image_when_routed_model_lacks_image_input() {
     let _ = fs::remove_dir_all(workspace);
 }
 
+#[test]
+fn runtime_rejects_non_visible_tool_call_without_broker_invocation() {
+    struct AttemptsDeferredTool {
+        calls: u32,
+    }
+
+    impl ModelClient for AttemptsDeferredTool {
+        fn next(&mut self, request: &ModelTurnRequest) -> AgentOsResult<ModelTurnResponse> {
+            self.calls += 1;
+            let read_result = request.context.tool_results.iter().find(|result| {
+                result.tool_name == "read_file" && result.status == ToolCallStatus::Completed
+            });
+            if let Some(read_result) = read_result {
+                return Ok(ModelTurnResponse::single(ModelAction::Final {
+                    submission: FinalSubmission {
+                        summary: "Recovered after invisible tool rejection.".to_string(),
+                        changed_artifacts: Vec::new(),
+                        evidence_map: vec![EvidenceMapEntry {
+                            claim: "visible read_file recovered after invisible tool rejection"
+                                .to_string(),
+                            evidence_refs: read_result.evidence_ids.clone(),
+                        }],
+                        unverified_claims: Vec::new(),
+                        known_risks: Vec::new(),
+                        tests_run: Vec::new(),
+                        tests_not_run: Vec::new(),
+                        approvals: Vec::new(),
+                    },
+                }));
+            }
+            let feedback = request
+                .context
+                .tool_results
+                .iter()
+                .find(|result| result.tool_name == RUNTIME_FEEDBACK_TOOL);
+            if let Some(feedback) = feedback {
+                assert_eq!(feedback.status, ToolCallStatus::Denied);
+                assert_eq!(
+                    feedback
+                        .output
+                        .as_ref()
+                        .and_then(|output| output.get("stage"))
+                        .and_then(serde_json::Value::as_str),
+                    Some("tool_visibility")
+                );
+                return Ok(ModelTurnResponse::single(ModelAction::ToolCall(
+                    ToolAction::new(
+                        "read_file",
+                        json!({
+                            "workspace_root": request.workspace_root.to_string_lossy(),
+                            "path": "README.md"
+                        }),
+                        1,
+                        Some(
+                            "visible read_file recovered after invisible tool rejection"
+                                .to_string(),
+                        ),
+                    ),
+                )));
+            }
+            assert!(request
+                .context
+                .tool_descriptors
+                .iter()
+                .any(|descriptor| descriptor.name == "tool_search"));
+            assert!(!request
+                .context
+                .tool_descriptors
+                .iter()
+                .any(|descriptor| descriptor.name == "mcp__echo__echo"));
+            Ok(ModelTurnResponse::single(ModelAction::ToolCall(
+                ToolAction::new(
+                    "mcp__echo__echo",
+                    json!({"text": "hidden"}),
+                    3,
+                    Some("hidden MCP echo was attempted".to_string()),
+                ),
+            )))
+        }
+    }
+
+    let workspace = temp_workspace("runtime-hidden-tool");
+    fs::write(workspace.join("README.md"), "visible recovery\n").unwrap();
+    let kernel = Kernel::new();
+    kernel
+        .register_tool_descriptor(ToolDescriptor {
+            tool_id: "tool_mcp__echo__echo".to_string(),
+            name: "mcp__echo__echo".to_string(),
+            description: "Echo one text field through MCP.".to_string(),
+            version: "0.3.0".to_string(),
+            driver_class: ToolDriverClass::Mcp,
+            risk_level: 3,
+            input_schema: json!({
+                "type": "object",
+                "required": ["text"],
+                "properties": {"text": {"type": "string"}},
+                "additionalProperties": false
+            }),
+            model_input_schema: Some(json!({
+                "type": "object",
+                "required": ["text"],
+                "properties": {"text": {"type": "string"}},
+                "additionalProperties": false
+            })),
+            output_schema: json!({"type": "object"}),
+            runtime_input_policy: ToolRuntimeInputPolicy {
+                required_resource_scopes: vec!["mcp:echo:echo".to_string()],
+                ..ToolRuntimeInputPolicy::default()
+            },
+            idempotency: IdempotencyMode::ToolNative,
+            evidence_type: Some(EvidenceType::ExternalReference),
+            created_at: now_rfc3339(),
+            ..ToolDescriptor::default()
+        })
+        .unwrap();
+    let agent = spawn_runtime_agent(&kernel, &workspace, "Reject invisible tool");
+    let mut runtime = ThreadRuntime::new(
+        kernel.clone(),
+        agent.thread_id,
+        AttemptsDeferredTool { calls: 0 },
+    );
+
+    let report = runtime
+        .run_to_completion(RuntimeConfig::workspace_write(&workspace))
+        .unwrap();
+
+    assert_eq!(report.status, ThreadStatus::Completed);
+    assert!(report.tool_results.iter().any(|result| {
+        result.tool_name == RUNTIME_FEEDBACK_TOOL && result.status == ToolCallStatus::Denied
+    }));
+    assert!(!report
+        .tool_results
+        .iter()
+        .any(|result| result.tool_name == "mcp__echo__echo"));
+    assert!(!kernel.events().unwrap().iter().any(|event| {
+        event.event_type == "ToolCallProposed"
+            && event.payload["tool"]["tool_name"] == json!("mcp__echo__echo")
+    }));
+    let _ = fs::remove_dir_all(workspace);
+}
+
 fn temp_workspace(label: &str) -> std::path::PathBuf {
     let workspace = env::temp_dir().join(format!(
         "agent-os-thread-{label}-{}-{}",

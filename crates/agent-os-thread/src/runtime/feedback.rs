@@ -52,6 +52,31 @@ pub(super) fn should_guard_duplicate_tool_call(action: &ToolAction) -> bool {
     !action.tool_name.is_empty()
 }
 
+pub(super) fn non_visible_tool_feedback_record(
+    step_index: u32,
+    action: &ToolAction,
+    visible_tool_names: Vec<String>,
+) -> ToolExecutionRecord {
+    ToolExecutionRecord {
+        call_id: new_id("feedback_"),
+        tool_name: RUNTIME_FEEDBACK_TOOL.to_string(),
+        status: ToolCallStatus::Denied,
+        input: Some(json!({
+            "step_index": step_index,
+            "rejected_tool_name": action.tool_name,
+            "rejected_tool_input": action.input,
+            "visible_tool_names": visible_tool_names,
+        })),
+        output: Some(json!({
+            "status": "denied",
+            "stage": "tool_visibility",
+            "message": "The model requested a tool that was not projected in the current turn's direct tool surface. The runtime did not execute it. Choose one of the visible tools or use tool_search when deferred tools are available.",
+        })),
+        evidence_ids: Vec::new(),
+        evidence_claim: None,
+    }
+}
+
 pub(super) fn duplicate_tool_feedback_record(
     step_index: u32,
     consecutive_identical_tool_calls: u32,

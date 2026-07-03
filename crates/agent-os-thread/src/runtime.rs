@@ -385,6 +385,29 @@ impl<C: ModelClient> ThreadRuntime<C> {
                             )?;
                             continue;
                         }
+                        if !request
+                            .context
+                            .tool_descriptors
+                            .iter()
+                            .any(|descriptor| descriptor.name == action.tool_name)
+                        {
+                            let visible_tool_names = request
+                                .context
+                                .tool_descriptors
+                                .iter()
+                                .map(|descriptor| descriptor.name.clone())
+                                .collect();
+                            tool_results.push(non_visible_tool_feedback_record(
+                                step_index,
+                                &action,
+                                visible_tool_names,
+                            ));
+                            self.kernel.record_checkpoint(
+                                &acb.thread_id,
+                                format!("ckpt_after_tool_visibility_feedback_{}", new_id("y_")),
+                            )?;
+                            continue;
+                        }
                         if should_guard_duplicate_tool_call(&action) {
                             let duplicate_count = repeated_tool_call.observe(&action);
                             if duplicate_count >= DUPLICATE_TOOL_WARNING_COUNT {
