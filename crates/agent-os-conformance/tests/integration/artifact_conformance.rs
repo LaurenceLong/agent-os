@@ -1468,6 +1468,198 @@ fn process_stdin_write_is_idempotent_and_pollable_by_process_id() {
 }
 
 #[test]
+fn write_stdin_tool_continues_own_process_and_polls_output() {
+    let fx = fixture();
+    let workspace = std::env::temp_dir().join(format!(
+        "agent-os-write-stdin-tool-{}-{}",
+        std::process::id(),
+        new_id("case_")
+    ));
+    let mut run_command_descriptor = fx
+        .kernel
+        .state_snapshot()
+        .unwrap()
+        .tool_descriptors
+        .get("run_command")
+        .unwrap()
+        .clone();
+    run_command_descriptor.lifecycle.foreground_timeout_ms = 500;
+    fx.kernel
+        .register_tool_descriptor(run_command_descriptor)
+        .unwrap();
+    let env = fx
+        .kernel
+        .create_environment(
+            BackendType::IsolatedWorktree,
+            workspace.to_string_lossy(),
+            "sbox_workspace_write",
+            ReusePolicy::TaskScoped,
+        )
+        .unwrap();
+    fx.kernel
+        .attach_environment(
+            &env.environment_id,
+            &fx.worker.agent_id,
+            &fx.worker.thread_id,
+            &fx.task.task_id,
+            AttachMode::WorkspaceWrite,
+        )
+        .unwrap();
+    let cap = fx
+        .kernel
+        .grant_capability(
+            &fx.worker.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string(), "process:*".to_string()],
+            4,
+            None,
+        )
+        .unwrap();
+    let stdin_command = if cfg!(windows) {
+        "$line = [Console]::In.ReadLine(); Write-Output \"direct:$line\"; Start-Sleep -Seconds 2"
+    } else {
+        "IFS= read -r line; printf 'direct:%s\n' \"$line\"; sleep 2"
+    };
+    let command = fx
+        .kernel
+        .invoke_tool(
+            &fx.worker.agent_id,
+            &fx.task.task_id,
+            &fx.worker.session_id,
+            cap.capability_id.clone(),
+            4,
+            ToolInvokeInput {
+                tool_name: "run_command".to_string(),
+                input: json!({
+                    "command": stdin_command,
+                    "stdin": "piped",
+                    "cwd": workspace.to_string_lossy()
+                }),
+                evidence_claim: Some("direct stdin command started".to_string()),
+            },
+        )
+        .unwrap();
+    assert_eq!(command.status, ToolCallStatus::Running);
+    let process_id = command
+        .output
+        .as_ref()
+        .and_then(|output| output.get("process_id"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap()
+        .to_string();
+    wait_process_state(&fx.kernel, &process_id, ProcessLifecycleState::Running);
+
+    let write_input = json!({
+        "process_id": process_id,
+        "write_id": "direct-write-1",
+        "text": "model-stdin\n"
+    });
+    let write = fx
+        .kernel
+        .invoke_tool(
+            &fx.worker.agent_id,
+            &fx.task.task_id,
+            &fx.worker.session_id,
+            cap.capability_id.clone(),
+            4,
+            ToolInvokeInput {
+                tool_name: "write_stdin".to_string(),
+                input: write_input.clone(),
+                evidence_claim: Some("direct stdin write completed".to_string()),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        write.status,
+        ToolCallStatus::Completed,
+        "{:?}",
+        write.output
+    );
+    assert_eq!(
+        write
+            .output
+            .as_ref()
+            .and_then(|output| output.pointer("/stdin_write/write_id"))
+            .and_then(serde_json::Value::as_str),
+        Some("direct-write-1")
+    );
+    let duplicate = fx
+        .kernel
+        .invoke_tool(
+            &fx.worker.agent_id,
+            &fx.task.task_id,
+            &fx.worker.session_id,
+            cap.capability_id.clone(),
+            4,
+            ToolInvokeInput {
+                tool_name: "write_stdin".to_string(),
+                input: write_input,
+                evidence_claim: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        duplicate
+            .output
+            .as_ref()
+            .and_then(|output| output.pointer("/stdin_write/sequence"))
+            .and_then(serde_json::Value::as_u64),
+        Some(1)
+    );
+
+    let mut stdout = String::new();
+    let poll_started = std::time::Instant::now();
+    while poll_started.elapsed() < std::time::Duration::from_secs(8) {
+        let poll = fx
+            .kernel
+            .invoke_tool(
+                &fx.worker.agent_id,
+                &fx.task.task_id,
+                &fx.worker.session_id,
+                cap.capability_id.clone(),
+                4,
+                ToolInvokeInput {
+                    tool_name: "write_stdin".to_string(),
+                    input: json!({
+                        "process_id": process_id,
+                        "field": "stdout"
+                    }),
+                    evidence_claim: None,
+                },
+            )
+            .unwrap();
+        stdout = poll
+            .output
+            .as_ref()
+            .and_then(|output| output.pointer("/process_output/chunks"))
+            .and_then(serde_json::Value::as_array)
+            .unwrap()
+            .iter()
+            .filter_map(|chunk| chunk.get("text").and_then(serde_json::Value::as_str))
+            .collect::<Vec<_>>()
+            .join("");
+        if stdout.contains("direct:model-stdin") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    assert!(stdout.contains("direct:model-stdin"));
+    assert_eq!(
+        fx.kernel
+            .state_snapshot()
+            .unwrap()
+            .process_stdin_writes
+            .iter()
+            .filter(|write| write.process_id == process_id)
+            .count(),
+        1
+    );
+
+    let _ = std::fs::remove_dir_all(workspace);
+}
+
+#[test]
 fn process_stop_and_kill_record_interrupted_and_terminated_sessions() {
     let fx = fixture();
     let workspace = std::env::temp_dir().join(format!(
@@ -1854,6 +2046,7 @@ fn default_tool_registry_is_minimal() {
             "read_file",
             "read_image",
             "run_command",
+            "write_stdin",
             "set_goal",
             "accomplish_goal",
             "update_checklist",

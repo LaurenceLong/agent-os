@@ -792,6 +792,11 @@ fn tool_resource_scope(
                 }
             }
         }
+        "write_stdin" => {
+            if let Some(process_id) = input.get("process_id").and_then(serde_json::Value::as_str) {
+                scopes.push(format!("process:{process_id}"));
+            }
+        }
         _ if descriptor.driver_class == ToolDriverClass::Mcp => {
             let server = descriptor
                 .driver_config

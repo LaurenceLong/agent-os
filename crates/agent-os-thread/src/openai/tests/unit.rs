@@ -688,13 +688,14 @@ fn tool_definitions_include_all_core_tools() {
                 .and_then(Value::as_str)
         })
         .collect();
-    assert_eq!(names.len(), 19);
+    assert_eq!(names.len(), 20);
     assert!(names.contains(&"apply_patch"));
     assert!(names.contains(&"glob_files"));
     assert!(names.contains(&"grep_files"));
     assert!(names.contains(&"read_file"));
     assert!(names.contains(&"read_image"));
     assert!(names.contains(&"run_command"));
+    assert!(names.contains(&"write_stdin"));
     assert!(names.contains(&"set_goal"));
     assert!(names.contains(&"accomplish_goal"));
     assert!(names.contains(&"update_checklist"));

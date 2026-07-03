@@ -110,7 +110,7 @@ Tool driver tests MUST verify:
 - secret redaction behavior
 - failure semantics
 - provider capability declaration for model-facing tools where applicable
-- Host OS tool surface contains exactly `glob_files`, `grep_files`, `read_file`, `read_image`, `apply_patch`, and `run_command`; `read_image` is visible only for image-capable model aliases, `glob_files` provides shell-free workspace path discovery by glob, `grep_files` provides shell-free UTF-8 content discovery by literal text, and `apply_patch` covers workspace file creation, update, and deletion with exactly one file operation per call
+- Host OS tool surface contains exactly `glob_files`, `grep_files`, `read_file`, `read_image`, `apply_patch`, `run_command`, and `write_stdin`; `read_image` is visible only for image-capable model aliases, `glob_files` provides shell-free workspace path discovery by glob, `grep_files` provides shell-free UTF-8 content discovery by literal text, `apply_patch` covers workspace file creation, update, and deletion with exactly one file operation per call, and `write_stdin` continues kernel-owned piped process sessions by `process_id`
 - Agent-OS control-plane tools are grouped by work state, communication, permission request, agent supervision, privileged administration, and session lifecycle
 - `wait_agent` is absent from the core surface; child progress reporting is covered by `agent_control(action=set_hook)`
 - model-visible tool projection comes from the kernel-owned `ToolPlan`; direct
@@ -134,8 +134,9 @@ Tool driver tests MUST verify:
   `agent_control(action=output)` can poll by `process_id` plus
   `after_sequence`
 - `run_command` supports explicit `stdin="piped"` process sessions, and
-  `agent_control(action=send)` writes stdin by `process_id`, `write_id`, and
-  `text` with replayable idempotent `ProcessStdinWritten` records
+  `write_stdin` writes stdin by `process_id`, `write_id`, and `text` with
+  replayable idempotent `ProcessStdinWritten` records; supervised stdin
+  continues through `agent_control(action=send)`
 - `agent_control(action=stop)` can interrupt a running process by
   `process_id`, `agent_control(action=kill)` can terminate a running process by
   `process_id`, and both lifecycle outcomes replay through `ProcessSession`

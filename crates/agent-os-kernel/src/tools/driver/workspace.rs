@@ -407,6 +407,62 @@ pub(in crate::tools) fn run_process(
     }))
 }
 
+pub(in crate::tools) fn run_process_stdin(
+    kernel: &Kernel,
+    syscall: &SyscallEnvelope,
+    descriptor: &ToolDescriptor,
+    input: &Value,
+) -> AgentOsResult<Value> {
+    let process_id = required_string(input, "process_id")?;
+    let write_id = optional_string(input, "write_id")?;
+    let text = optional_string(input, "text")?;
+    match (write_id.as_deref(), text.as_deref()) {
+        (Some(_), None) => {
+            return Err(AgentOsError::Validation(
+                "write_stdin write_id requires text".to_string(),
+            ));
+        }
+        (None, Some(_)) => {
+            return Err(AgentOsError::Validation(
+                "write_stdin text requires write_id".to_string(),
+            ));
+        }
+        _ => {}
+    }
+
+    ensure_process_owned_by_agent(kernel, &syscall.agent_id, &process_id)?;
+    let stdin_write = if let (Some(write_id), Some(text)) = (write_id, text) {
+        Some(kernel.write_process_stdin(&process_id, &write_id, &text)?)
+    } else {
+        None
+    };
+    let (session, invocation, chunks) =
+        process_output_context_for_agent(kernel, &syscall.agent_id, &process_id)?;
+    let worker = kernel
+        .tool_workers
+        .lock()
+        .ok()
+        .and_then(|workers| workers.get(&session.tool_call_id).cloned());
+    let mut output = super::super::output::query_process_output(
+        &session,
+        &invocation,
+        worker.as_ref(),
+        &chunks,
+        input,
+    )?;
+    let object = output.as_object_mut().ok_or_else(|| {
+        AgentOsError::Validation("process output projection must be an object".to_string())
+    })?;
+    object.insert("tool".to_string(), json!(descriptor.name.clone()));
+    object.insert("status".to_string(), json!("ok"));
+    object.insert("input".to_string(), input.clone());
+    object.insert("driver_class".to_string(), json!(descriptor.driver_class));
+    if let Some(write) = stdin_write {
+        object.insert("stdin_write".to_string(), json!(write));
+    }
+    Ok(output)
+}
+
 fn process_command_mode(mode: &str) -> ProcessCommandMode {
     match mode {
         "exec" => ProcessCommandMode::Exec,
@@ -427,6 +483,46 @@ fn process_output_stream(
         truncated: stream.truncated,
         spool_path: stream.spool_path.clone(),
     }
+}
+
+fn ensure_process_owned_by_agent(
+    kernel: &Kernel,
+    agent_id: &str,
+    process_id: &str,
+) -> AgentOsResult<ProcessSession> {
+    kernel
+        .read_state()?
+        .process_sessions
+        .get(process_id)
+        .filter(|session| session.agent_id == agent_id)
+        .cloned()
+        .ok_or_else(|| AgentOsError::NotFound(format!("process session {process_id}")))
+}
+
+fn process_output_context_for_agent(
+    kernel: &Kernel,
+    agent_id: &str,
+    process_id: &str,
+) -> AgentOsResult<(ProcessSession, ToolInvocation, Vec<ProcessOutputChunk>)> {
+    let state = kernel.read_state()?;
+    let session = state
+        .process_sessions
+        .get(process_id)
+        .filter(|session| session.agent_id == agent_id)
+        .cloned()
+        .ok_or_else(|| AgentOsError::NotFound(format!("process session {process_id}")))?;
+    let invocation = state
+        .tool_invocations
+        .get(&session.tool_call_id)
+        .cloned()
+        .ok_or_else(|| AgentOsError::NotFound(format!("tool call {}", session.tool_call_id)))?;
+    let chunks = state
+        .process_output_chunks
+        .iter()
+        .filter(|chunk| chunk.process_id == session.process_id)
+        .cloned()
+        .collect::<Vec<_>>();
+    Ok((session, invocation, chunks))
 }
 
 fn run_command_mode(input: &Value, has_args: bool) -> AgentOsResult<String> {

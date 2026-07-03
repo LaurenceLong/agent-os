@@ -24,6 +24,7 @@ mod set_goal;
 mod submit_final;
 mod tool_search;
 mod update_checklist;
+mod write_stdin;
 
 use crate::*;
 use agent_os_sys::*;
@@ -56,6 +57,7 @@ fn all_tools() -> Vec<BuiltinTool> {
         read_file::tool(),
         read_image::tool(),
         run_command::tool(),
+        write_stdin::tool(),
         set_goal::tool(),
         accomplish_goal::tool(),
         update_checklist::tool(),
