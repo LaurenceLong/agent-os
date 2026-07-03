@@ -444,7 +444,7 @@ fn run_live_llm_goal_driven_ecosystem_e2e(
         import_live_ecosystem(&kernel, &tmp, skill_name, skill_marker, resource_marker)
             .unwrap_or_else(|error| panic!("import live ecosystem: {error}"));
     let goal = format!(
-        "Produce a focused ecosystem evidence report. Call load_skill for skill {skill_name} with offset 3 and limit 2; use that page to find the resource path references/context.txt and the skill marker {skill_marker}. Then call read_skill_resource with name {skill_name}, path references/context.txt, offset 2, and limit 1; use that page to find resource marker {resource_marker}. Then call tool_search with query exactly live echo, call the returned MCP echo tool with text exactly {mcp_marker}, and do not call any MCP tool before tool_search exposes it. Finally submit_final with a summary containing {skill_marker}, {resource_marker}, and {mcp_marker}. The final submit_final call must include an evidence_map that cites evidence_ids from the completed load_skill, read_skill_resource, and MCP tool results."
+        "Produce a focused ecosystem evidence report. Call load_skill for skill {skill_name} with offset 3 and limit 2; use that page to find the resource path references/context.txt and the skill marker {skill_marker}. Then call read_skill_resource with name {skill_name}, path references/context.txt, offset 2, and limit 1; use that page to find resource marker {resource_marker}. Then call tool_search with query exactly live echo and limit 1, call the returned MCP echo tool with text exactly {mcp_marker}, and do not call any MCP tool before tool_search exposes it. Finally submit_final with a summary containing {skill_marker}, {resource_marker}, and {mcp_marker}. The final submit_final call must include an evidence_map that cites evidence_ids from the completed load_skill, read_skill_resource, and MCP tool results."
     );
     let audit_log_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../target/agent-os-audit")
@@ -499,6 +499,7 @@ fn run_live_llm_goal_driven_ecosystem_e2e(
         ],
     );
     assert_skill_context_parameters_observed(&report, skill_name, skill_marker, resource_marker);
+    assert_tool_search_parameters_observed(&report);
     assert_ecosystem_final_summary(&report, skill_marker, resource_marker, mcp_marker);
     let mcp_output = report
         .tool_results
@@ -971,6 +972,49 @@ fn assert_skill_context_parameters_observed(
         .unwrap_or_else(|| panic!("missing read_skill_resource content: {resource_record:?}"));
     assert!(resource_content.contains(resource_marker));
     assert!(!resource_content.contains("Resource context intro line"));
+}
+
+fn assert_tool_search_parameters_observed(report: &RuntimeRunReport) {
+    let record = report
+        .tool_results
+        .iter()
+        .find(|record| {
+            record.tool_name == "tool_search"
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("query"))
+                    .and_then(Value::as_str)
+                    == Some("live echo")
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("limit"))
+                    .and_then(Value::as_u64)
+                    == Some(1)
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "missing parameterized tool_search query/limit call: {:?}",
+                report.tool_results
+            )
+        });
+    let output = record
+        .output
+        .as_ref()
+        .unwrap_or_else(|| panic!("missing tool_search output: {record:?}"));
+    assert_eq!(
+        output.get("query").and_then(Value::as_str),
+        Some("live echo")
+    );
+    assert_eq!(
+        output.get("returned_matches").and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        output.pointer("/matches/0/name").and_then(Value::as_str),
+        Some("mcp__live_echo__echo")
+    );
 }
 
 fn assert_ecosystem_final_summary(
