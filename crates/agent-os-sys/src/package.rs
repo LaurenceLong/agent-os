@@ -76,3 +76,28 @@ pub struct PackageInstallRecord {
     pub created_at: String,
     pub updated_at: String,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PackageContributionKind {
+    InstructionDocument,
+    SkillDefinition,
+    CommandDefinition,
+    McpServer,
+    McpTool,
+    ImportedAgentProfile,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PackageContributionRecord {
+    pub package_contribution_id: String,
+    pub package_install_id: String,
+    pub package_id: String,
+    pub package_name: String,
+    pub contribution_kind: PackageContributionKind,
+    pub contribution_id: String,
+    pub contribution_name: String,
+    pub source: crate::EcosystemSource,
+    pub content_hash: Option<String>,
+    pub created_at: String,
+}

@@ -1,5 +1,6 @@
 use crate::*;
 use agent_os_sys::*;
+use std::path::Path;
 
 impl Kernel {
     pub fn install_package_manifest(
@@ -74,6 +75,62 @@ impl Kernel {
         self.set_package_status(package_name, PackageInstallStatus::Disabled, Some(reason))
     }
 
+    pub fn register_package_contribution(
+        &self,
+        package_name: &str,
+        contribution_kind: PackageContributionKind,
+        contribution_id: impl Into<String>,
+        contribution_name: impl Into<String>,
+        source: EcosystemSource,
+        content_hash: Option<String>,
+    ) -> AgentOsResult<PackageContributionRecord> {
+        let install = self
+            .read_state()?
+            .package_installs
+            .get(package_name)
+            .cloned()
+            .ok_or_else(|| AgentOsError::NotFound(format!("package {package_name}")))?;
+        if install.status != PackageInstallStatus::Enabled {
+            return Err(AgentOsError::Validation(format!(
+                "package {package_name} is disabled"
+            )));
+        }
+        validate_contribution_source(&install, &source)?;
+        let contribution_id = contribution_id.into();
+        let contribution_name = contribution_name.into();
+        validate_contribution_identity(&contribution_id, &contribution_name)?;
+        if let Some(hash) = content_hash.as_deref() {
+            if hash.trim().is_empty() {
+                return Err(AgentOsError::Validation(
+                    "package contribution content_hash must not be empty".to_string(),
+                ));
+            }
+        }
+        let contribution = PackageContributionRecord {
+            package_contribution_id: new_id("pkg_contrib_"),
+            package_install_id: install.package_install_id,
+            package_id: install.package_id,
+            package_name: install.manifest.package_name,
+            contribution_kind,
+            contribution_id,
+            contribution_name,
+            source,
+            content_hash,
+            created_at: now_rfc3339(),
+        };
+        self.emit(
+            "PackageContributionRegistered",
+            "package_contribution",
+            &contribution.package_contribution_id,
+            None,
+            None,
+            None,
+            None,
+            &contribution,
+        )?;
+        Ok(contribution)
+    }
+
     fn set_package_status(
         &self,
         package_name: &str,
@@ -122,6 +179,38 @@ fn validate_package_manifest_record(record: &PackageManifestRecord) -> AgentOsRe
                 "package manifest record field {field} must not be empty"
             )));
         }
+    }
+    Ok(())
+}
+
+fn validate_contribution_identity(
+    contribution_id: &str,
+    contribution_name: &str,
+) -> AgentOsResult<()> {
+    if contribution_id.trim().is_empty() || contribution_name.trim().is_empty() {
+        return Err(AgentOsError::Validation(
+            "package contribution requires id and name".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_contribution_source(
+    install: &PackageInstallRecord,
+    source: &EcosystemSource,
+) -> AgentOsResult<()> {
+    if source.source_path.trim().is_empty() {
+        return Err(AgentOsError::Validation(
+            "package contribution source_path must not be empty".to_string(),
+        ));
+    }
+    let root = Path::new(&install.root_path);
+    let source_path = Path::new(&source.source_path);
+    if !source_path.starts_with(root) {
+        return Err(AgentOsError::Validation(format!(
+            "package contribution source {} is outside package root {}",
+            source.source_path, install.root_path
+        )));
     }
     Ok(())
 }

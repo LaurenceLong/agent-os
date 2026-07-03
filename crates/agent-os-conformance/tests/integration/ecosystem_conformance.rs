@@ -77,13 +77,20 @@ fn ecosystem_imports_project_sources_and_replays_kernel_events() {
 #[test]
 fn package_install_enable_disable_state_replays_from_kernel_events() {
     let workspace = temp_workspace("agent-os-package-install-state");
+    fs::create_dir_all(workspace.join(".agent-os/skills/pkg-skill")).unwrap();
     fs::create_dir_all(workspace.join(".agent-os/prompts")).unwrap();
     fs::create_dir_all(workspace.join(".agent-os/policy")).unwrap();
+    fs::write(
+        workspace.join(".agent-os/skills/pkg-skill/SKILL.md"),
+        "---\nname: pkg-skill\ndescription: Package skill.\n---\nUse the package skill.\n",
+    )
+    .unwrap();
     fs::write(
         workspace.join(".agent-os/prompts/supervisor.md"),
         "Prompt\n",
     )
     .unwrap();
+    fs::write(workspace.join(".agent-os/config.json"), "{}\n").unwrap();
     fs::write(workspace.join(".agent-os/policy/review.json"), "{}\n").unwrap();
     fs::write(
         workspace.join(".agent-os/manifest.json"),
@@ -109,6 +116,12 @@ fn package_install_enable_disable_state_replays_from_kernel_events() {
     })
     .unwrap();
     let package = catalog.package_manifests[0].clone();
+    let skill = catalog
+        .skill_definitions
+        .iter()
+        .find(|skill| skill.name == "pkg-skill")
+        .unwrap()
+        .clone();
 
     let kernel = Kernel::new();
     let install = kernel
@@ -146,6 +159,22 @@ fn package_install_enable_disable_state_replays_from_kernel_events() {
         matches!(duplicate, AgentOsError::Validation(ref message) if message.contains("already installed")),
         "{duplicate:?}"
     );
+    let skill_contribution = kernel
+        .register_package_contribution(
+            "governed-package",
+            PackageContributionKind::SkillDefinition,
+            skill.skill_id.clone(),
+            skill.name.clone(),
+            skill.source.clone(),
+            Some(skill.content_hash.clone()),
+        )
+        .unwrap();
+    assert_eq!(
+        skill_contribution.contribution_kind,
+        PackageContributionKind::SkillDefinition
+    );
+    assert_eq!(skill_contribution.contribution_name, "pkg-skill");
+    let package_config_path = std::path::PathBuf::from(&install.root_path).join("config.json");
 
     let disabled = kernel
         .disable_package("governed-package", "disabled by policy")
@@ -155,9 +184,63 @@ fn package_install_enable_disable_state_replays_from_kernel_events() {
         disabled.disabled_reason.as_deref(),
         Some("disabled by policy")
     );
+    let disabled_contribution = kernel
+        .register_package_contribution(
+            "governed-package",
+            PackageContributionKind::McpServer,
+            "mcp_server_disabled",
+            "disabled-server",
+            EcosystemSource {
+                source_kind: EcosystemSourceKind::AgentOs,
+                source_scope: EcosystemSourceScope::Project,
+                source_path: package_config_path.to_string_lossy().to_string(),
+            },
+            None,
+        )
+        .unwrap_err();
+    assert!(
+        matches!(disabled_contribution, AgentOsError::Validation(ref message) if message.contains("is disabled")),
+        "{disabled_contribution:?}"
+    );
     let enabled = kernel.enable_package("governed-package").unwrap();
     assert_eq!(enabled.status, PackageInstallStatus::Enabled);
     assert_eq!(enabled.disabled_reason, None);
+    let mcp_contribution = kernel
+        .register_package_contribution(
+            "governed-package",
+            PackageContributionKind::McpServer,
+            "mcp_server_echo",
+            "echo",
+            EcosystemSource {
+                source_kind: EcosystemSourceKind::AgentOs,
+                source_scope: EcosystemSourceScope::Project,
+                source_path: package_config_path.to_string_lossy().to_string(),
+            },
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        mcp_contribution.contribution_kind,
+        PackageContributionKind::McpServer
+    );
+    let outside_contribution = kernel
+        .register_package_contribution(
+            "governed-package",
+            PackageContributionKind::CommandDefinition,
+            "command_outside",
+            "outside",
+            EcosystemSource {
+                source_kind: EcosystemSourceKind::AgentOs,
+                source_scope: EcosystemSourceScope::Project,
+                source_path: workspace.join("outside.md").to_string_lossy().to_string(),
+            },
+            None,
+        )
+        .unwrap_err();
+    assert!(
+        matches!(outside_contribution, AgentOsError::Validation(ref message) if message.contains("outside package root")),
+        "{outside_contribution:?}"
+    );
 
     let events = kernel.events().unwrap();
     assert!(events
@@ -169,6 +252,13 @@ fn package_install_enable_disable_state_replays_from_kernel_events() {
     assert!(events
         .iter()
         .any(|event| event.event_type == "PackageEnabled"));
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == "PackageContributionRegistered")
+            .count(),
+        2
+    );
 
     let replayed = Kernel::from_events(&events).unwrap();
     let replayed_state = replayed.state_snapshot().unwrap();
@@ -184,6 +274,15 @@ fn package_install_enable_disable_state_replays_from_kernel_events() {
     assert_eq!(
         replayed_package.install_provenance.installed_by,
         "conformance"
+    );
+    let replayed_contribution_names = replayed_state
+        .package_contributions
+        .values()
+        .map(|contribution| contribution.contribution_name.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        replayed_contribution_names,
+        std::collections::BTreeSet::from(["echo", "pkg-skill"])
     );
 
     let _ = fs::remove_dir_all(workspace);

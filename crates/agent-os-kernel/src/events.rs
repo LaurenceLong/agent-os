@@ -351,6 +351,12 @@ impl Kernel {
                     .package_installs
                     .insert(install.manifest.package_name.clone(), install);
             }
+            "PackageContributionRegistered" => {
+                let contribution: PackageContributionRecord = parse_payload(&event.payload)?;
+                state
+                    .package_contributions
+                    .insert(contribution.package_contribution_id.clone(), contribution);
+            }
             "InstructionDocumentImported" => {
                 let document: InstructionDocument = parse_payload(&event.payload)?;
                 state
