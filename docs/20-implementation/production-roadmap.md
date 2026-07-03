@@ -2,7 +2,7 @@
 
 Status: planning baseline
 
-Last updated: 2026-07-01
+Last updated: 2026-07-03
 
 ## 1. Strategy
 
@@ -19,7 +19,7 @@ The project SHOULD NOT start with a UI, a marketplace, or a generic workflow bui
 ## Current Implementation Snapshot
 
 The current repository is no longer only a planning artifact. It contains a
-single-node Rust implementation of the early v0.2.0 kernel and Agent Thread
+single-node Rust implementation of the v0.3.0 kernel, host, and Agent Thread
 runtime:
 
 - `agent-os-sys` owns ABI/data types.
@@ -28,6 +28,12 @@ runtime:
 - `agent-os-kernel` owns lifecycle state, profiles, permissions, tool broker
   mediation, environments, leases, communication, blackboard entries, evidence,
   artifacts, review, verification, final submissions, and task bundle export.
+- `agent-os-config` owns cross-platform Agent-OS roots, global
+  `config.json`, project overrides, provider catalog resolution, last-good
+  global config backup, and project runtime paths.
+- `agent-os-ecosystem` discovers global and project rules, instructions,
+  skills, commands, agents, and MCP declarations before they are imported into
+  typed kernel state.
 - The tool broker attaches managed text results to the unified tool-output
   manager. Long-running or large tool outputs can be read by `tool_call_id`
   using default `new` windows, explicit `head`/`tail` windows, or
@@ -35,18 +41,39 @@ runtime:
 - `agent-os-thread` owns the runtime loop, provider-neutral model actions,
   OpenAI-compatible and Anthropic-compatible adapters, prompt/message builders,
   parser logic, and live audit logs.
+- `agent-os-distro` owns packaged distribution prompts, workflow labels,
+  examples, and policy builders for the software-engineering distribution.
+- `agent-os-app-server` owns the JSONL app protocol and typed projections for
+  thread, turn, stats, notifications, automations, and task bundle export.
+- `agent-os-host` opens the SQLite-backed kernel store, owns runtime job
+  records and background workers, launches configured Agent Thread Runtime
+  jobs, serves app projections, and recovers queued jobs after process restart.
 - `agent-os-cli` provides demo, run, code, chat, status, and resume entrypoints.
+  `chat` starts `agent-os-hostd --stdio`, resolves the selected
+  `provider/model` from the user's global config plus project overrides, and
+  lets the host run provider-backed runtime jobs.
+- Provider-backed runtime jobs consume typed model `limit`, `capabilities`, and
+  model `options`; model `limit.output` supplies the default max-output token
+  bound, provider-specific reasoning options are passed through explicitly, and
+  LLM API failures are classified before they enter runtime feedback.
 - `agent-os-conformance` captures the durable contract across lifecycle,
   security, communication, storage, provider routing, software distribution,
   runtime resume, and export behavior.
+- `benchmarks/swe-bench-lite/private20_runner.py` contains the private
+  SWE-bench Lite runner and official-harness evaluation workflow.
 
-The current model-visible v0.2.0 tool surface is:
+The current model-visible v0.3.0 tool surface is:
 
 ```text
 Host OS:
   read_file
+  read_image
   apply_patch
   run_command
+
+Ecosystem:
+  load_skill
+  read_skill_resource
 
 Work State:
   set_goal
@@ -69,7 +96,8 @@ Session Lifecycle:
 `agent_control` is one CLI-like tool with an `action` field. Normal actions are
 `start`, `status`, `output`, `set_hook`, `send`, `resume`, `stop`,
 `set_timeout`, and `export_trace`; privileged administration actions are
-`kill`, `delete_session`, and `purge_state`.
+`kill`, `delete_session`, and `purge_state`. Permission-response actions are
+`approve_permission` and `deny_permission`.
 
 `agent_control(action=start)` uses `payload.goal` as the canonical child local
 goal. `set_goal` is Supervisor-only retargeting for the Supervisor's own thread
@@ -99,6 +127,12 @@ AGENT_OS_LIVE_ANTHROPIC_BASE_URL=https://api.anthropic.com \
 AGENT_OS_LIVE_ANTHROPIC_MODEL=claude-sonnet-4-20250514 \
 cargo test -p agent-os-thread live_anthropic_compatible_llm_goal_driven -- --ignored --nocapture
 ```
+
+The benchmark validation baseline is intentionally stricter than Agent-OS
+process completion: generated patches must be converted to predictions for the
+exact evaluated instance ids, then scored with the official SWE-bench harness
+from the WSL virtualenv documented in
+`docs/20-implementation/swe-bench-lite-private-benchmark.md`.
 
 ## 2. Phase 0: Contracts
 
@@ -203,17 +237,17 @@ Deliverables:
 - syscall proposal flow
 - yield checkpoint flow
 - Supervisor hierarchy with `S0`, `S1`, `S2`, ... levels
-- durable invocation edge recording for every delegation, worker assignment, review request, and human escalation
+- durable invocation edge recording for every delegation, producer assignment, review request, and human escalation
 - built-in role runtimes:
   - SupervisorAgent
   - ReviewerAgent
-  - WorkerAgent
+  - ProducerAgent
 
 Acceptance gates:
 
 - ReviewerAgent cannot mutate reviewed workspace artifacts
-- WorkerAgent cannot be the sole reviewer of its own artifact
-- WorkerAgent can attach command logs through `run_command`
+- ProducerAgent cannot be the sole reviewer of its own artifact
+- ProducerAgent can attach command logs through `run_command`
 - SupervisorAgent cannot submit final without required evidence
 - delegated Supervisors have recorded levels and invocation edges
 - Agent Thread cannot widen its own role, permission, or sandbox profile
@@ -229,6 +263,7 @@ Deliverables:
 - Tool Broker service
 - Host OS model-visible tools:
   - `read_file`
+  - `read_image`
   - `apply_patch`
   - `run_command`
 - Agent-OS control-plane tool taxonomy:
@@ -305,10 +340,10 @@ Deliverables:
 
 Acceptance gates:
 
-- two WorkerAgents cannot mutate the same file concurrently
+- two ProducerAgents cannot mutate the same file concurrently
 - thread without granted resource lease cannot consume exclusive resource
 - ReviewerAgent reviews the exact artifact version
-- WorkerAgent waits for required dependencies
+- ProducerAgent waits for required dependencies
 - human interruption budget is enforced
 - blocked agent records a machine-readable blocker
 - scheduler can suspend low-value work
@@ -353,8 +388,8 @@ Deliverables:
 
 - software engineering distro manifest
 - workflow prompts and examples for Supervisor-led software engineering work
-- optional workflow step labels mapped onto core Worker or Reviewer semantics
-- workspace filesystem policy using `read_file` plus `apply_patch` for one-file create, update, or delete operations
+- optional workflow step labels mapped onto core Producer or Reviewer semantics
+- workspace filesystem policy using `read_file`/`read_image` plus `apply_patch` for one-file create, update, or delete operations
 - command execution policy using `run_command`
 - review policy pack
 - final answer policy pack

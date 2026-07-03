@@ -109,7 +109,7 @@ expires_at: string | null
 
 ### 4.3 AgentInvocationDescriptor
 
-Every Supervisor delegation, worker assignment, review request, human escalation, and root Supervisor creation MUST expose an invocation edge.
+Every Supervisor delegation, producer assignment, review request, human escalation, and root Supervisor creation MUST expose an invocation edge.
 
 Minimum shape:
 
@@ -124,7 +124,7 @@ callee_thread_id: string
 callee_agent_id: string
 callee_role_profile_id: string
 callee_security_level: integer
-relationship: supervisor_delegation | worker_assignment | review_request | human_escalation | root_supervisor
+relationship: supervisor_delegation | producer_assignment | review_request | human_escalation | root_supervisor
 goal: string
 profile_snapshot_id: string
 created_at: string
@@ -170,7 +170,7 @@ created_at: string
 | `human.message` | Request a human-facing message or question | yes |
 | `comm.ack` | Acknowledge delivery or receipt of a message | yes |
 
-Parent and peer direct routes are not v0.1 core syscalls. Parent authority is represented by the Supervisor that invoked the worker. Worker-to-worker coordination goes through Supervisor or scoped blackboard channels.
+Parent and peer direct routes are not v0.1 core syscalls. Parent authority is represented by the Supervisor that invoked the producer. Producer-to-producer coordination goes through Supervisor or scoped blackboard channels.
 
 ### 5.4 Context and Memory
 

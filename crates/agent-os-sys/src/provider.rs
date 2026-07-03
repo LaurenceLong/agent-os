@@ -1,6 +1,39 @@
-use crate::ProfileStatus;
+use crate::{AgentOsError, AgentOsResult, ProfileStatus};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LlmApiStyle {
+    OpenAiCompatible,
+    AnthropicCompatible,
+}
+
+impl LlmApiStyle {
+    pub fn from_value(value: &str) -> AgentOsResult<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "openai" | "openai-compatible" | "openai_compatible" | "chat-completions"
+            | "chat_completions" => Ok(Self::OpenAiCompatible),
+            "anthropic" | "anthropic-compatible" | "anthropic_compatible" | "messages" => {
+                Ok(Self::AnthropicCompatible)
+            }
+            other => Err(AgentOsError::Validation(format!(
+                "unsupported api_style {other}; expected openai-compatible or anthropic-compatible"
+            ))),
+        }
+    }
+
+    pub fn from_base_url(api_base: &str) -> Self {
+        if api_base
+            .trim_end_matches('/')
+            .to_ascii_lowercase()
+            .ends_with("/anthropic")
+        {
+            return Self::AnthropicCompatible;
+        }
+        Self::OpenAiCompatible
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CredentialRef {
@@ -38,14 +71,87 @@ pub struct ProviderProfile {
     pub superseded_by: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelLimit {
+    pub context: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<u64>,
+    pub output: u64,
+}
+
+impl ModelLimit {
+    pub fn to_json(&self) -> Value {
+        serde_json::to_value(self).expect("ModelLimit serializes to JSON")
+    }
+
+    pub fn validate_for_model(&self, provider_id: &str, model_id: &str) -> AgentOsResult<()> {
+        if self.context == 0 {
+            return Err(AgentOsError::Validation(format!(
+                "Agent-OS config provider `{provider_id}` model `{model_id}` limit.context must be greater than 0"
+            )));
+        }
+        if self.output == 0 {
+            return Err(AgentOsError::Validation(format!(
+                "Agent-OS config provider `{provider_id}` model `{model_id}` limit.output must be greater than 0"
+            )));
+        }
+        if let Some(input) = self.input {
+            if input == 0 {
+                return Err(AgentOsError::Validation(format!(
+                    "Agent-OS config provider `{provider_id}` model `{model_id}` limit.input must be greater than 0"
+                )));
+            }
+            if input > self.context {
+                return Err(AgentOsError::Validation(format!(
+                    "Agent-OS config provider `{provider_id}` model `{model_id}` limit.input must not exceed limit.context"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct ModelCapabilities {
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub streaming: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub tool_calling: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub reasoning: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub temperature: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub image_input: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub structured_output: bool,
+}
+
+impl ModelCapabilities {
+    pub fn to_json(&self) -> Value {
+        serde_json::to_value(self).expect("ModelCapabilities serializes to JSON")
+    }
+
+    pub fn is_empty(&self) -> bool {
+        !self.streaming
+            && !self.tool_calling
+            && !self.reasoning
+            && !self.temperature
+            && !self.image_input
+            && !self.structured_output
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelAlias {
     pub model_alias_id: String,
     pub alias: String,
     pub provider_id: String,
     pub provider_model_name: String,
-    pub capabilities: Value,
-    pub limits: Value,
+    pub capabilities: ModelCapabilities,
+    pub limit: ModelLimit,
     pub cost: Value,
     pub status: String,
     pub created_at: String,
@@ -85,6 +191,7 @@ pub struct ProviderRouteDecision {
     pub selected_model_alias: String,
     pub provider_id: String,
     pub provider_model_name: String,
+    pub model_capabilities: ModelCapabilities,
     pub credential_ref_id: String,
     pub resolved_at: String,
 }
@@ -143,4 +250,8 @@ pub struct ProviderStreamSession {
     pub usage: ProviderUsage,
     pub created_at: String,
     pub completed_at: Option<String>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }

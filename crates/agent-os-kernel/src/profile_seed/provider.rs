@@ -7,7 +7,7 @@ pub(super) fn default_routing_policy(now: &str) -> RoutingPolicy {
         status: ProfileStatus::Active,
         name: "DefaultRouting".to_string(),
         rules: vec![
-            json!({"when": {"role": "WorkerAgent"}, "use": {"model_alias": "coding-primary"}}),
+            json!({"when": {"role": "ProducerAgent"}, "use": {"model_alias": "coding-primary"}}),
             json!({"when": {"role": "ReviewerAgent"}, "use": {"model_alias": "review-primary"}}),
         ],
         created_at: now.to_string(),
@@ -37,7 +37,7 @@ pub(super) fn default_provider_profile(now: &str) -> ProviderProfile {
         },
         retry_policy: Some(json!({
             "max_attempts": 2,
-            "backoff_ms": 0
+            "backoff_ms": 30_000
         })),
         transform_policy: Some(json!({
             "adapter_style": "openai-compatible"
@@ -91,11 +91,13 @@ pub(super) fn core_model_aliases(now: &str) -> Vec<ModelAlias> {
             "primary-coding-model",
             true,
             true,
+            true,
         ),
         (
             "review-primary",
             "primary-provider",
             "primary-review-model",
+            true,
             true,
             true,
         ),
@@ -105,12 +107,14 @@ pub(super) fn core_model_aliases(now: &str) -> Vec<ModelAlias> {
             "primary-general-model",
             true,
             true,
+            true,
         ),
         (
             "text-only",
             "primary-provider",
             "primary-text-model",
             true,
+            false,
             false,
         ),
     ]
@@ -120,17 +124,19 @@ pub(super) fn core_model_aliases(now: &str) -> Vec<ModelAlias> {
         alias: alias.0.to_string(),
         provider_id: alias.1.to_string(),
         provider_model_name: alias.2.to_string(),
-        capabilities: json!({
-            "streaming": alias.3,
-            "tool_calling": true,
-            "reasoning": true,
-            "image_input": false,
-            "structured_output": alias.4
-        }),
-        limits: json!({
-            "context_window": 128000,
-            "max_output_tokens": 16000
-        }),
+        capabilities: ModelCapabilities {
+            streaming: alias.3,
+            tool_calling: true,
+            reasoning: true,
+            image_input: alias.5,
+            structured_output: alias.4,
+            ..ModelCapabilities::default()
+        },
+        limit: ModelLimit {
+            context: 128_000,
+            input: None,
+            output: 16_000,
+        },
         cost: json!({
             "input_per_1m": null,
             "output_per_1m": null

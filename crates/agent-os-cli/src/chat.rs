@@ -1,9 +1,9 @@
 use crate::args::ChatOptions;
-use crate::provider_config::GlobalProviderConfig;
 use crate::support::{
-    ensure_safe_relative_workspace_path, io_result, write_task_bundle_from_app_response,
-    StdioKerneldAppClient, StdioKerneldConfig,
+    default_state_db_for_workspace, ensure_safe_relative_workspace_path, io_result,
+    write_task_bundle_from_app_response, StdioHostAppClient, StdioHostConfig,
 };
+use agent_os_config::ResolvedAgentOsConfig;
 use agent_os_sys::*;
 use serde_json::{json, Value};
 use std::fs;
@@ -16,9 +16,10 @@ pub(crate) fn run_chat(options: &ChatOptions) -> AgentOsResult<Value> {
     if let Some(bundle_output) = &options.bundle_output {
         ensure_safe_relative_workspace_path(bundle_output, "--bundle-output")?;
     }
-    let provider_config = GlobalProviderConfig::load()?;
-    let provider = provider_config.resolve(options.provider.as_deref())?;
-    let model = provider.model.clone();
+    let provider_config = ResolvedAgentOsConfig::load(Some(&options.workspace))?;
+    let model = provider_config
+        .providers
+        .resolve(options.model.as_deref())?;
 
     io_result(
         fs::create_dir_all(&options.workspace),
@@ -28,18 +29,19 @@ pub(crate) fn run_chat(options: &ChatOptions) -> AgentOsResult<Value> {
     let state_db = options
         .state_db
         .clone()
-        .unwrap_or_else(|| options.workspace.join(".agent-os").join("state.sqlite"));
-    let mut config = StdioKerneldConfig::state_db(state_db);
-    config.provider = Some(provider.name.clone());
+        .map(Ok)
+        .unwrap_or_else(|| default_state_db_for_workspace(&options.workspace))?;
+    let mut config = StdioHostConfig::state_db(state_db);
+    config.model = Some(model.id.clone());
     config.max_steps = Some(options.max_steps);
     config.max_tokens = options.max_tokens;
     config.temperature = options.temperature.map(|value| value.to_string());
-    let app_client = StdioKerneldAppClient::open(&config)?;
+    let app_client = StdioHostAppClient::open(&config)?;
     let mut session = ChatSession::new_for_app_client(
         Box::new(app_client),
         options.workspace.clone(),
-        provider.name,
-        model,
+        model.provider_id,
+        model.id,
     )?;
 
     session.print_welcome();
@@ -103,9 +105,9 @@ trait ChatAppClient {
     fn request(&mut self, request: AppRequest) -> AgentOsResult<Value>;
 }
 
-impl ChatAppClient for StdioKerneldAppClient {
+impl ChatAppClient for StdioHostAppClient {
     fn request(&mut self, request: AppRequest) -> AgentOsResult<Value> {
-        StdioKerneldAppClient::request(self, request)
+        StdioHostAppClient::request(self, request)
     }
 }
 
@@ -257,7 +259,7 @@ impl ChatSession {
     }
 
     fn print_welcome(&self) {
-        let _ = writeln!(io::stdout(), "\nAgent-OS v0.1 — Interactive Coding Agent");
+        let _ = writeln!(io::stdout(), "\nAgent-OS v0.3 — Interactive Coding Agent");
         let _ = writeln!(io::stdout(), "  Workspace: {}", self.workspace.display());
         let _ = writeln!(io::stdout(), "  Provider:  {}", self.provider);
         let _ = writeln!(io::stdout(), "  Model:     {}", self.model);
@@ -324,6 +326,12 @@ fn wait_for_runtime_job(
                     job["last_error"].as_str().unwrap_or("unknown error")
                 )))
             }
+            Some("blocked") => {
+                return Err(AgentOsError::Validation(format!(
+                    "runtime job {runtime_job_id} blocked: {}",
+                    job["last_error"].as_str().unwrap_or("unknown reason")
+                )))
+            }
             Some("interrupted" | "cancelled") => {
                 return Err(AgentOsError::InvalidTransition(format!(
                     "runtime job {runtime_job_id} ended as {}",
@@ -388,55 +396,6 @@ fn is_command_invocation(input: &str) -> bool {
     !name.is_empty()
 }
 
-#[cfg(test)]
-fn format_tool_summary(result: &agent_os_thread::ToolExecutionRecord) -> String {
-    let name = friendly_tool_name(&result.tool_name);
-    match result.tool_name.as_str() {
-        "read_file" => {
-            let path = result
-                .output
-                .as_ref()
-                .and_then(|o| o.get("path"))
-                .and_then(Value::as_str)
-                .unwrap_or("?");
-            format!("{name} {path}")
-        }
-        "apply_patch" => {
-            let path = result
-                .output
-                .as_ref()
-                .and_then(|o| o.get("path"))
-                .or_else(|| result.output.as_ref().and_then(|o| o.get("path")))
-                .and_then(Value::as_str)
-                .unwrap_or("?");
-            let operation = result
-                .output
-                .as_ref()
-                .and_then(|o| o.get("operation"))
-                .and_then(Value::as_str)
-                .unwrap_or("patch");
-            format!("{name} {operation} {path}")
-        }
-        "run_command" => {
-            let exit = result
-                .output
-                .as_ref()
-                .and_then(|o| o.get("exit_code"))
-                .and_then(Value::as_i64)
-                .unwrap_or(-1);
-            let program = result
-                .output
-                .as_ref()
-                .and_then(|o| o.get("input"))
-                .and_then(|i| i.get("program"))
-                .and_then(Value::as_str)
-                .unwrap_or("?");
-            format!("{name} {program} (exit {exit})")
-        }
-        _ => name.to_string(),
-    }
-}
-
 fn format_tool_summary_value(result: &Value) -> String {
     let tool_name = result["tool_name"].as_str().unwrap_or("?");
     let name = friendly_tool_name(tool_name);
@@ -452,8 +411,8 @@ fn format_tool_summary_value(result: &Value) -> String {
         }
         "run_command" => {
             let exit = result["output"]["exit_code"].as_i64().unwrap_or(-1);
-            let program = result["output"]["input"]["program"].as_str().unwrap_or("?");
-            format!("{name} {program} (exit {exit})")
+            let command = result["output"]["input"]["command"].as_str().unwrap_or("?");
+            format!("{name} {command} (exit {exit})")
         }
         _ => name.to_string(),
     }

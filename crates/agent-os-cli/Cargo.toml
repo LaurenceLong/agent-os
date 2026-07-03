@@ -9,12 +9,15 @@ name = "agent-os"
 path = "src/main.rs"
 
 [dependencies]
-agent-os-kernel.workspace = true
 agent-os-app-server.workspace = true
-agent-os-kerneld.workspace = true
-agent-os-store.workspace = true
-agent-os-store-sqlite.workspace = true
-agent-os-thread.workspace = true
+agent-os-config.workspace = true
+agent-os-distro.workspace = true
 agent-os-sys.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+agent-os-host.workspace = true
+agent-os-kernel.workspace = true
+agent-os-store.workspace = true
+agent-os-store-sqlite.workspace = true

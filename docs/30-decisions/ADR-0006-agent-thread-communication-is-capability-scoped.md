@@ -35,7 +35,7 @@ Positive:
 - human attention becomes a governed resource
 - blackboard broadcast remains typed and auditable
 - Supervisor can delegate without giving every worker global voice
-- worker-to-worker coordination remains Supervisor-routed instead of becoming a chat mesh
+- producer-to-producer coordination remains Supervisor-routed instead of becoming a chat mesh
 - communication decisions become replayable and testable
 
 Negative:

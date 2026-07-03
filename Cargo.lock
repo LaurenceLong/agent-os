@@ -10,45 +10,98 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "agent-os-app-server"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "agent-os-sys",
+ "serde",
  "serde_json",
 ]
 
 [[package]]
 name = "agent-os-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "agent-os-app-server",
+ "agent-os-config",
+ "agent-os-distro",
+ "agent-os-host",
  "agent-os-kernel",
- "agent-os-kerneld",
+ "agent-os-store",
+ "agent-os-store-sqlite",
+ "agent-os-sys",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "agent-os-config"
+version = "0.3.0"
+dependencies = [
+ "agent-os-sys",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "agent-os-conformance"
+version = "0.3.0"
+dependencies = [
+ "agent-os-config",
+ "agent-os-distro",
+ "agent-os-ecosystem",
+ "agent-os-kernel",
+ "agent-os-store",
+ "agent-os-store-sqlite",
+ "agent-os-sys",
+ "agent-os-thread",
+ "serde_json",
+]
+
+[[package]]
+name = "agent-os-distro"
+version = "0.3.0"
+dependencies = [
+ "agent-os-sys",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "agent-os-ecosystem"
+version = "0.3.0"
+dependencies = [
+ "agent-os-config",
+ "agent-os-kernel",
+ "agent-os-sys",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "agent-os-host"
+version = "0.3.0"
+dependencies = [
+ "agent-os-app-server",
+ "agent-os-config",
+ "agent-os-ecosystem",
+ "agent-os-kernel",
  "agent-os-store",
  "agent-os-store-sqlite",
  "agent-os-sys",
  "agent-os-thread",
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "agent-os-conformance"
-version = "0.2.0"
-dependencies = [
- "agent-os-kernel",
- "agent-os-store",
- "agent-os-store-sqlite",
- "agent-os-sys",
- "agent-os-thread",
- "serde_json",
+ "time",
 ]
 
 [[package]]
 name = "agent-os-kernel"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "agent-os-store",
  "agent-os-sys",
+ "base64",
  "serde",
  "serde_json",
  "sha2",
@@ -56,23 +109,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "agent-os-kerneld"
-version = "0.2.0"
-dependencies = [
- "agent-os-app-server",
- "agent-os-kernel",
- "agent-os-store",
- "agent-os-store-sqlite",
- "agent-os-sys",
- "agent-os-thread",
- "serde",
- "serde_json",
- "time",
-]
-
-[[package]]
 name = "agent-os-store"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "agent-os-sys",
  "serde",
@@ -82,7 +120,7 @@ dependencies = [
 
 [[package]]
 name = "agent-os-store-sqlite"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "agent-os-store",
  "agent-os-sys",
@@ -93,7 +131,7 @@ dependencies = [
 
 [[package]]
 name = "agent-os-sys"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -103,14 +141,13 @@ dependencies = [
 
 [[package]]
 name = "agent-os-thread"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "agent-os-kernel",
  "agent-os-store",
  "agent-os-sys",
  "serde",
  "serde_json",
- "sha2",
  "ureq",
 ]
 

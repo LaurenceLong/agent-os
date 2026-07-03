@@ -1,6 +1,6 @@
 use crate::common::*;
+use agent_os_distro::{SoftwareCodeTask, SoftwareEditPlanSource, SoftwareWorkflowPrompt};
 use agent_os_sys::{PackageManifest, PackageType};
-use agent_os_thread::{SoftwareCodeTask, SoftwareEditPlanSource, SoftwareWorkflowPrompt};
 use std::{env, fs, path::PathBuf};
 
 #[test]
@@ -13,7 +13,7 @@ fn software_engineering_distro_package_has_manifest_and_policy_packs() {
     assert_eq!(manifest.package_name, "software-engineering");
     assert_eq!(manifest.package_type, PackageType::Distro);
     assert!(root.join("prompts/supervisor.md").exists());
-    assert!(root.join("prompts/worker.md").exists());
+    assert!(root.join("prompts/producer.md").exists());
     assert!(root.join("prompts/reviewer.md").exists());
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(
@@ -48,9 +48,9 @@ fn software_distribution_builds_prompt_workflow_without_scripted_pipeline() {
         .iter()
         .any(|step| step.label == "review" && step.core_role == "ReviewerAgent"));
     assert!(prompt.prompt.contains("Flexible Workflow Policy"));
-    assert!(prompt.prompt.contains(
-        "Do not assume a fixed Explorer -> Coder -> Tester -> Reviewer -> Verifier sequence"
-    ));
+    assert!(prompt
+        .prompt
+        .contains("Do not assume a fixed Explorer -> Coder -> Tester -> Reviewer sequence"));
     assert!(prompt.prompt.contains("submit_final as the last action"));
 }
 

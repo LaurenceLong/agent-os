@@ -194,7 +194,7 @@ fn provider_routing_uses_role_policy_and_model_aliases() {
             provider_profile_id: "prov_default".to_string(),
             model_routing_policy_id: "route_default".to_string(),
             requested_model_alias: None,
-            role: "WorkerAgent".to_string(),
+            role: "ProducerAgent".to_string(),
             task_id: fx.task.task_id.clone(),
             reasoning_profile: None,
             tool_visibility_profile: None,
@@ -203,6 +203,7 @@ fn provider_routing_uses_role_policy_and_model_aliases() {
         .unwrap();
     assert_eq!(decision.selected_model_alias, "coding-primary");
     assert_eq!(decision.provider_id, "primary-provider");
+    assert!(decision.model_capabilities.image_input);
 }
 
 #[test]
@@ -216,7 +217,7 @@ fn provider_stream_session_records_usage_and_replays() {
             provider_profile_id: "prov_default".to_string(),
             model_routing_policy_id: "route_default".to_string(),
             requested_model_alias: None,
-            role: "WorkerAgent".to_string(),
+            role: "ProducerAgent".to_string(),
             task_id: fx.task.task_id.clone(),
             reasoning_profile: None,
             tool_visibility_profile: None,
@@ -400,7 +401,7 @@ fn ready_queue_orders_ready_threads_by_task_priority() {
         .kernel
         .spawn_agent(SpawnAgentInput {
             task_id: high.task_id,
-            role_profile_id: "role_worker".to_string(),
+            role_profile_id: "role_producer".to_string(),
             owner: "tester".to_string(),
             goal: "high".to_string(),
             success_criteria: Vec::new(),
@@ -432,7 +433,7 @@ fn forbidden_provider_override_is_rejected() {
             provider_profile_id: "prov_default".to_string(),
             model_routing_policy_id: "route_default".to_string(),
             requested_model_alias: Some("external-escape".to_string()),
-            role: "WorkerAgent".to_string(),
+            role: "ProducerAgent".to_string(),
             task_id: fx.task.task_id.clone(),
             reasoning_profile: None,
             tool_visibility_profile: None,
@@ -457,7 +458,7 @@ fn provider_capability_mismatch_is_rejected_before_stream_open() {
             provider_profile_id: "prov_strict_text".to_string(),
             model_routing_policy_id: "route_default".to_string(),
             requested_model_alias: Some("text-only".to_string()),
-            role: "WorkerAgent".to_string(),
+            role: "ProducerAgent".to_string(),
             task_id: fx.task.task_id.clone(),
             reasoning_profile: None,
             tool_visibility_profile: None,
@@ -489,7 +490,7 @@ fn provider_capability_mismatch_is_strictly_rejected() {
             provider_profile_id: "prov_default".to_string(),
             model_routing_policy_id: "route_default".to_string(),
             requested_model_alias: Some("text-only".to_string()),
-            role: "WorkerAgent".to_string(),
+            role: "ProducerAgent".to_string(),
             task_id: fx.task.task_id.clone(),
             reasoning_profile: None,
             tool_visibility_profile: None,

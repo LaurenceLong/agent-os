@@ -2,7 +2,7 @@
 
 Status: normative
 
-Last updated: 2026-06-25
+Last updated: 2026-07-03
 
 ## 1. Purpose
 
@@ -74,7 +74,7 @@ Stores unified provider configuration used by threads, environments, or distribu
 
 ### 4.3 Model Catalog
 
-Normalizes model identity, aliases, capabilities, limits, and provider-specific names.
+Normalizes model identity, aliases, capabilities, limit metadata, and provider-specific names.
 
 ### 4.4 Routing Policy Engine
 
@@ -135,7 +135,7 @@ routing_policies:
   route_default:
     rules:
       - when:
-          role: WorkerAgent
+          role: ProducerAgent
         use:
           model_alias: coding-primary
       - when:
@@ -160,11 +160,101 @@ model_aliases:
 
 The active `model_aliases` map is the current Model Catalog contract. A provider route resolves through the thread's provider profile, routing policy, allowed alias list, and active alias record; missing, inactive, or capability-incompatible aliases are rejected before a stream session opens. Threads bind to profile IDs, credential references, retry policy, transform policy, and routing policies, not to ad hoc provider SDK calls.
 
-Local development distributions resolve runtime provider credentials and endpoint
-metadata from the user-level Agent-OS provider config. Repository-local `.env`
-files are reserved for build and test harness settings; they are not the runtime
-provider source of truth. This keeps provider configuration independent from
-repository upgrades and checkout replacement.
+Local development distributions resolve runtime provider credentials and
+endpoint metadata from the user-level Agent-OS config, with non-secret project
+overrides from `.agent-os/config.json`. Repository-local `.env` files are
+reserved for build and test harness settings; they are not the runtime provider
+source of truth. This keeps provider configuration independent from repository
+upgrades and checkout replacement.
+
+The current CLI and host read the canonical global config from:
+
+```text
+Windows: %APPDATA%\agent-os\config.json
+macOS/Linux: ${XDG_CONFIG_HOME:-$HOME/.config}/agent-os/config.json
+```
+
+After a primary global config successfully resolves with the current project
+overlay, Agent-OS refreshes an internal last-good copy under the same global
+config directory:
+
+```text
+Backup: <global-config-dir>/backup/config.last-good.json
+```
+
+If the primary global `config.json` is missing, unreadable, malformed, or fails
+provider catalog validation, startup retries with this last-good backup. Invalid
+project `.agent-os/config.json` overlays are never masked by the global backup,
+because project config remains repository-owned non-secret policy and must be
+fixed at the project boundary.
+
+The current runtime config uses an OpenCode-inspired provider/model surface:
+
+```json
+{
+  "model": "openai/gpt-4o",
+  "small_model": "openai/gpt-4o-mini",
+  "provider": {
+    "openai": {
+      "api_key": "replace-with-your-api-key",
+      "api_style": "openai-compatible",
+      "options": {
+        "base_url": "https://api.openai.com/v1",
+        "timeout_ms": 120000
+      },
+      "models": {
+        "gpt-4o": {
+          "name": "gpt-4o",
+          "options": {
+            "reasoningEffort": "low"
+          },
+          "limit": {
+            "context": 128000,
+            "output": 16384
+          }
+        },
+        "gpt-4o-mini": {
+          "name": "gpt-4o-mini",
+          "limit": {
+            "context": 128000,
+            "output": 16384
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+`model` and `small_model` use `provider_id/model_id` form. `small_model` is a
+reserved lightweight-task selection and is validated against the catalog even
+when a runtime path does not consume it yet. Each provider entry requires
+`api_key`, `api_style`, `options.base_url`, and at least one model entry.
+`api_style` accepts `openai-compatible` or `anthropic-compatible`. The `models`
+map key is the local display and selection name used by `provider/model`.
+Provider IDs and model keys are ID segments: they must be non-empty and must not
+contain `/` or whitespace.
+Each model entry must define `name`; that value is the exact provider request
+model name. The `models` map key is only the local Agent-OS selection id used in
+`provider/model`, not a request-name substitute. A model entry may also define
+provider-specific options, `limit`, and capability overrides.
+`limit.context` and `limit.output` are required; `limit.input` is optional. The
+runtime uses `limit.output` as the default max-output token bound when no
+CLI/runtime override is supplied. Model capabilities start from the built-in
+known-model catalog when the configured provider/model key or request model name
+is known; models outside that catalog default capabilities to false. Provider
+JSON `capabilities` is a per-field override, so `{"image_input": false}`
+disables only image input while preserving other catalog fields. Model `options`
+is an object merged into provider requests before runtime-controlled fields, so
+reasoning controls such as
+`reasoningEffort`, `reasoningSummary`, or native `thinking` settings are
+explicit model metadata rather than adapter guesses.
+`agent-os chat --model <provider/model>` selects a non-default model from the
+merged global/project config. Project config may override `model`,
+`small_model`, provider options, and model metadata, but it must not contain
+provider `api_key` or `api_style` values. The host receives the selected full
+model id through the app-server/stdio launch path and builds the configured
+runtime model client inside `agent-os-host`, not inside the CLI process.
 
 ## 6. Thread Integration
 
@@ -241,15 +331,22 @@ capabilities:
   reasoning: boolean
   image_input: boolean
   structured_output: boolean
-limits:
-  context_window: integer | null
-  max_output_tokens: integer | null
+limit:
+  context: integer
+  input: integer | null
+  output: integer
 cost:
   input_per_1m: number | null
   output_per_1m: number | null
 ```
 
 This catalog is used by routing, tool visibility, and budgeting.
+
+The runtime adapter classifies provider failures before returning them to the
+runtime loop. Context-window overflows are non-retryable budget failures, auth
+and authorization failures are permission failures, quota exhaustion is a
+budget failure, and rate-limit/transient provider failures retain retryability
+and `retry-after` metadata in provider audit events.
 
 ## 9. Override Rules
 
@@ -316,19 +413,23 @@ This preserves a clean runtime API without collapsing provider design into threa
 
 ## 13. Package Boundary
 
-Recommended packages:
+Current implemented packages:
 
 ```text
 crates/
-  agent-os-provider/            # system-level provider control plane
-  agent-os-provider-adapters/   # provider-specific adapters
-  agent-os-model-catalog/       # normalized models and capabilities
+  agent-os-config/       # global config, project overlays, path roots, provider catalog
+  agent-os-host/         # configured runtime workers and provider-backed model client construction
+  agent-os-thread/       # provider-neutral runtime loop and OpenAI/Anthropic-compatible adapters
+  agent-os-kernel/       # provider records, model alias registration, policy gates, audit events
 ```
 
-Optional later packages:
+Optional later splits, once the current boundary needs independent scaling:
 
 ```text
 crates/
+  agent-os-provider/
+  agent-os-provider-adapters/
+  agent-os-model-catalog/
   agent-os-provider-secrets/
   agent-os-provider-metering/
 ```

@@ -67,18 +67,15 @@ different permissions
 different artifacts
 ```
 
-Typical roles can be divided as follows:
+The core organizational roles are:
 
 ```text
-Supervisor: owns goals, scheduling, acceptance, and risk control
-Planner: decomposes tasks and defines acceptance criteria
-Explorer: reads code, docs, logs, and current state
-Researcher: investigates external sources and dependency background
-Coder: creates or modifies code
-Tester: runs tests, reproduces issues, and analyzes failures
-Reviewer: independently reviews diffs, design, risks, and verifies evidence with tools
-Reporter: summarizes evidence and produces final delivery
+SupervisorAgent: owns goals, task DAGs, scheduling, delegation, permission arbitration, final acceptance, and risk control
+ProducerAgent: produces artifacts such as plans, patches, test logs, research notes, experiments, or reports
+ReviewerAgent: independently reviews artifacts, checks assumptions, and verifies evidence with tools
 ```
+
+Planner, Explorer, Researcher, Coder, Tester, and Reporter are specializations or profile variants under ProducerAgent or ReviewerAgent. They are not separate foundation roles.
 
 The key to division of labor is not "who sounds more expert." It is "who is responsible for which artifact."
 
@@ -161,7 +158,8 @@ Core rules:
 
 ```text
 The producer cannot be the sole acceptor of its own artifact.
-The reviewer should be read-only by default.
+The reviewer has equivalent baseline capability to the producer, but a different responsibility contract.
+The reviewer must not mutate the artifact under review while reviewing it.
 The reviewer should prefer tools over natural-language judgment when evidence can be checked.
 Conflicting conclusions enter the conflict resolver.
 The final answer must be evidence-first.
@@ -227,41 +225,29 @@ If every agent can read everything, edit every file, run every command, and acce
 Permissions should be configured by role:
 
 ```text
-Planner:
+SupervisorAgent:
   read: allow
-  edit: deny
-  bash: deny
-  network: optional
+  edit: allow
+  bash: allow under policy
+  network: policy gated
+  child agents: SupervisorAgent, ProducerAgent, ReviewerAgent
+  final acceptance: allow
 
-Explorer:
-  read: allow
-  edit: deny
-  bash: read-only commands
-  network: deny
-
-Coder:
+ProducerAgent:
   read: allow
   edit: workspace scoped
-  bash: ask or restricted
-  network: deny by default
+  bash: restricted by risk and permission profile
+  network: deny by default or policy gated
+  child agents: deny
+  final acceptance: deny for own artifact
 
-Tester:
+ReviewerAgent:
   read: allow
-  edit: deny or test-artifact scoped
-  bash: test commands only
-  network: deny
-
-Reviewer:
-  read: allow
-  edit: deny
-  bash: optional test commands
-  network: deny
-
-Deploy Agent:
-  read: allow
-  edit: restricted
-  bash: ask
-  production: human approval required
+  edit: workspace scoped capability, but forbidden for the artifact currently under review
+  bash: restricted by risk and permission profile
+  network: deny by default or policy gated
+  child agents: deny
+  final acceptance: deny
 ```
 
 Permission boundaries are also responsibility boundaries.
@@ -321,7 +307,7 @@ A message can look like:
 ```json
 {
   "type": "ReviewRequest",
-  "from": "WorkerAgent",
+  "from": "ProducerAgent",
   "to": "ReviewerAgent",
   "artifact": "patch-123",
   "focus": ["correctness", "edge cases", "performance"],
@@ -472,19 +458,23 @@ These problems cannot be fully solved by prompts. They require system mechanisms
 A minimum viable agent collaboration architecture can be designed as:
 
 ```text
-Supervisor
+SupervisorAgent
   - owns goal
   - owns task DAG
   - owns blackboard
-  - assigns agents
+  - assigns SupervisorAgent, ProducerAgent, or ReviewerAgent children
   - resolves conflicts
   - produces final
 
-Worker Agents
-  - Explorer
-  - Coder
-  - Tester
-  - Reviewer
+ProducerAgent
+  - produces artifacts
+  - may be specialized as Planner, Explorer, Researcher, Coder, Tester, or Reporter
+  - reports progress, blockers, evidence, and artifacts to SupervisorAgent
+
+ReviewerAgent
+  - independently reviews artifacts
+  - verifies evidence with tools
+  - may be specialized by review domain, but remains separate from the producer of the artifact
 
 Runtime Services
   - Context Manager

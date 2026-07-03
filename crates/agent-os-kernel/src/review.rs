@@ -136,7 +136,7 @@ impl Kernel {
                 .ok_or_else(|| AgentOsError::NotFound(format!("artifact {artifact_id}")))?;
             if artifact.owner_agent_id == input.verifier_agent_id {
                 return Err(AgentOsError::PermissionDenied(
-                    "WorkerAgent cannot verify its own artifact".to_string(),
+                    "ProducerAgent cannot verify its own artifact".to_string(),
                 ));
             }
         }

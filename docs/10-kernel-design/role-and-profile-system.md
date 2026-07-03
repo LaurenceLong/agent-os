@@ -36,7 +36,7 @@ The Role and Profile System owns:
 - versioning and supersession of profiles
 - role compatibility rules for child thread creation
 - Supervisor level rules for delegated Supervisor creation
-- invocation edge creation for delegation, worker assignment, review request, and escalation
+- invocation edge creation for delegation, producer assignment, review request, and escalation
 - escalation policy for restricted actions
 - effective profile resolution when an Agent Thread is created
 
@@ -53,10 +53,10 @@ A Role Profile defines the semantic job of an Agent Thread.
 Examples:
 
 - `SupervisorAgent`
-- `WorkerAgent`
+- `ProducerAgent`
 - `ReviewerAgent`
 
-The v0.1 core role set is `SupervisorAgent`, `WorkerAgent`, and `ReviewerAgent`.
+The v0.1 core role set is `SupervisorAgent`, `ProducerAgent`, and `ReviewerAgent`.
 
 A Role Profile may also be distribution-specific, but it MUST still declare a conformance family such as `producer`, `reviewer`, `operator`, or `custom`. Distribution workflow step labels are policy-pack conventions, not kernel-required roles.
 
@@ -149,7 +149,7 @@ callee_thread_id: string
 callee_agent_id: string
 callee_role_profile_id: string
 callee_security_level: integer
-relationship: supervisor_delegation | worker_assignment | review_request | human_escalation
+relationship: supervisor_delegation | producer_assignment | review_request | human_escalation
 goal: string
 capability_snapshot_id: string | null
 profile_snapshot_id: string
@@ -248,6 +248,6 @@ The first production implementation SHOULD ship core Role Profiles for:
 
 - SupervisorAgent
 - ReviewerAgent
-- WorkerAgent
+- ProducerAgent
 
 Distributions MAY add aliases or additional roles only after they map cleanly onto the core conformance families and preserve the invocation graph.

@@ -39,17 +39,6 @@ impl Kernel {
         skill: SkillDefinition,
     ) -> AgentOsResult<SkillDefinition> {
         validate_skill_definition(&skill)?;
-        if let Some(existing) = self.read_state()?.skill_definitions.get(&skill.name) {
-            if existing.content_hash != skill.content_hash
-                || existing.description != skill.description
-            {
-                return Err(AgentOsError::Validation(format!(
-                    "duplicate skill name {} from {} and {}",
-                    skill.name, existing.skill_file_path, skill.skill_file_path
-                )));
-            }
-            return Ok(existing.clone());
-        }
         self.emit(
             "SkillDefinitionImported",
             "skill_definition",
@@ -68,14 +57,6 @@ impl Kernel {
         command: CommandDefinition,
     ) -> AgentOsResult<CommandDefinition> {
         validate_command_definition(&command)?;
-        if let Some(existing) = self.read_state()?.command_definitions.get(&command.name) {
-            if existing.command_id != command.command_id {
-                return Err(AgentOsError::Validation(format!(
-                    "duplicate command name {} from {} and {}",
-                    command.name, existing.source.source_path, command.source.source_path
-                )));
-            }
-        }
         self.emit(
             "CommandDefinitionImported",
             "command_definition",
@@ -91,14 +72,6 @@ impl Kernel {
 
     pub fn register_mcp_server_spec(&self, server: McpServerSpec) -> AgentOsResult<McpServerSpec> {
         validate_mcp_server_spec(&server)?;
-        if let Some(existing) = self.read_state()?.mcp_servers.get(&server.name) {
-            if existing.server_id != server.server_id {
-                return Err(AgentOsError::Validation(format!(
-                    "duplicate MCP server name {} from {} and {}",
-                    server.name, existing.source.source_path, server.source.source_path
-                )));
-            }
-        }
         self.emit(
             "McpServerRegistered",
             "mcp_server",
@@ -127,14 +100,6 @@ impl Kernel {
                 tool.server_name
             )));
         }
-        if let Some(existing) = self.read_state()?.mcp_tools.get(&tool.model_tool_name) {
-            if existing.mcp_tool_id != tool.mcp_tool_id {
-                return Err(AgentOsError::Validation(format!(
-                    "duplicate MCP model tool name {}",
-                    tool.model_tool_name
-                )));
-            }
-        }
         self.register_tool_descriptor(tool.tool_descriptor.clone())?;
         self.emit(
             "McpToolRegistered",
@@ -154,18 +119,6 @@ impl Kernel {
         profile: ImportedAgentProfile,
     ) -> AgentOsResult<ImportedAgentProfile> {
         validate_imported_agent_profile(&profile)?;
-        if let Some(existing) = self
-            .read_state()?
-            .imported_agent_profiles
-            .get(&profile.name)
-        {
-            if existing.imported_agent_profile_id != profile.imported_agent_profile_id {
-                return Err(AgentOsError::Validation(format!(
-                    "duplicate imported agent profile {} from {} and {}",
-                    profile.name, existing.source.source_path, profile.source.source_path
-                )));
-            }
-        }
         self.emit(
             "ImportedAgentProfileRegistered",
             "imported_agent_profile",
@@ -198,7 +151,7 @@ pub fn mcp_tool_descriptor(
         tool_id: format!("tool_{model_tool_name}"),
         name: model_tool_name,
         description: description.to_string(),
-        version: "0.2.0".to_string(),
+        version: "0.3.0".to_string(),
         driver_class: ToolDriverClass::Mcp,
         risk_level: 3,
         input_schema: input_schema.clone(),
@@ -529,7 +482,7 @@ mod tests {
         EcosystemSource {
             source_kind: EcosystemSourceKind::AgentOs,
             source_scope: EcosystemSourceScope::Config,
-            source_path: "agent-os.json".to_string(),
+            source_path: ".agent-os/config.json".to_string(),
         }
     }
 }

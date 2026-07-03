@@ -1,10 +1,10 @@
 use crate::args::CodeOptions;
 use crate::support::{
-    ensure_safe_relative_workspace_path, io_result, write_task_bundle_from_app_response,
-    StdioKerneldAppClient, StdioKerneldConfig,
+    default_state_db_for_workspace, ensure_safe_relative_workspace_path, io_result,
+    write_task_bundle_from_app_response, StdioHostAppClient, StdioHostConfig,
 };
+use agent_os_distro::{SoftwareExactEdit, SoftwareWorkflowPrompt, SoftwareWorkflowRequest};
 use agent_os_sys::*;
-use agent_os_thread::{SoftwareExactEdit, SoftwareWorkflowPrompt, SoftwareWorkflowRequest};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
@@ -52,11 +52,12 @@ pub(crate) fn run_code_task(options: &CodeOptions) -> AgentOsResult<Value> {
     let state_db = options
         .state_db
         .clone()
-        .unwrap_or_else(|| options.workspace.join(".agent-os").join("state.sqlite"));
-    let mut config = StdioKerneldConfig::state_db(state_db.clone());
+        .map(Ok)
+        .unwrap_or_else(|| default_state_db_for_workspace(&options.workspace))?;
+    let mut config = StdioHostConfig::state_db(state_db.clone());
     config.model_command = Some(model_command.clone());
     config.model_args = options.model_args.clone();
-    let mut app_client = StdioKerneldAppClient::open(&config)?;
+    let mut app_client = StdioHostAppClient::open(&config)?;
     let task_prompt = build_code_task_prompt(options)?;
     let mut output = run_code_from_app_client(&mut app_client, options, task_prompt, &state_db)?;
     output["model_command"] = json!(model_command.to_string_lossy());
@@ -68,9 +69,9 @@ trait CodeAppClient {
     fn request(&mut self, request: AppRequest) -> AgentOsResult<Value>;
 }
 
-impl CodeAppClient for StdioKerneldAppClient {
+impl CodeAppClient for StdioHostAppClient {
     fn request(&mut self, request: AppRequest) -> AgentOsResult<Value> {
-        StdioKerneldAppClient::request(self, request)
+        StdioHostAppClient::request(self, request)
     }
 }
 
@@ -187,6 +188,12 @@ fn wait_for_code_runtime_job(
                 return Err(AgentOsError::Validation(format!(
                     "runtime job {runtime_job_id} failed: {}",
                     job["last_error"].as_str().unwrap_or("unknown error")
+                )))
+            }
+            Some("blocked") => {
+                return Err(AgentOsError::Validation(format!(
+                    "runtime job {runtime_job_id} blocked: {}",
+                    job["last_error"].as_str().unwrap_or("unknown reason")
                 )))
             }
             Some("interrupted" | "cancelled") => {
@@ -491,7 +498,7 @@ mod tests {
                     assert_eq!(client_thread_id, "thread_1");
                     Ok(json!({
                         "bundle": {
-                            "abi_version": "0.2.0",
+                            "abi_version": "0.3.0",
                             "bundle_kind": "task",
                             "exported_at": "2026-06-30T00:00:00Z",
                             "root_task_id": "task_1",
@@ -538,7 +545,7 @@ mod tests {
             test_program: env::current_exe().unwrap(),
             test_args: vec!["--help".to_string()],
             bundle_output: Some(PathBuf::from("bundle/code.json")),
-            state_db: None,
+            state_db: Some(workspace.join("agent-os.sqlite")),
             model_command: Some(compile_external_code_model(&workspace)),
             model_args: vec![env::current_exe().unwrap().to_string_lossy().to_string()],
         };
@@ -582,7 +589,7 @@ mod tests {
             test_program: env::current_exe().unwrap(),
             test_args: vec!["--help".to_string()],
             bundle_output: None,
-            state_db: None,
+            state_db: Some(workspace.join("agent-os.sqlite")),
             model_command: Some(compile_external_code_model(&workspace)),
             model_args: vec![env::current_exe().unwrap().to_string_lossy().to_string()],
         };
@@ -636,7 +643,7 @@ fn main() {
             let workspace_root = json_string(&input, "workspace_root");
             let patch = "*** Begin Patch\n*** Update File: src/lib.rs\n@@\n-pub fn answer() -> i32 { 1 }\n+pub fn answer() -> i32 { 2 }\n*** End Patch\n";
             print!(
-                "{{\"actions\":[{{\"type\":\"tool_call\",\"tool_name\":\"apply_patch\",\"input\":{{\"workspace_root\":\"{}\",\"patch\":\"{}\"}},\"risk_level\":4,\"evidence_claim\":\"code model updated src/lib.rs through apply_patch\"}},{{\"type\":\"tool_call\",\"tool_name\":\"run_command\",\"input\":{{\"program\":\"{}\",\"args\":[\"--help\"],\"cwd\":\"{}\"}},\"risk_level\":4,\"evidence_claim\":\"validation command ran\"}}],\"usage\":{{\"input_tokens\":1,\"output_tokens\":1,\"cost\":0.0}}}}",
+                "{{\"actions\":[{{\"type\":\"tool_call\",\"tool_name\":\"apply_patch\",\"input\":{{\"workspace_root\":\"{}\",\"patch\":\"{}\"}},\"risk_level\":4,\"evidence_claim\":\"code model updated src/lib.rs through apply_patch\"}},{{\"type\":\"tool_call\",\"tool_name\":\"run_command\",\"input\":{{\"mode\":\"exec\",\"command\":\"{}\",\"args\":[\"--help\"],\"cwd\":\"{}\"}},\"risk_level\":4,\"evidence_claim\":\"validation command ran\"}}],\"usage\":{{\"input_tokens\":1,\"output_tokens\":1,\"cost\":0.0}}}}",
                 workspace_root,
                 json_escape(patch),
                 json_escape(&test_program),

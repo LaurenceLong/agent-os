@@ -1,4 +1,4 @@
-use crate::KernelDaemon;
+use crate::AgentOsHost;
 use agent_os_sys::{
     AgentOsResult, AppNotification, AppNotificationEnvelope, ApprovalQueueProjection,
     ArtifactIndexProjection, ClientThread, EventEnvelope, EvidenceIndexProjection,
@@ -19,8 +19,8 @@ struct ProjectionIndex {
 }
 
 impl ProjectionIndex {
-    fn load(daemon: &KernelDaemon) -> AgentOsResult<Self> {
-        let store = daemon.kernel().store();
+    fn load(host: &AgentOsHost) -> AgentOsResult<Self> {
+        let store = host.kernel().store();
         Ok(Self {
             threads: store
                 .thread_summaries()?
@@ -62,7 +62,7 @@ impl ProjectionIndex {
     }
 }
 
-impl KernelDaemon {
+impl AgentOsHost {
     pub fn notifications_since(
         &self,
         cursor: &ProjectionCursor,

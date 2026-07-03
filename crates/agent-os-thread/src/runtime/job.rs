@@ -55,6 +55,7 @@ pub enum RuntimeJobStatus {
     Queued,
     Running,
     Completed,
+    Blocked,
     Failed,
     Interrupted,
     Cancelled,
@@ -104,6 +105,12 @@ impl RuntimeJobRecord {
         self.status = RuntimeJobStatus::Completed;
         self.updated_at = now_rfc3339();
         self.last_error = None;
+    }
+
+    pub fn block(&mut self, reason: String) {
+        self.status = RuntimeJobStatus::Blocked;
+        self.updated_at = now_rfc3339();
+        self.last_error = Some(reason);
     }
 
     pub fn fail(&mut self, error: String) {

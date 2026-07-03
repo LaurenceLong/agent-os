@@ -61,7 +61,7 @@ Child-facing instructions belong in the child goal payload. Durable knowledge be
 Before spawning a child Agent Thread, the parent creates a Memento Fragment for itself.
 
 ```text
-Spawn a WorkerAgent for the storage layer. When it completes, compare its findings against ADR-0002 before deciding PostgreSQL placement.
+Spawn a ProducerAgent for the storage layer. When it completes, compare its findings against ADR-0002 before deciding PostgreSQL placement.
 ```
 
 The child receives its own goal, not the Memento Fragment. When the child completes, the kernel triggers the parent's Memento Fragment.
@@ -202,7 +202,7 @@ Example:
 
 ```yaml
 spawn_child:
-  role: WorkerAgent
+  role: ProducerAgent
   goal: "Inspect state-storage design and report missing replay invariants."
   owner_mementos:
     - title: "After explorer returns"

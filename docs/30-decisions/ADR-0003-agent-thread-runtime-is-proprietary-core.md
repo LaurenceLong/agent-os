@@ -47,4 +47,4 @@ Negative:
 
 The first production runtime MUST implement Agent Thread lifecycle, checkpointing, tool/syscall mediation, artifact/evidence handling, and final submission gates as proprietary core infrastructure.
 
-The v0.1 core role set is narrowed by ADR-0009 to SupervisorAgent, WorkerAgent, and ReviewerAgent. Distribution workflow step labels MAY be provided through workflow prompts, examples, and policy packs, but they are not kernel-required roles.
+The v0.1 core role set is narrowed by ADR-0009 to SupervisorAgent, ProducerAgent, and ReviewerAgent. Distribution workflow step labels MAY be provided through workflow prompts, examples, and policy packs, but they are not kernel-required roles.

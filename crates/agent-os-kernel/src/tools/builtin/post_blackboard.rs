@@ -24,11 +24,12 @@ fn descriptor(now: &str) -> ToolDescriptor {
             input_schema: input_schema(),
             model_input_schema: input_schema(),
             examples: vec![schema::example(
-                "Publish a scoped task decision.",
+                "Publish a task-scoped risk note to an allowed blackboard channel.",
                 json!({
-                    "channel_id": "task",
-                    "section": "decision",
-                    "content": {"decision": "Treat plain apply_patch hunk lines as context."},
+                    "channel_id": "risks",
+                    "scope": "task",
+                    "section": "risk",
+                    "content": {"risk": "Validation may need a larger timeout on slow hosts."},
                     "confidence": 0.9
                 }),
                 "Creates a blackboard entry with bounded structured content.",
@@ -65,15 +66,19 @@ fn input_schema() -> Value {
     schema::object(
         &["channel_id", "section", "content"],
         json!({
-            "channel_id": {"type": "string"},
+            "channel_id": {
+                "type": "string",
+                "description": "Allowed default channels include facts, risks, blockers, artifacts, evidence, test-results, and review-results."
+            },
             "scope": {"enum": ["task", "goal", "global"]},
             "section": {
                 "enum": [
-                    "known_fact_candidate",
+                    "known_fact",
+                    "hypothesis",
+                    "open_question",
                     "risk",
-                    "decision",
                     "test_result",
-                    "handoff_note"
+                    "review_result"
                 ]
             },
             "content": {"type": "object"},
@@ -99,13 +104,25 @@ mod tests {
 
     #[test]
     fn schema_requires_channel_section_content() {
-        let required = descriptor("now").input_schema["required"]
+        let descriptor = descriptor("now");
+        let required = descriptor.input_schema["required"]
             .as_array()
             .unwrap()
             .clone();
         assert!(required.iter().any(|value| value == "channel_id"));
         assert!(required.iter().any(|value| value == "section"));
         assert!(required.iter().any(|value| value == "content"));
+        let sections = descriptor.input_schema["properties"]["section"]["enum"]
+            .as_array()
+            .unwrap();
+        assert!(sections.iter().any(|value| value == "risk"));
+        assert!(!sections.iter().any(|value| value == "handoff_note"));
+        assert!(!sections.iter().any(|value| value == "known_fact_candidate"));
+        assert!(descriptor.examples.iter().any(|example| {
+            example.parameters["channel_id"] == "risks"
+                && example.parameters["scope"] == "task"
+                && example.parameters["section"] == "risk"
+        }));
     }
 
     #[test]

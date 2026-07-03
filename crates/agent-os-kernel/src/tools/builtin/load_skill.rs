@@ -26,13 +26,13 @@ fn descriptor(now: &str) -> ToolDescriptor {
                 &["name"],
                 json!({
                     "name": {"type": "string", "description": "Imported skill name."},
-                    "offset": {"type": "integer", "minimum": 0, "description": "Zero-based line offset. Defaults to 0."},
+                    "offset": {"type": "integer", "minimum": 1, "description": "One-based starting line offset. Defaults to 1, which starts before the first line and includes line 1."},
                     "limit": {"type": "integer", "minimum": 1, "maximum": read_file::MAX_LIMIT, "description": "Maximum lines to return. Defaults to 200 and is capped at 1000."}
                 }),
             ),
             examples: vec![schema::example(
                 "Load the first page of an imported skill.",
-                json!({"name": "frontend-design", "offset": 0, "limit": 200}),
+                json!({"name": "frontend-design", "offset": 1, "limit": 200}),
                 "Returns the SKILL.md page with pagination metadata.",
             )],
             output_schema: skill_output_schema(&[
@@ -63,7 +63,7 @@ fn input_schema() -> Value {
         &["name"],
         json!({
             "name": {"type": "string"},
-            "offset": {"type": "integer", "minimum": 0},
+            "offset": {"type": "integer", "minimum": 1},
             "limit": {"type": "integer", "minimum": 1, "maximum": read_file::MAX_LIMIT}
         }),
     )

@@ -10,4 +10,6 @@ mod runtime_resume_conformance;
 mod security_conformance;
 mod software_distribution_conformance;
 mod state_replay_export_conformance;
+mod system_prompt_export_conformance;
 mod tool_broker;
+mod workspace_boundary_conformance;

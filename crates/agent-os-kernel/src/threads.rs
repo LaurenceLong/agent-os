@@ -704,6 +704,9 @@ impl Kernel {
             acb.active_turn.status = Some(TurnStatus::Completed);
             acb.active_turn.active_step_id = None;
         }
+        if next == ThreadStatus::Running && acb.active_turn.turn_id.is_some() {
+            acb.active_turn.status = Some(TurnStatus::InProgress);
+        }
         if next == ThreadStatus::Blocked && acb.active_turn.turn_id.is_some() {
             acb.active_turn.status = Some(TurnStatus::Blocked);
             acb.active_turn.active_step_id = None;
@@ -834,6 +837,6 @@ fn invocation_relationship(
     } else if role.name == "ReviewerAgent" {
         AgentInvocationRelationship::ReviewRequest
     } else {
-        AgentInvocationRelationship::WorkerAssignment
+        AgentInvocationRelationship::ProducerAssignment
     }
 }

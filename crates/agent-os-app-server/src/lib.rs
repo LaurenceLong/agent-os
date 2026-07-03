@@ -1,13 +1,14 @@
 //! Stdio JSONL app-server protocol for Agent-OS applications.
 //!
 //! The app-server is deliberately a transport and protocol gate. Kernel state
-//! changes are delegated to the daemon service behind `AppKernelService`.
+//! changes are delegated to the host service behind `AppKernelService`.
 
 use agent_os_sys::{
     AgentOsError, AgentOsResult, AppNotificationEnvelope, AppRequest, AppRequestEnvelope,
     AppResponse, AppResponseEnvelope, ClientConnection, ClientKind, ProjectionCursor,
     SecurityLevel,
 };
+use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, Write};
@@ -25,6 +26,69 @@ pub trait AppKernelService {
     ) -> AgentOsResult<Vec<AppNotificationEnvelope>> {
         Ok(Vec::new())
     }
+}
+
+pub struct ThreadReadProjection<
+    TThread,
+    TTurns,
+    TTimeline,
+    TJobs,
+    TArtifacts,
+    TEvidence,
+    TResources,
+    TAutomationRuns,
+> {
+    pub thread: TThread,
+    pub turns: TTurns,
+    pub timeline: TTimeline,
+    pub runtime_jobs: TJobs,
+    pub artifacts: TArtifacts,
+    pub evidence: TEvidence,
+    pub resources: TResources,
+    pub automation_runs: TAutomationRuns,
+}
+
+pub fn thread_read_response<
+    TThread,
+    TTurns,
+    TTimeline,
+    TJobs,
+    TArtifacts,
+    TEvidence,
+    TResources,
+    TAutomationRuns,
+>(
+    projection: ThreadReadProjection<
+        TThread,
+        TTurns,
+        TTimeline,
+        TJobs,
+        TArtifacts,
+        TEvidence,
+        TResources,
+        TAutomationRuns,
+    >,
+) -> AgentOsResult<AppResponse>
+where
+    TThread: Serialize,
+    TTurns: Serialize,
+    TTimeline: Serialize,
+    TJobs: Serialize,
+    TArtifacts: Serialize,
+    TEvidence: Serialize,
+    TResources: Serialize,
+    TAutomationRuns: Serialize,
+{
+    Ok(AppResponse::Accepted(json!({
+        "thread": projection.thread,
+        "turns": projection.turns,
+        "timeline": projection.timeline,
+        "runtime_jobs": projection.runtime_jobs,
+        "artifacts": projection.artifacts,
+        "evidence": projection.evidence,
+        "resources": projection.resources,
+        "automation_runs": projection.automation_runs,
+    })))
 }
 
 pub struct JsonlAppClient<R, W> {

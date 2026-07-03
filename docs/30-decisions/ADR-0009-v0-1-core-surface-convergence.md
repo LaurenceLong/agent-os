@@ -65,7 +65,7 @@ delete_session
 purge_state
 ```
 
-`start` MAY set multiple control-plane properties atomically, including assignment, workdir, profile, model hint, timeout, output policy, and initial hooks. `kill`, `delete_session`, and `purge_state` are privileged actions hidden from normal WorkerAgent views and require Supervisor policy plus explicit permission.
+`start` MAY set multiple control-plane properties atomically, including assignment, workdir, profile, model hint, timeout, output policy, and initial hooks. `kill`, `delete_session`, and `purge_state` are privileged actions hidden from normal ProducerAgent views and require Supervisor policy plus explicit permission.
 
 `submit_final` is a lifecycle action exposed as a model function, not a filesystem tool.
 
@@ -75,13 +75,13 @@ The core role set is:
 
 ```text
 SupervisorAgent
-WorkerAgent
+ProducerAgent
 ReviewerAgent
 ```
 
 Agents are hierarchical. Human authority is implicit `S0` and is not stored as a normal AgentControlBlock. Any root agent created by human authority is `S1`; every nested child increments the parent security level (`S2`, `S3`, and so on). The level is control-plane state, not a prompt convention.
 
-Every Supervisor or worker creation caused by delegation MUST create a durable invocation edge. The edge records at least:
+Every Supervisor or producer creation caused by delegation MUST create a durable invocation edge. The edge records at least:
 
 ```yaml
 invocation_id: string
@@ -94,7 +94,7 @@ callee_thread_id: string
 callee_agent_id: string
 callee_role_profile_id: string
 callee_security_level: integer
-relationship: supervisor_delegation | worker_assignment | review_request | human_escalation
+relationship: supervisor_delegation | producer_assignment | review_request | human_escalation
 assignment: string
 capability_snapshot_id: string | null
 profile_snapshot_id: string
@@ -120,9 +120,9 @@ on_missed_reports: report | escalate | stop
 
 The default progress report prompt SHOULD ask for one short status sentence covering progress, blockers, and next action. The hook result is a communication event, not a final answer and not blackboard truth.
 
-Testing is a Worker task that runs commands and attaches command evidence. Verification is primarily a kernel final-submission gate that checks evidence coverage, stale artifact references, unsupported claims, and independence requirements.
+Testing is a Producer task that runs commands and attaches command evidence. Evidence verification is primarily a Reviewer responsibility plus a kernel final-submission gate that checks evidence coverage, stale artifact references, unsupported claims, and independence requirements.
 
-The kernel MUST NOT hard-code an official software-engineering pipeline. Distributions should provide workflow prompts, examples, and policy packs. The Supervisor decides at runtime whether to divide work, run parallel workers, request review, use the blackboard, or escalate to a human.
+The kernel MUST NOT hard-code an official software-engineering pipeline. Distributions should provide workflow prompts, examples, and policy packs. The Supervisor decides at runtime whether to divide work, run parallel producers, request review, use the blackboard, or escalate to a human.
 
 Agent collaboration is defined by five mechanisms:
 
@@ -134,7 +134,7 @@ Agent collaboration is defined by five mechanisms:
 5. permission and responsibility boundaries
 ```
 
-Agent-to-agent coordination goes through Supervisor. Parent-child task structure is represented in the task and invocation graph, but direct worker-to-worker routes are not separate default communication capabilities.
+Agent-to-agent coordination goes through Supervisor. Parent-child task structure is represented in the task and invocation graph, but direct producer-to-producer routes are not separate default communication capabilities.
 
 The core communication routes are:
 
@@ -187,5 +187,5 @@ Negative:
 
 This ADR narrows the implications of ADR-0003 and ADR-0006:
 
-- ADR-0003 still stands that Agent Thread Runtime is proprietary core infrastructure, but the runtime core role set is narrowed to Supervisor, Worker, and Reviewer.
+- ADR-0003 still stands that Agent Thread Runtime is proprietary core infrastructure, but the runtime core role set is narrowed to Supervisor, Producer, and Reviewer.
 - ADR-0006 still stands that communication is capability-scoped, but v0.1 direct communication is Supervisor-routed.

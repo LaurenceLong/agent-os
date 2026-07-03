@@ -1,14 +1,12 @@
-use crate::KernelDaemon;
+use crate::AgentOsHost;
+use agent_os_config::{ProviderCatalog, ResolvedAgentOsConfig};
 use agent_os_sys::{AgentOsError, AgentOsResult, AttachMode};
 use agent_os_thread::{
-    ExternalProcessModelClient, LlmApiStyle, ModelClient, ModelTurnRequest, ModelTurnResponse,
+    ExternalProcessModelClient, ModelClient, ModelTurnRequest, ModelTurnResponse,
     OpenAiModelClient, RuntimeConfig, RuntimeJob,
 };
-use serde::Deserialize;
-use serde_json::json;
-use std::collections::BTreeMap;
-use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalRuntimeModelConfig {
@@ -19,7 +17,7 @@ pub struct ExternalRuntimeModelConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderRuntimeModelConfig {
-    pub provider: Option<String>,
+    pub model: Option<String>,
     pub config_path: Option<PathBuf>,
     pub max_steps: u32,
     pub max_tokens: Option<u64>,
@@ -27,13 +25,13 @@ pub struct ProviderRuntimeModelConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DaemonRuntimeModelConfig {
+pub enum HostRuntimeModelConfig {
     External(ExternalRuntimeModelConfig),
     Provider(ProviderRuntimeModelConfig),
 }
 
-impl KernelDaemon {
-    pub fn with_runtime_model_config(mut self, config: DaemonRuntimeModelConfig) -> Self {
+impl AgentOsHost {
+    pub fn with_runtime_model_config(mut self, config: HostRuntimeModelConfig) -> Self {
         self.runtime_model_config = Some(config);
         self
     }
@@ -57,7 +55,7 @@ impl KernelDaemon {
         let job = self.runtime_job(runtime_job_id)?;
         let Some(config) = self.runtime_model_config.clone() else {
             return Err(agent_os_sys::AgentOsError::Validation(
-                "kerneld runtime model config is not configured".to_string(),
+                "hostd runtime model config is not configured".to_string(),
             ));
         };
         let worker = config.worker(self, &job)?;
@@ -65,41 +63,45 @@ impl KernelDaemon {
     }
 }
 
-impl DaemonRuntimeModelConfig {
+impl HostRuntimeModelConfig {
     fn worker(
         &self,
-        daemon: &KernelDaemon,
+        host: &AgentOsHost,
         job: &RuntimeJob,
     ) -> AgentOsResult<ConfiguredRuntimeWorker> {
         match self {
             Self::External(config) => Ok(ConfiguredRuntimeWorker {
                 runtime_config: runtime_config(job, config.max_steps, Some(job.model.clone())),
-                model_client: DaemonRuntimeModelClient::External(ExternalProcessModelClient::new(
+                model_client: HostRuntimeModelClient::External(ExternalProcessModelClient::new(
                     config.program.clone(),
                     config.args.clone(),
                 )),
             }),
             Self::Provider(config) => {
-                let provider_config = GlobalProviderConfig::load(config.config_path.as_ref())?;
-                let provider = provider_config.resolve(config.provider.as_deref())?;
-                daemon.register_model_alias(
-                    &provider.model,
-                    &provider.name,
-                    &provider.model,
-                    json!({
-                        "streaming": true,
-                        "tool_calling": true,
-                        "reasoning": true,
-                        "image_input": false,
-                        "structured_output": true
-                    }),
+                let provider_config = match config.config_path.as_ref() {
+                    Some(path) => ProviderCatalog::load_from_path(path)?,
+                    None => ResolvedAgentOsConfig::load(Some(Path::new(&job.workspace)))?.providers,
+                };
+                let model = provider_config.resolve(config.model.as_deref())?;
+                host.register_model_alias(
+                    &model.id,
+                    &model.provider_id,
+                    &model.name,
+                    model.capabilities.clone(),
+                    model.limit.clone(),
                     &job.provider_profile,
                 )?;
-                let mut client = OpenAiModelClient::new(provider.api_key, provider.model.clone())
-                    .with_api_base(provider.base_url)
-                    .with_api_style(provider.api_style);
+                let mut client = OpenAiModelClient::new(model.api_key, model.name.clone())
+                    .with_api_base(model.base_url)
+                    .with_api_style(model.api_style)
+                    .with_model_options(model.options.clone());
+                if let Some(timeout_ms) = model.timeout_ms {
+                    client = client.with_request_timeout(Duration::from_millis(timeout_ms));
+                }
                 if let Some(max_tokens) = config.max_tokens {
                     client = client.with_max_tokens(max_tokens);
+                } else {
+                    client = client.with_max_tokens(model.limit.output);
                 }
                 if let Some(temperature) = &config.temperature {
                     client = client.with_temperature(temperature.parse().map_err(|_| {
@@ -109,12 +111,8 @@ impl DaemonRuntimeModelConfig {
                     })?);
                 }
                 Ok(ConfiguredRuntimeWorker {
-                    runtime_config: runtime_config(
-                        job,
-                        config.max_steps,
-                        Some(provider.model.clone()),
-                    ),
-                    model_client: DaemonRuntimeModelClient::OpenAi(client),
+                    runtime_config: runtime_config(job, config.max_steps, Some(model.id.clone())),
+                    model_client: HostRuntimeModelClient::OpenAi(client),
                 })
             }
         }
@@ -139,15 +137,15 @@ fn runtime_config(
 
 struct ConfiguredRuntimeWorker {
     runtime_config: RuntimeConfig,
-    model_client: DaemonRuntimeModelClient,
+    model_client: HostRuntimeModelClient,
 }
 
-enum DaemonRuntimeModelClient {
+enum HostRuntimeModelClient {
     External(ExternalProcessModelClient),
     OpenAi(OpenAiModelClient),
 }
 
-impl ModelClient for DaemonRuntimeModelClient {
+impl ModelClient for HostRuntimeModelClient {
     fn next(&mut self, request: &ModelTurnRequest) -> AgentOsResult<ModelTurnResponse> {
         match self {
             Self::External(client) => client.next(request),
@@ -156,128 +154,10 @@ impl ModelClient for DaemonRuntimeModelClient {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct GlobalProviderConfig {
-    default_provider: String,
-    providers: BTreeMap<String, ProviderEntry>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct ProviderEntry {
-    api_key: String,
-    base_url: String,
-    model: String,
-    api_style: String,
-}
-
-struct ResolvedProvider {
-    name: String,
-    api_key: String,
-    base_url: String,
-    model: String,
-    api_style: LlmApiStyle,
-}
-
-impl GlobalProviderConfig {
-    fn load(explicit_path: Option<&PathBuf>) -> AgentOsResult<Self> {
-        let path = match explicit_path {
-            Some(path) => path.clone(),
-            None => global_provider_config_path()?,
-        };
-        let content = fs::read_to_string(&path).map_err(|error| {
-            AgentOsError::Validation(format!(
-                "read global provider config {}: {error}",
-                path.display()
-            ))
-        })?;
-        let content = content.strip_prefix('\u{feff}').unwrap_or(&content);
-        let config: Self = serde_json::from_str(content).map_err(|error| {
-            AgentOsError::Validation(format!(
-                "parse global provider config {}: {error}",
-                path.display()
-            ))
-        })?;
-        config.validate(&path)?;
-        Ok(config)
-    }
-
-    fn resolve(&self, provider_name: Option<&str>) -> AgentOsResult<ResolvedProvider> {
-        let name = provider_name.unwrap_or(&self.default_provider);
-        let provider = self.providers.get(name).ok_or_else(|| {
-            AgentOsError::Validation(format!("global provider config has no provider `{name}`"))
-        })?;
-        Ok(ResolvedProvider {
-            name: name.to_string(),
-            api_key: provider.api_key.clone(),
-            base_url: provider.base_url.clone(),
-            model: provider.model.clone(),
-            api_style: LlmApiStyle::from_value(&provider.api_style)?,
-        })
-    }
-
-    fn validate(&self, path: &std::path::Path) -> AgentOsResult<()> {
-        if self.default_provider.trim().is_empty() {
-            return Err(AgentOsError::Validation(format!(
-                "global provider config {} must set default_provider",
-                path.display()
-            )));
-        }
-        if self.providers.is_empty() {
-            return Err(AgentOsError::Validation(format!(
-                "global provider config {} must define at least one provider",
-                path.display()
-            )));
-        }
-        for (name, provider) in &self.providers {
-            if name.trim().is_empty()
-                || provider.api_key.trim().is_empty()
-                || provider.base_url.trim().is_empty()
-                || provider.model.trim().is_empty()
-                || provider.api_style.trim().is_empty()
-            {
-                return Err(AgentOsError::Validation(format!(
-                    "global provider config {} has an incomplete provider entry",
-                    path.display()
-                )));
-            }
-            LlmApiStyle::from_value(&provider.api_style)?;
-        }
-        if !self.providers.contains_key(&self.default_provider) {
-            return Err(AgentOsError::Validation(format!(
-                "global provider config {} default_provider `{}` is not defined",
-                path.display(),
-                self.default_provider
-            )));
-        }
-        Ok(())
-    }
-}
-
-fn global_provider_config_path() -> AgentOsResult<PathBuf> {
-    let config_dir = if cfg!(windows) {
-        std::env::var_os("APPDATA")
-            .map(PathBuf::from)
-            .ok_or_else(|| {
-                AgentOsError::Validation(
-                    "APPDATA is required to locate global provider config".to_string(),
-                )
-            })?
-    } else {
-        std::env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .ok_or_else(|| {
-                AgentOsError::Validation(
-                    "XDG_CONFIG_HOME is required to locate global provider config".to_string(),
-                )
-            })?
-    };
-    Ok(config_dir.join("agent-os").join("providers.json"))
-}
-
 #[cfg(test)]
 mod tests {
     use crate::{
-        AppServer, DaemonRuntimeModelConfig, ExternalRuntimeModelConfig, KernelDaemon,
+        AgentOsHost, AppServer, ExternalRuntimeModelConfig, HostRuntimeModelConfig,
         ProviderRuntimeModelConfig,
     };
     use agent_os_sys::*;
@@ -291,18 +171,18 @@ mod tests {
     use std::thread::JoinHandle;
 
     #[test]
-    fn configured_daemon_autostarts_runtime_worker_after_turn_start() {
+    fn configured_host_autostarts_runtime_worker_after_turn_start() {
         let workspace = temp_workspace("configured-runtime-worker");
         fs::create_dir_all(&workspace).unwrap();
         let model_program = compile_external_model(&workspace);
-        let daemon = KernelDaemon::in_memory().with_runtime_model_config(
-            DaemonRuntimeModelConfig::External(ExternalRuntimeModelConfig {
+        let host = AgentOsHost::in_memory().with_runtime_model_config(
+            HostRuntimeModelConfig::External(ExternalRuntimeModelConfig {
                 program: model_program,
                 args: Vec::new(),
                 max_steps: 16,
             }),
         );
-        let mut server = initialized_server(daemon.clone());
+        let mut server = initialized_server(host.clone());
         let thread_id = start_thread(&mut server, &workspace);
 
         request(
@@ -312,7 +192,7 @@ mod tests {
                 input: "run configured runtime worker".to_string(),
             },
         );
-        let shutdown = daemon.shutdown().unwrap();
+        let shutdown = host.shutdown().unwrap();
 
         assert_eq!(shutdown.joined_runtime_workers, 1);
         assert!(
@@ -322,7 +202,7 @@ mod tests {
         );
         assert_eq!(
             fs::read_to_string(workspace.join("configured.md")).unwrap(),
-            "configured daemon worker\n"
+            "configured host worker\n"
         );
         let read = request(
             &mut server,
@@ -335,72 +215,100 @@ mod tests {
     }
 
     #[test]
-    fn configured_daemon_builds_provider_client_from_provider_config() {
+    fn configured_host_builds_provider_client_from_provider_config() {
         let workspace = temp_workspace("configured-provider-runtime-worker");
         fs::create_dir_all(&workspace).unwrap();
-        let mock_provider = MockOpenAiServer::start(vec![
-            json!({
-                "choices": [{
-                    "message": {
-                        "role": "assistant",
-                        "content": null,
-                        "tool_calls": [{
-                            "id": "call_patch",
-                            "type": "function",
-                            "function": {
-                                "name": "apply_patch",
-                                "arguments": "{\"patch\":\"*** Begin Patch\\n*** Add File: provider-configured.md\\n+provider configured daemon worker\\n*** End Patch\\n\"}"
-                            }
-                        }]
-                    }
-                }],
-                "usage": {"prompt_tokens": 1, "completion_tokens": 1}
-            }),
-            json!({
-                "choices": [{
-                    "message": {
-                        "role": "assistant",
-                        "content": "complete",
-                        "tool_calls": [{
-                            "id": "call_final",
-                            "type": "function",
-                            "function": {
-                                "name": "submit_final",
-                                "arguments": "{\"summary\":\"provider configured daemon worker complete\",\"evidence_map\":[{\"claim\":\"provider configured file was written\",\"evidence_refs\":[\"__FIRST_EVIDENCE_ID__\"]}]}"
-                            }
-                        }]
-                    }
-                }],
-                "usage": {"prompt_tokens": 1, "completion_tokens": 1}
-            }),
-        ]);
-        let provider_config_path = workspace.join("providers.json");
+        let mock_provider = MockOpenAiServer::start_expect_model_and_request_snippets(
+            "wire-mock-model",
+            vec![
+                "\"reasoningEffort\":\"high\"",
+                "\"reasoningSummary\":\"auto\"",
+                "\"max_tokens\":2048",
+            ],
+            vec![
+                json!({
+                    "choices": [{
+                        "message": {
+                            "role": "assistant",
+                            "content": null,
+                            "tool_calls": [{
+                                "id": "call_patch",
+                                "type": "function",
+                                "function": {
+                                    "name": "apply_patch",
+                                    "arguments": "{\"patch\":\"*** Begin Patch\\n*** Add File: provider-configured.md\\n+provider configured host worker\\n*** End Patch\\n\"}"
+                                }
+                            }]
+                        }
+                    }],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1}
+                }),
+                json!({
+                    "choices": [{
+                        "message": {
+                            "role": "assistant",
+                            "content": "complete",
+                            "tool_calls": [{
+                                "id": "call_final",
+                                "type": "function",
+                                "function": {
+                                    "name": "submit_final",
+                                    "arguments": "{\"summary\":\"provider configured host worker complete\",\"evidence_map\":[{\"claim\":\"provider configured file was written\",\"evidence_refs\":[\"__FIRST_EVIDENCE_ID__\"]}]}"
+                                }
+                            }]
+                        }
+                    }],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1}
+                }),
+            ],
+        );
+        let provider_config_path = workspace.join("config.json");
         fs::write(
             &provider_config_path,
             json!({
-                "default_provider": "mock",
-                "providers": {
+                "model": "mock/mock-provider-model",
+                "provider": {
                     "mock": {
                         "api_key": "test-key",
-                        "base_url": mock_provider.base_url,
-                        "model": "mock-provider-model",
-                        "api_style": "openai-compatible"
+                        "api_style": "openai-compatible",
+                        "options": {
+                            "base_url": mock_provider.base_url,
+                            "timeout_ms": 120000
+                        },
+                        "models": {
+                            "mock-provider-model": {
+                                "name": "wire-mock-model",
+                                "options": {
+                                    "reasoningEffort": "high",
+                                    "reasoningSummary": "auto"
+                                },
+                                "limit": {
+                                    "context": 128000,
+                                    "output": 2048
+                                },
+                                "capabilities": {
+                                    "streaming": true,
+                                    "tool_calling": true,
+                                    "reasoning": true
+                                }
+                            }
+                        }
                     }
                 }
             })
             .to_string(),
         )
         .unwrap();
-        let daemon = KernelDaemon::in_memory().with_runtime_model_config(
-            DaemonRuntimeModelConfig::Provider(ProviderRuntimeModelConfig {
-                provider: Some("mock".to_string()),
+        let host = AgentOsHost::in_memory().with_runtime_model_config(
+            HostRuntimeModelConfig::Provider(ProviderRuntimeModelConfig {
+                model: Some("mock/mock-provider-model".to_string()),
                 config_path: Some(provider_config_path),
                 max_steps: 16,
-                max_tokens: Some(128),
+                max_tokens: None,
                 temperature: Some("0.0".to_string()),
             }),
         );
-        let mut server = initialized_server(daemon.clone());
+        let mut server = initialized_server(host.clone());
         let thread_id = start_thread(&mut server, &workspace);
 
         request(
@@ -410,7 +318,7 @@ mod tests {
                 input: "run provider configured runtime worker".to_string(),
             },
         );
-        let shutdown = daemon.shutdown().unwrap();
+        let shutdown = host.shutdown().unwrap();
         mock_provider.join();
 
         assert!(
@@ -420,8 +328,15 @@ mod tests {
         );
         assert_eq!(
             fs::read_to_string(workspace.join("provider-configured.md")).unwrap(),
-            "provider configured daemon worker\n"
+            "provider configured host worker\n"
         );
+        let state = host.kernel().state_snapshot().unwrap();
+        let alias = state
+            .model_aliases
+            .get("mock/mock-provider-model")
+            .expect("registered full model alias");
+        assert_eq!(alias.provider_id, "mock");
+        assert_eq!(alias.provider_model_name, "wire-mock-model");
         let read = request(
             &mut server,
             AppRequest::ThreadRead {
@@ -449,7 +364,8 @@ mod tests {
                             "function": {
                                 "name": "run_command",
                                 "arguments": serde_json::to_string(&json!({
-                                    "program": current_exe,
+                                    "command": current_exe,
+                                    "mode": "exec",
                                     "args": ["--agent-os-nonzero-probe"]
                                 })).unwrap()
                             }
@@ -476,33 +392,47 @@ mod tests {
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1}
             }),
         ]);
-        let provider_config_path = workspace.join("providers.json");
+        let provider_config_path = workspace.join("config.json");
         fs::write(
             &provider_config_path,
             json!({
-                "default_provider": "mock",
-                "providers": {
+                "model": "mock/mock-provider-model",
+                "provider": {
                     "mock": {
                         "api_key": "test-key",
-                        "base_url": mock_provider.base_url,
-                        "model": "mock-provider-model",
-                        "api_style": "openai-compatible"
+                        "api_style": "openai-compatible",
+                        "options": {
+                            "base_url": mock_provider.base_url
+                        },
+                        "models": {
+                            "mock-provider-model": {
+                                "name": "mock-provider-model",
+                                "limit": {
+                                    "context": 128000,
+                                    "output": 1024
+                                },
+                                "capabilities": {
+                                    "streaming": true,
+                                    "tool_calling": true
+                                }
+                            }
+                        }
                     }
                 }
             })
             .to_string(),
         )
         .unwrap();
-        let daemon = KernelDaemon::in_memory().with_runtime_model_config(
-            DaemonRuntimeModelConfig::Provider(ProviderRuntimeModelConfig {
-                provider: Some("mock".to_string()),
+        let host = AgentOsHost::in_memory().with_runtime_model_config(
+            HostRuntimeModelConfig::Provider(ProviderRuntimeModelConfig {
+                model: Some("mock/mock-provider-model".to_string()),
                 config_path: Some(provider_config_path),
                 max_steps: 16,
                 max_tokens: Some(128),
                 temperature: Some("0.0".to_string()),
             }),
         );
-        let mut server = initialized_server(daemon.clone());
+        let mut server = initialized_server(host.clone());
         let thread_id = start_thread(&mut server, &workspace);
 
         request(
@@ -512,7 +442,7 @@ mod tests {
                 input: "capture a nonzero command result".to_string(),
             },
         );
-        let shutdown = daemon.shutdown().unwrap();
+        let shutdown = host.shutdown().unwrap();
 
         assert!(
             shutdown.failed_runtime_workers.is_empty(),
@@ -530,13 +460,13 @@ mod tests {
         fs::remove_dir_all(workspace).unwrap();
     }
 
-    fn initialized_server(daemon: KernelDaemon) -> AppServer<KernelDaemon> {
-        let mut server = AppServer::new(daemon);
+    fn initialized_server(host: AgentOsHost) -> AppServer<AgentOsHost> {
+        let mut server = AppServer::new(host);
         request(&mut server, AppRequest::Initialize);
         server
     }
 
-    fn start_thread(server: &mut AppServer<KernelDaemon>, workspace: &Path) -> String {
+    fn start_thread(server: &mut AppServer<AgentOsHost>, workspace: &Path) -> String {
         let body = request(
             server,
             AppRequest::ThreadStart {
@@ -550,7 +480,7 @@ mod tests {
             .to_string()
     }
 
-    fn request(server: &mut AppServer<KernelDaemon>, request: AppRequest) -> Value {
+    fn request(server: &mut AppServer<AgentOsHost>, request: AppRequest) -> Value {
         let response = server.handle_envelope(AppRequestEnvelope {
             request_id: new_id("req_"),
             client: ClientConnection {
@@ -587,14 +517,14 @@ fn main() {
         0 => {
             let workspace_root = json_string(&input, "workspace_root");
             print!(
-                "{{\"actions\":[{{\"type\":\"tool_call\",\"tool_name\":\"apply_patch\",\"input\":{{\"workspace_root\":\"{}\",\"patch\":\"*** Begin Patch\\n*** Add File: configured.md\\n+configured daemon worker\\n*** End Patch\\n\"}},\"risk_level\":4,\"evidence_claim\":\"configured daemon worker wrote file through apply_patch\"}}],\"usage\":{{\"input_tokens\":1,\"output_tokens\":1,\"cost\":0.0}}}}",
+                "{{\"actions\":[{{\"type\":\"tool_call\",\"tool_name\":\"apply_patch\",\"input\":{{\"workspace_root\":\"{}\",\"patch\":\"*** Begin Patch\\n*** Add File: configured.md\\n+configured host worker\\n*** End Patch\\n\"}},\"risk_level\":4,\"evidence_claim\":\"configured host worker wrote file through apply_patch\"}}],\"usage\":{{\"input_tokens\":1,\"output_tokens\":1,\"cost\":0.0}}}}",
                 workspace_root
             );
         }
         _ => {
             let evidence_id = first_evidence_id(&input);
             print!(
-                "{{\"actions\":[{{\"type\":\"final\",\"submission\":{{\"summary\":\"configured daemon worker complete\",\"changed_artifacts\":[],\"evidence_map\":[{{\"claim\":\"configured daemon worker wrote file\",\"evidence_refs\":[\"{}\"]}}],\"unverified_claims\":[],\"known_risks\":[],\"tests_run\":[],\"tests_not_run\":[],\"approvals\":[]}}}}],\"usage\":{{\"input_tokens\":1,\"output_tokens\":1,\"cost\":0.0}}}}",
+                "{{\"actions\":[{{\"type\":\"final\",\"submission\":{{\"summary\":\"configured host worker complete\",\"changed_artifacts\":[],\"evidence_map\":[{{\"claim\":\"configured host worker wrote file\",\"evidence_refs\":[\"{}\"]}}],\"unverified_claims\":[],\"known_risks\":[],\"tests_run\":[],\"tests_not_run\":[],\"approvals\":[]}}}}],\"usage\":{{\"input_tokens\":1,\"output_tokens\":1,\"cost\":0.0}}}}",
                 evidence_id
             );
         }
@@ -672,15 +602,61 @@ fn first_evidence_id(input: &str) -> String {
 
     impl MockOpenAiServer {
         fn start(responses: Vec<Value>) -> Self {
+            Self::start_with_expected_model(None, Vec::new(), responses)
+        }
+
+        fn start_expect_model_and_request_snippets(
+            model: &str,
+            snippets: Vec<&str>,
+            responses: Vec<Value>,
+        ) -> Self {
+            Self::start_with_expected_model(
+                Some(model.to_string()),
+                snippets.into_iter().map(str::to_string).collect(),
+                responses,
+            )
+        }
+
+        fn start_with_expected_model(
+            expected_model: Option<String>,
+            expected_request_snippets: Vec<String>,
+            responses: Vec<Value>,
+        ) -> Self {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let base_url = format!("http://{}", listener.local_addr().unwrap());
             let handle = std::thread::spawn(move || {
-                for response in responses {
+                let mut response_index = 0;
+                while response_index < responses.len() {
                     let (mut stream, _) = listener.accept().unwrap();
                     let request = read_http_request(&mut stream);
+                    if !request.starts_with("POST ") {
+                        write!(
+                            stream,
+                            "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        )
+                        .unwrap();
+                        continue;
+                    }
+                    if let Some(expected_model) = &expected_model {
+                        let expected = format!("\"model\":\"{expected_model}\"");
+                        assert!(
+                            request.contains(&expected),
+                            "provider request did not contain {expected}\n{request}"
+                        );
+                    }
+                    for expected in &expected_request_snippets {
+                        assert!(
+                            request.contains(expected),
+                            "provider request did not contain {expected}\n{request}"
+                        );
+                    }
+                    let response = &responses[response_index];
+                    response_index += 1;
                     let mut body = response.to_string();
                     if body.contains("__FIRST_EVIDENCE_ID__") {
-                        body = body.replace("__FIRST_EVIDENCE_ID__", &first_evidence_id(&request));
+                        let evidence_id = first_evidence_id(&request)
+                            .unwrap_or_else(|| "evd_unavailable".to_string());
+                        body = body.replace("__FIRST_EVIDENCE_ID__", &evidence_id);
                     }
                     write!(
                         stream,
@@ -728,12 +704,12 @@ fn first_evidence_id(input: &str) -> String {
         String::from_utf8_lossy(&buffer).to_string()
     }
 
-    fn first_evidence_id(input: &str) -> String {
-        let start = input.find("evd_").unwrap();
+    fn first_evidence_id(input: &str) -> Option<String> {
+        let start = input.find("evd_")?;
         let end = input[start..]
             .find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
             .map(|offset| start + offset)
             .unwrap_or(input.len());
-        input[start..end].to_string()
+        Some(input[start..end].to_string())
     }
 }

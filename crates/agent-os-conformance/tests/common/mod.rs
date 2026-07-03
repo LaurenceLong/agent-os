@@ -131,7 +131,7 @@ pub fn fixture_with_kernel(kernel: Kernel) -> Fixture {
     let worker = kernel
         .spawn_agent(SpawnAgentInput {
             task_id: task.task_id.clone(),
-            role_profile_id: "role_worker".to_string(),
+            role_profile_id: "role_producer".to_string(),
             owner: "tester".to_string(),
             goal: "write patch".to_string(),
             success_criteria: vec!["patch has diff evidence".to_string()],

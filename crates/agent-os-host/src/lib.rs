@@ -1,5 +1,6 @@
-//! Long-running Agent-OS kernel daemon service.
+//! Long-running Agent-OS kernel host service.
 
+mod app_handlers;
 mod app_projection;
 mod notifications;
 mod runtime_jobs;
@@ -7,47 +8,45 @@ mod runtime_model;
 mod stdio;
 mod types;
 
-use agent_os_app_server::AppKernelService;
 pub use agent_os_app_server::AppServer;
-use agent_os_kernel::{
-    Kernel, RecordApprovalInput, RegisterGoalInput, SpawnAgentInput, SpawnTaskInput,
+use agent_os_config::{AgentOsPaths, ProjectRuntimePaths};
+use agent_os_ecosystem::{
+    discover_ecosystem, expand_command_template, EcosystemCatalog, EcosystemDiscoverOptions,
+    EcosystemImportReport,
 };
+use agent_os_kernel::Kernel;
+use agent_os_store::LocalBlobStore;
 use agent_os_store_sqlite::SqliteStore;
 use agent_os_sys::{
-    now_rfc3339, AgentOsError, AgentOsResult, AppNotificationEnvelope, AppRequest, AppResponse,
-    ApprovalStatus, AutomationRun, AutomationScheduleKind, AutomationScheduleStatus,
-    ClientConnection, ClientKind, ClientThread, CreateAutomationScheduleInput,
-    OpenResourceSessionInput, ProjectionCursor, ResourceSessionType, SecurityLevel, StatsSnapshot,
-    ThreadStatus, TurnInputKind, TurnRecord,
+    now_rfc3339, AgentOsError, AgentOsResult, AutomationRun, AutomationScheduleKind,
+    AutomationScheduleStatus, ClientConnection, ClientKind, ClientThread, ModelCapabilities,
+    ModelLimit, SecurityLevel, StatsSnapshot, ThreadStatus, TurnInputKind, TurnRecord,
 };
 use agent_os_thread::{
-    expand_command_template, import_workspace_ecosystem, ModelClient, RuntimeConfig, RuntimeJob,
-    RuntimeJobRecord, RuntimeRunReport, ThreadRuntime,
+    ModelClient, RuntimeConfig, RuntimeJob, RuntimeJobRecord, RuntimeRunReport, ThreadRuntime,
 };
 pub use runtime_model::{
-    DaemonRuntimeModelConfig, ExternalRuntimeModelConfig, ProviderRuntimeModelConfig,
+    ExternalRuntimeModelConfig, HostRuntimeModelConfig, ProviderRuntimeModelConfig,
 };
-use serde::Serialize;
-use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::io::{BufRead, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-pub use stdio::{run_stdio_daemon, KerneldArgs};
+pub use stdio::{run_stdio_host, HostArgs};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use types::RuntimeWorkerJoinHandle;
-pub use types::{DaemonReplaySummary, DaemonShutdownReport};
+pub use types::{HostReplaySummary, HostShutdownReport};
 
 #[derive(Clone)]
-pub struct KernelDaemon {
+pub struct AgentOsHost {
     kernel: Kernel,
     runtime_jobs: Arc<Mutex<BTreeMap<String, RuntimeJobRecord>>>,
     runtime_workers: Arc<Mutex<BTreeMap<String, RuntimeWorkerJoinHandle>>>,
-    runtime_model_config: Option<DaemonRuntimeModelConfig>,
+    runtime_model_config: Option<HostRuntimeModelConfig>,
 }
 
-impl fmt::Debug for KernelDaemon {
+impl fmt::Debug for AgentOsHost {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let runtime_job_count = self
             .runtime_jobs
@@ -59,7 +58,7 @@ impl fmt::Debug for KernelDaemon {
             .lock()
             .map(|workers| workers.len())
             .unwrap_or_default();
-        f.debug_struct("KernelDaemon")
+        f.debug_struct("AgentOsHost")
             .field("kernel", &self.kernel)
             .field("runtime_jobs", &runtime_job_count)
             .field("runtime_workers", &runtime_worker_count)
@@ -67,7 +66,7 @@ impl fmt::Debug for KernelDaemon {
     }
 }
 
-impl KernelDaemon {
+impl AgentOsHost {
     pub fn new(kernel: Kernel) -> Self {
         Self::with_runtime_jobs(kernel, BTreeMap::new())
     }
@@ -85,6 +84,22 @@ impl KernelDaemon {
         Self::try_new(Kernel::with_replayed_store(SqliteStore::open(path)?)?)
     }
 
+    pub fn open_global(workspace: impl AsRef<Path>) -> AgentOsResult<Self> {
+        let paths = AgentOsPaths::resolve()?;
+        let runtime = paths.project_runtime_paths(workspace)?;
+        paths.create_runtime_dirs(&runtime)?;
+        Self::open_sqlite_with_runtime_paths(&runtime)
+    }
+
+    pub fn open_sqlite_with_runtime_paths(runtime: &ProjectRuntimePaths) -> AgentOsResult<Self> {
+        let kernel = Kernel::with_replayed_store(SqliteStore::open(&runtime.state_db)?)?
+            .with_blob_stores(
+                LocalBlobStore::new(&runtime.artifact_blobs)?,
+                LocalBlobStore::new(&runtime.evidence_blobs)?,
+            );
+        Self::try_new(kernel)
+    }
+
     pub fn kernel(&self) -> &Kernel {
         &self.kernel
     }
@@ -93,10 +108,10 @@ impl KernelDaemon {
         Ok(self.kernel.events()?.len())
     }
 
-    pub fn replay_summary(&self) -> AgentOsResult<DaemonReplaySummary> {
+    pub fn replay_summary(&self) -> AgentOsResult<HostReplaySummary> {
         let replayed = Kernel::from_events(&self.kernel.events()?)?;
         let state = replayed.state_snapshot()?;
-        Ok(DaemonReplaySummary {
+        Ok(HostReplaySummary {
             tasks: state.tasks.len(),
             threads: state.threads.len(),
             artifacts: state.artifacts.len(),
@@ -156,7 +171,8 @@ impl KernelDaemon {
         alias: &str,
         provider_id: &str,
         model: &str,
-        capabilities: Value,
+        capabilities: ModelCapabilities,
+        limit: ModelLimit,
         provider_profile_id: &str,
     ) -> AgentOsResult<()> {
         self.kernel.register_model_alias(
@@ -164,6 +180,7 @@ impl KernelDaemon {
             provider_id,
             model,
             capabilities,
+            limit,
             provider_profile_id,
         )
     }
@@ -175,7 +192,7 @@ impl KernelDaemon {
         args: &[String],
         raw_arguments: &str,
     ) -> AgentOsResult<String> {
-        import_workspace_ecosystem(&self.kernel, workspace)?;
+        self.import_workspace_ecosystem(workspace)?;
         let state = self.kernel.state_snapshot()?;
         let command = state
             .command_definitions
@@ -252,6 +269,8 @@ impl KernelDaemon {
     where
         C: ModelClient,
     {
+        self.import_workspace_ecosystem(&config.workspace_root)?;
+        self.prepare_runtime_job_thread_for_running(runtime_job_id)?;
         let job = self.mark_runtime_job_running(runtime_job_id)?;
         let mut runtime =
             ThreadRuntime::new_for_job(self.kernel.clone(), job.clone(), model_client);
@@ -268,6 +287,48 @@ impl KernelDaemon {
         }
     }
 
+    pub fn import_workspace_ecosystem(
+        &self,
+        workspace: &Path,
+    ) -> AgentOsResult<EcosystemImportReport> {
+        let options = EcosystemDiscoverOptions::for_workspace(workspace)?;
+        let catalog = discover_ecosystem(&options)?;
+        self.import_ecosystem_catalog(&catalog)
+    }
+
+    pub fn import_ecosystem_catalog(
+        &self,
+        catalog: &EcosystemCatalog,
+    ) -> AgentOsResult<EcosystemImportReport> {
+        let mut report = EcosystemImportReport::default();
+        for document in &catalog.instruction_documents {
+            self.kernel.import_instruction_document(document.clone())?;
+            report.instructions += 1;
+        }
+        for skill in &catalog.skill_definitions {
+            self.kernel.import_skill_definition(skill.clone())?;
+            report.skills += 1;
+        }
+        for command in &catalog.command_definitions {
+            self.kernel.import_command_definition(command.clone())?;
+            report.commands += 1;
+        }
+        for profile in &catalog.imported_agent_profiles {
+            self.kernel
+                .register_imported_agent_profile(profile.clone())?;
+            report.agents += 1;
+        }
+        for server in &catalog.mcp_servers {
+            self.kernel.register_mcp_server_spec(server.clone())?;
+            report.mcp_servers += 1;
+        }
+        for tool in &catalog.mcp_tools {
+            self.kernel.register_mcp_tool_definition(tool.clone())?;
+            report.mcp_tools += 1;
+        }
+        Ok(report)
+    }
+
     pub fn spawn_runtime_job_worker<C>(
         &self,
         runtime_job_id: &str,
@@ -277,12 +338,13 @@ impl KernelDaemon {
     where
         C: ModelClient + Send + 'static,
     {
+        self.reap_finished_runtime_worker(runtime_job_id)?;
         self.ensure_runtime_job_can_spawn(runtime_job_id)?;
         let runtime_job_id = runtime_job_id.to_string();
-        let worker_daemon = self.clone();
+        let worker_host = self.clone();
         let worker_job_id = runtime_job_id.clone();
         let handle = std::thread::spawn(move || {
-            worker_daemon.run_runtime_job_with_config(&worker_job_id, model_client, config)
+            worker_host.run_runtime_job_with_config(&worker_job_id, model_client, config)
         });
         let mut workers = self.runtime_workers.lock().map_err(|_| {
             AgentOsError::Validation("runtime worker registry lock poisoned".to_string())
@@ -309,14 +371,14 @@ impl KernelDaemon {
         Ok(Some(runtime_job_id))
     }
 
-    pub fn shutdown(&self) -> AgentOsResult<DaemonShutdownReport> {
+    pub fn shutdown(&self) -> AgentOsResult<HostShutdownReport> {
         let workers = {
             let mut workers = self.runtime_workers.lock().map_err(|_| {
                 AgentOsError::Validation("runtime worker registry lock poisoned".to_string())
             })?;
             std::mem::take(&mut *workers)
         };
-        let mut report = DaemonShutdownReport {
+        let mut report = HostShutdownReport {
             joined_runtime_workers: 0,
             failed_runtime_workers: Vec::new(),
             runtime_reports: Vec::new(),
@@ -344,350 +406,7 @@ impl KernelDaemon {
     }
 }
 
-impl AppKernelService for KernelDaemon {
-    fn handle_app_request(
-        &self,
-        client: &ClientConnection,
-        request: AppRequest,
-    ) -> AgentOsResult<AppResponse> {
-        match request {
-            AppRequest::ThreadStart { goal, workspace } => {
-                self.thread_start(client, goal, workspace)
-            }
-            AppRequest::ThreadResume { client_thread_id } => self.thread_resume(&client_thread_id),
-            AppRequest::ThreadRead { client_thread_id } => self.thread_read(&client_thread_id),
-            AppRequest::ThreadList { archived } => self.thread_list(archived),
-            AppRequest::ThreadSearch { query } => self.thread_search(&query),
-            AppRequest::ThreadArchive { client_thread_id } => {
-                self.thread_archive(&client_thread_id)
-            }
-            AppRequest::TaskBundleExport { client_thread_id } => {
-                self.task_bundle_export(&client_thread_id)
-            }
-            AppRequest::TurnStart {
-                client_thread_id,
-                input,
-            } => self.turn_start(client, &client_thread_id, input),
-            AppRequest::TurnSteer { turn_id, input } => self.turn_steer(client, &turn_id, input),
-            AppRequest::TurnInterrupt { turn_id } => self.turn_interrupt(&turn_id),
-            AppRequest::ApprovalRespond {
-                approval_id,
-                approved,
-            } => self.approval_respond(client, approval_id, approved),
-            AppRequest::ResourceSessionOpen {
-                resource_type,
-                client_thread_id,
-                lease_expires_at,
-                payload,
-            } => self.resource_session_open(
-                resource_type,
-                client_thread_id,
-                lease_expires_at,
-                payload,
-            ),
-            AppRequest::ResourceSessionClose { session_id } => {
-                self.resource_session_close(&session_id)
-            }
-            AppRequest::AutomationScheduleCreate {
-                name,
-                kind,
-                target_thread_id,
-                workspace,
-                prompt,
-                next_run_at,
-                interval_seconds,
-                payload,
-            } => self.automation_schedule_create(CreateAutomationScheduleInput {
-                name,
-                kind,
-                target_thread_id,
-                workspace,
-                prompt,
-                next_run_at,
-                interval_seconds,
-                created_by_client_id: client.client_id.clone(),
-                payload,
-            }),
-            AppRequest::AutomationScheduleList => self.automation_schedule_list(),
-            AppRequest::AutomationRunList { schedule_id } => self.automation_run_list(schedule_id),
-            AppRequest::StatsRead { query } => {
-                accepted("snapshot", self.kernel.store().stats_snapshot(query)?)
-            }
-            AppRequest::Initialize
-            | AppRequest::Subscribe { .. }
-            | AppRequest::Unsubscribe { .. } => Err(AgentOsError::Validation(
-                "protocol-level request reached kerneld service".to_string(),
-            )),
-        }
-    }
-
-    fn app_notifications_since(
-        &self,
-        cursor: &ProjectionCursor,
-    ) -> AgentOsResult<Vec<AppNotificationEnvelope>> {
-        self.notifications_since(cursor)
-    }
-}
-
-impl KernelDaemon {
-    fn thread_start(
-        &self,
-        client: &ClientConnection,
-        goal: String,
-        workspace: Option<String>,
-    ) -> AgentOsResult<AppResponse> {
-        let goal_record = self.kernel.register_goal(RegisterGoalInput {
-            namespace: "app".to_string(),
-            created_by: client.client_id.clone(),
-            title: goal.clone(),
-            description: goal.clone(),
-            acceptance_criteria: vec!["agent thread reaches a final response".to_string()],
-            constraints: Vec::new(),
-            risk_level: 0,
-            deadline: None,
-        })?;
-        let task = self.kernel.spawn_task(SpawnTaskInput {
-            goal_id: goal_record.goal_id.clone(),
-            parent_task_id: None,
-            title: goal.clone(),
-            description: goal.clone(),
-            depends_on: Vec::new(),
-            required_artifact_types: Vec::new(),
-            required_evidence_types: Vec::new(),
-            priority: 10,
-            risk_level: 0,
-        })?;
-        let acb = self.kernel.spawn_agent(SpawnAgentInput {
-            task_id: task.task_id,
-            role_profile_id: "role_worker".to_string(),
-            owner: client.client_id.clone(),
-            goal,
-            success_criteria: Vec::new(),
-            failure_criteria: Vec::new(),
-            parent_thread_id: None,
-            workspace_roots: workspace.into_iter().collect(),
-        })?;
-        accepted("thread", self.thread_by_id(&acb.thread_id)?)
-    }
-
-    fn thread_read(&self, client_thread_id: &str) -> AgentOsResult<AppResponse> {
-        self.spawn_configured_runtime_job_for_ready_thread(client_thread_id)?;
-        self.thread_read_projection(client_thread_id)
-    }
-
-    fn thread_list(&self, archived: Option<bool>) -> AgentOsResult<AppResponse> {
-        let threads = self
-            .kernel
-            .store()
-            .thread_summaries()?
-            .into_iter()
-            .filter(|thread| archived.is_none_or(|flag| thread.archived == flag))
-            .collect::<Vec<_>>();
-        accepted("threads", threads)
-    }
-
-    fn thread_search(&self, query: &str) -> AgentOsResult<AppResponse> {
-        let query = query.to_ascii_lowercase();
-        let threads = self
-            .kernel
-            .store()
-            .thread_summaries()?
-            .into_iter()
-            .filter(|thread| thread.title.to_ascii_lowercase().contains(&query))
-            .collect::<Vec<_>>();
-        accepted("threads", threads)
-    }
-
-    fn thread_archive(&self, client_thread_id: &str) -> AgentOsResult<AppResponse> {
-        let thread = self.kernel.archive_thread(client_thread_id)?;
-        accepted("thread", thread)
-    }
-
-    fn task_bundle_export(&self, client_thread_id: &str) -> AgentOsResult<AppResponse> {
-        let thread = self.thread_by_id(client_thread_id)?;
-        let task_id = thread.task_id.ok_or_else(|| {
-            AgentOsError::Validation(format!(
-                "thread {client_thread_id} has no task for task/bundle/export"
-            ))
-        })?;
-        accepted("bundle", self.kernel.export_task_bundle(&task_id)?)
-    }
-
-    fn thread_resume(&self, client_thread_id: &str) -> AgentOsResult<AppResponse> {
-        let before = self.thread_by_id(client_thread_id)?;
-        let reconciliation = self.kernel.reconcile_thread_recovery(client_thread_id)?;
-        self.prepare_thread_for_resume(client_thread_id)?;
-        Ok(AppResponse::Accepted(json!({
-            "thread": self.thread_by_id(client_thread_id)?,
-            "previous_thread_status": before.status,
-            "reconciliation": {
-                "reconciliation_id": reconciliation.reconciliation_id,
-                "orphan_tool_call_ids": reconciliation.orphan_tool_call_ids,
-                "workspace_diff_refs": reconciliation.workspace_diff_refs,
-                "reclaimed_resource_lease_ids": reconciliation.reclaimed_resource_lease_ids,
-                "reclaimed_environment_lease_ids": reconciliation.reclaimed_environment_lease_ids,
-            },
-        })))
-    }
-
-    fn turn_start(
-        &self,
-        client: &ClientConnection,
-        client_thread_id: &str,
-        input: String,
-    ) -> AgentOsResult<AppResponse> {
-        let acb = self.kernel.start_turn(client_thread_id)?;
-        let turn_id = acb.active_turn.turn_id.clone().ok_or_else(|| {
-            AgentOsError::InvalidTransition("turn/start did not produce a turn id".to_string())
-        })?;
-        let input_record = self.kernel.record_turn_input(
-            client,
-            client_thread_id,
-            &turn_id,
-            TurnInputKind::Start,
-            input,
-        )?;
-        let runtime_job = RuntimeJobRecord::queued(RuntimeJob::from_active_turn(&acb)?);
-        self.enqueue_runtime_job(runtime_job.clone())?;
-        if self.has_runtime_model_config() {
-            self.spawn_next_configured_runtime_job_worker()?;
-        }
-        let thread = self.thread_by_id(client_thread_id)?;
-        let turn = self.turn_by_id(&turn_id)?;
-        Ok(AppResponse::Accepted(json!({
-            "thread": thread,
-            "turn": turn,
-            "input": input_record,
-            "runtime_job": runtime_job,
-        })))
-    }
-
-    fn turn_steer(
-        &self,
-        client: &ClientConnection,
-        turn_id: &str,
-        input: String,
-    ) -> AgentOsResult<AppResponse> {
-        let turn = self.turn_by_id(turn_id)?;
-        let client_thread_id = turn.client_thread_id.clone().ok_or_else(|| {
-            AgentOsError::Validation(format!("turn {turn_id} has no client thread"))
-        })?;
-        let input_record = self.kernel.record_turn_input(
-            client,
-            &client_thread_id,
-            turn_id,
-            TurnInputKind::Steer,
-            input,
-        )?;
-        Ok(AppResponse::Accepted(json!({
-            "turn": self.turn_by_id(turn_id)?,
-            "input": input_record,
-        })))
-    }
-
-    fn turn_interrupt(&self, turn_id: &str) -> AgentOsResult<AppResponse> {
-        let turn = self.turn_by_id(turn_id)?;
-        let client_thread_id = turn.client_thread_id.clone().ok_or_else(|| {
-            AgentOsError::Validation(format!("turn {turn_id} has no client thread"))
-        })?;
-        self.kernel.transition_thread(
-            &client_thread_id,
-            ThreadStatus::Interrupted,
-            Some("interrupted by app client".to_string()),
-        )?;
-        let interrupted_jobs = self.interrupt_runtime_jobs_for_turn(turn_id)?;
-        Ok(AppResponse::Accepted(json!({
-            "thread": self.thread_by_id(&client_thread_id)?,
-            "turn": self.turn_by_id(turn_id)?,
-            "runtime_jobs": interrupted_jobs,
-        })))
-    }
-
-    fn approval_respond(
-        &self,
-        client: &ClientConnection,
-        approval_id: String,
-        approved: bool,
-    ) -> AgentOsResult<AppResponse> {
-        let approval = self.kernel.record_approval(RecordApprovalInput {
-            approval_id: approval_id.clone(),
-            status: if approved {
-                ApprovalStatus::Approved
-            } else {
-                ApprovalStatus::Denied
-            },
-            decision_by: client.client_id.clone(),
-            decision_reason: Some("resolved through app-server approval/respond".to_string()),
-        })?;
-        accepted("approval", approval)
-    }
-
-    fn resource_session_open(
-        &self,
-        resource_type: ResourceSessionType,
-        client_thread_id: Option<String>,
-        lease_expires_at: Option<String>,
-        payload: Value,
-    ) -> AgentOsResult<AppResponse> {
-        let owner_agent_id = match &client_thread_id {
-            Some(thread_id) => {
-                let state = self.kernel.state_snapshot()?;
-                let thread = state
-                    .threads
-                    .get(thread_id)
-                    .ok_or_else(|| AgentOsError::NotFound(format!("thread {thread_id}")))?;
-                Some(thread.agent_id.clone())
-            }
-            None => None,
-        };
-        let session = self
-            .kernel
-            .open_resource_session(OpenResourceSessionInput {
-                resource_type,
-                client_thread_id,
-                owner_agent_id,
-                lease_expires_at,
-                payload,
-            })?;
-        accepted("resource_session", session)
-    }
-
-    fn resource_session_close(&self, session_id: &str) -> AgentOsResult<AppResponse> {
-        let session = self.kernel.close_resource_session(session_id)?;
-        accepted("resource_session", session)
-    }
-
-    fn automation_schedule_create(
-        &self,
-        input: CreateAutomationScheduleInput,
-    ) -> AgentOsResult<AppResponse> {
-        let schedule = self.kernel.create_automation_schedule(input)?;
-        accepted("automation_schedule", schedule)
-    }
-
-    fn automation_schedule_list(&self) -> AgentOsResult<AppResponse> {
-        accepted(
-            "automation_schedules",
-            self.kernel.store().automation_schedules()?,
-        )
-    }
-
-    fn automation_run_list(&self, schedule_id: Option<String>) -> AgentOsResult<AppResponse> {
-        let runs = self
-            .kernel
-            .store()
-            .automation_runs()?
-            .into_iter()
-            .filter(|run| {
-                schedule_id
-                    .as_deref()
-                    .map(|id| run.schedule_id == id)
-                    .unwrap_or(true)
-            })
-            .collect::<Vec<_>>();
-        accepted("automation_runs", runs)
-    }
-
+impl AgentOsHost {
     fn enqueue_thread_wakeup_job(&self, run: &AutomationRun) -> AgentOsResult<()> {
         let thread_id = run.target_thread_id.as_deref().ok_or_else(|| {
             AgentOsError::Validation(format!(
@@ -837,8 +556,36 @@ impl KernelDaemon {
         else {
             return Ok(None);
         };
+        self.reap_finished_runtime_worker(&runtime_job_id)?;
+        if self.runtime_worker_exists(&runtime_job_id)? {
+            return Ok(Some(runtime_job_id));
+        }
         self.spawn_configured_runtime_job_worker(&runtime_job_id)?;
         Ok(Some(runtime_job_id))
+    }
+
+    fn prepare_runtime_job_thread_for_running(&self, runtime_job_id: &str) -> AgentOsResult<()> {
+        let job = self.runtime_job(runtime_job_id)?;
+        let acb = self
+            .kernel
+            .state_snapshot()?
+            .threads
+            .get(&job.agent_thread_id)
+            .cloned()
+            .ok_or_else(|| AgentOsError::NotFound(format!("thread {}", job.agent_thread_id)))?;
+        if acb.active_turn.turn_id.as_deref() != Some(&job.turn_id) {
+            return Ok(());
+        }
+        if acb.status == ThreadStatus::Ready
+            && acb.active_turn.status == Some(agent_os_sys::TurnStatus::Completed)
+        {
+            self.kernel.transition_thread(
+                &job.agent_thread_id,
+                ThreadStatus::Running,
+                Some("runtime job resumed after background tool completion".to_string()),
+            )?;
+        }
+        Ok(())
     }
 
     fn mark_runtime_job_running(&self, runtime_job_id: &str) -> AgentOsResult<RuntimeJob> {
@@ -897,11 +644,51 @@ impl KernelDaemon {
         Ok(())
     }
 
+    fn runtime_worker_exists(&self, runtime_job_id: &str) -> AgentOsResult<bool> {
+        let workers = self.runtime_workers.lock().map_err(|_| {
+            AgentOsError::Validation("runtime worker registry lock poisoned".to_string())
+        })?;
+        Ok(workers.contains_key(runtime_job_id))
+    }
+
+    fn reap_finished_runtime_worker(&self, runtime_job_id: &str) -> AgentOsResult<()> {
+        let finished_worker = {
+            let mut workers = self.runtime_workers.lock().map_err(|_| {
+                AgentOsError::Validation("runtime worker registry lock poisoned".to_string())
+            })?;
+            if workers
+                .get(runtime_job_id)
+                .is_some_and(|handle| handle.is_finished())
+            {
+                workers.remove(runtime_job_id)
+            } else {
+                None
+            }
+        };
+        if let Some(handle) = finished_worker {
+            if handle.join().is_err() {
+                self.fail_runtime_job(runtime_job_id, "runtime worker panicked".to_string())?;
+            }
+        }
+        Ok(())
+    }
+
     fn finish_runtime_job(
         &self,
         runtime_job_id: &str,
         report: &RuntimeRunReport,
     ) -> AgentOsResult<()> {
+        let blocked_reason = if report.status == ThreadStatus::Blocked {
+            let state = self.kernel.state_snapshot()?;
+            let reason = state
+                .tasks
+                .get(&report.task_id)
+                .and_then(|task| task.blocked_reason.clone())
+                .unwrap_or_else(|| "runtime blocked without final submission".to_string());
+            Some(reason)
+        } else {
+            None
+        };
         let record = {
             let mut jobs = self.runtime_jobs.lock().map_err(|_| {
                 AgentOsError::Validation("runtime job registry lock poisoned".to_string())
@@ -915,6 +702,8 @@ impl KernelDaemon {
                 record.requeue();
             } else if report.final_submitted && report.status == ThreadStatus::Completed {
                 record.complete();
+            } else if report.status == ThreadStatus::Blocked {
+                record.block(blocked_reason.expect("blocked report has blocked reason"));
             } else {
                 record.fail(format!("runtime finished with status {:?}", report.status));
             }
@@ -922,6 +711,7 @@ impl KernelDaemon {
         };
         let event_type = match record.status {
             agent_os_thread::RuntimeJobStatus::Completed => "RuntimeJobCompleted",
+            agent_os_thread::RuntimeJobStatus::Blocked => "RuntimeJobBlocked",
             agent_os_thread::RuntimeJobStatus::Queued => "RuntimeJobQueued",
             agent_os_thread::RuntimeJobStatus::Interrupted => "RuntimeJobInterrupted",
             agent_os_thread::RuntimeJobStatus::Failed => "RuntimeJobFailed",
@@ -984,31 +774,26 @@ impl KernelDaemon {
     }
 }
 
-fn accepted(key: &str, value: impl Serialize) -> AgentOsResult<AppResponse> {
-    let mut body = serde_json::Map::new();
-    body.insert(key.to_string(), serde_json::to_value(value)?);
-    Ok(AppResponse::Accepted(Value::Object(body)))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_os_app_server::AppServer;
+    use agent_os_app_server::{AppKernelService, AppServer};
     use agent_os_sys::{
-        AppRequestEnvelope, AutomationScheduleKind, ClientKind, EvidenceMapEntry, FinalSubmission,
-        ProjectionCursor, ProviderUsage, ResourceSessionType, SecurityLevel, StatsQuery,
-        StatsSnapshot,
+        AppRequest, AppRequestEnvelope, AppResponse, AutomationScheduleKind, ClientConnection,
+        ClientKind, EvidenceMapEntry, FinalSubmission, ProjectionCursor, ProviderUsage,
+        ResourceSessionType, SecurityLevel, StatsQuery, StatsSnapshot, TurnStatus,
     };
     use agent_os_thread::{
         ModelAction, ModelClient, ModelTurnRequest, ModelTurnResponse, ToolAction,
     };
+    use serde_json::Value;
     use std::collections::VecDeque;
     use std::env;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn app_server_starts_lists_reads_and_archives_threads_through_daemon() {
+    fn app_server_starts_lists_reads_and_archives_threads_through_host() {
         let mut server = initialized_server();
 
         let started = request(
@@ -1097,9 +882,9 @@ mod tests {
     }
 
     #[test]
-    fn daemon_resource_session_lifecycle_flows_through_app_server() {
-        let daemon = KernelDaemon::in_memory();
-        let mut server = initialized_server_with_daemon(daemon.clone());
+    fn host_resource_session_lifecycle_flows_through_app_server() {
+        let host = AgentOsHost::in_memory();
+        let mut server = initialized_server_with_host(host.clone());
         let thread_id = start_thread(&mut server);
 
         let opened = request(
@@ -1135,7 +920,7 @@ mod tests {
                     && resource["status"] == "active")
         );
 
-        let notifications = daemon
+        let notifications = host
             .app_notifications_since(&ProjectionCursor {
                 last_event_ordinal: 0,
             })
@@ -1176,9 +961,9 @@ mod tests {
     }
 
     #[test]
-    fn daemon_queues_due_thread_wakeup_automation_with_injected_clock() {
-        let daemon = KernelDaemon::in_memory();
-        let mut server = initialized_server_with_daemon(daemon.clone());
+    fn host_queues_due_thread_wakeup_automation_with_injected_clock() {
+        let host = AgentOsHost::in_memory();
+        let mut server = initialized_server_with_host(host.clone());
         let thread_id = start_thread(&mut server);
 
         let created = request(
@@ -1200,9 +985,7 @@ mod tests {
             .unwrap()
             .to_string();
 
-        let runs = daemon
-            .run_due_automations_at("2026-06-30T00:00:01Z")
-            .unwrap();
+        let runs = host.run_due_automations_at("2026-06-30T00:00:01Z").unwrap();
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].schedule_id, schedule_id);
         assert_eq!(
@@ -1222,7 +1005,7 @@ mod tests {
         assert_eq!(body["runtime_jobs"].as_array().unwrap().len(), 1);
         assert_eq!(body["runtime_jobs"][0]["status"], "queued");
         assert_eq!(body["turns"].as_array().unwrap().len(), 1);
-        assert!(daemon
+        assert!(host
             .kernel()
             .store()
             .automation_schedules()
@@ -1232,7 +1015,7 @@ mod tests {
     }
 
     #[test]
-    fn daemon_turn_start_steer_and_interrupt_update_projection_records() {
+    fn host_turn_start_steer_and_interrupt_update_projection_records() {
         let mut server = initialized_server();
         let thread_id = start_thread(&mut server);
 
@@ -1278,10 +1061,10 @@ mod tests {
     }
 
     #[test]
-    fn daemon_runs_next_queued_runtime_job_and_updates_job_state() {
+    fn host_runs_next_queued_runtime_job_and_updates_job_state() {
         let workspace = temp_workspace("runtime-worker");
-        let daemon = KernelDaemon::in_memory();
-        let mut server = initialized_server_with_daemon(daemon.clone());
+        let host = AgentOsHost::in_memory();
+        let mut server = initialized_server_with_host(host.clone());
         let thread_id = start_thread_with_workspace(&mut server, workspace.to_string_lossy());
 
         let started = request(
@@ -1295,7 +1078,7 @@ mod tests {
         let body = accepted_body(started);
         assert_eq!(body["runtime_job"]["status"], "queued");
 
-        let report = daemon
+        let report = host
             .run_next_runtime_job(ScriptedModelClient::command_then_final(&workspace))
             .unwrap()
             .expect("queued runtime job");
@@ -1317,8 +1100,8 @@ mod tests {
     #[test]
     fn thread_read_includes_runtime_artifact_and_evidence_projections() {
         let workspace = temp_workspace("runtime-worker-projections");
-        let daemon = KernelDaemon::in_memory();
-        let mut server = initialized_server_with_daemon(daemon.clone());
+        let host = AgentOsHost::in_memory();
+        let mut server = initialized_server_with_host(host.clone());
         let thread_id = start_thread_with_workspace(&mut server, workspace.to_string_lossy());
         request(
             &mut server,
@@ -1329,8 +1112,7 @@ mod tests {
             },
         );
 
-        daemon
-            .run_next_runtime_job(ScriptedModelClient::patch_then_final(&workspace))
+        host.run_next_runtime_job(ScriptedModelClient::patch_then_final(&workspace))
             .unwrap()
             .expect("queued runtime job");
 
@@ -1351,10 +1133,10 @@ mod tests {
     }
 
     #[test]
-    fn daemon_runtime_job_factory_receives_queued_job_before_running() {
+    fn host_runtime_job_factory_receives_queued_job_before_running() {
         let workspace = temp_workspace("runtime-worker-factory");
-        let daemon = KernelDaemon::in_memory();
-        let mut server = initialized_server_with_daemon(daemon.clone());
+        let host = AgentOsHost::in_memory();
+        let mut server = initialized_server_with_host(host.clone());
         let thread_id = start_thread_with_workspace(&mut server, workspace.to_string_lossy());
         request(
             &mut server,
@@ -1366,7 +1148,7 @@ mod tests {
         );
         let mut seen_job = None;
 
-        let report = daemon
+        let report = host
             .run_next_runtime_job_with_factory(|job| {
                 seen_job = Some(job.clone());
                 Ok(ScriptedModelClient::command_then_final(&workspace))
@@ -1382,10 +1164,10 @@ mod tests {
     }
 
     #[test]
-    fn daemon_shutdown_waits_for_background_runtime_worker() {
+    fn host_shutdown_waits_for_background_runtime_worker() {
         let workspace = temp_workspace("background-runtime-worker");
-        let daemon = KernelDaemon::in_memory();
-        let mut server = initialized_server_with_daemon(daemon.clone());
+        let host = AgentOsHost::in_memory();
+        let mut server = initialized_server_with_host(host.clone());
         let thread_id = start_thread_with_workspace(&mut server, workspace.to_string_lossy());
         let started = request(
             &mut server,
@@ -1400,14 +1182,13 @@ mod tests {
             .unwrap()
             .to_string();
 
-        daemon
-            .spawn_runtime_job_worker(
-                &runtime_job_id,
-                ScriptedModelClient::command_then_final(&workspace),
-                RuntimeConfig::workspace_write(&workspace),
-            )
-            .unwrap();
-        let shutdown = daemon.shutdown().unwrap();
+        host.spawn_runtime_job_worker(
+            &runtime_job_id,
+            ScriptedModelClient::command_then_final(&workspace),
+            RuntimeConfig::workspace_write(&workspace),
+        )
+        .unwrap();
+        let shutdown = host.shutdown().unwrap();
 
         assert_eq!(shutdown.joined_runtime_workers, 1);
         assert!(shutdown.failed_runtime_workers.is_empty());
@@ -1426,10 +1207,10 @@ mod tests {
     }
 
     #[test]
-    fn daemon_spawns_next_background_runtime_job_with_factory() {
+    fn host_spawns_next_background_runtime_job_with_factory() {
         let workspace = temp_workspace("background-runtime-worker-factory");
-        let daemon = KernelDaemon::in_memory();
-        let mut server = initialized_server_with_daemon(daemon.clone());
+        let host = AgentOsHost::in_memory();
+        let mut server = initialized_server_with_host(host.clone());
         let thread_id = start_thread_with_workspace(&mut server, workspace.to_string_lossy());
         request(
             &mut server,
@@ -1441,14 +1222,14 @@ mod tests {
         );
         let mut seen_job = None;
 
-        let runtime_job_id = daemon
+        let runtime_job_id = host
             .spawn_next_runtime_job_worker_with_factory(|job| {
                 seen_job = Some(job.clone());
                 Ok(ScriptedModelClient::command_then_final(&workspace))
             })
             .unwrap()
             .expect("queued runtime job");
-        let shutdown = daemon.shutdown().unwrap();
+        let shutdown = host.shutdown().unwrap();
 
         assert_eq!(shutdown.joined_runtime_workers, 1);
         assert!(shutdown.failed_runtime_workers.is_empty());
@@ -1468,10 +1249,10 @@ mod tests {
     }
 
     #[test]
-    fn daemon_requeues_runtime_job_when_runtime_waits_for_background_tool() {
+    fn host_requeues_runtime_job_when_runtime_waits_for_background_tool() {
         let workspace = temp_workspace("background-tool-requeue");
-        let daemon = KernelDaemon::in_memory();
-        let mut server = initialized_server_with_daemon(daemon.clone());
+        let host = AgentOsHost::in_memory();
+        let mut server = initialized_server_with_host(host.clone());
         let thread_id = start_thread_with_workspace(&mut server, workspace.to_string_lossy());
         let started = request(
             &mut server,
@@ -1487,22 +1268,21 @@ mod tests {
             .unwrap()
             .to_string();
 
-        let job = daemon.mark_runtime_job_running(&runtime_job_id).unwrap();
-        daemon
-            .finish_runtime_job(
-                &runtime_job_id,
-                &RuntimeRunReport {
-                    thread_id: job.agent_thread_id,
-                    task_id: "task_background_tool".to_string(),
-                    status: ThreadStatus::WaitingTool,
-                    provider_stream_session_ids: Vec::new(),
-                    tool_results: Vec::new(),
-                    artifacts: Vec::new(),
-                    final_submitted: false,
-                    events: 1,
-                },
-            )
-            .unwrap();
+        let job = host.mark_runtime_job_running(&runtime_job_id).unwrap();
+        host.finish_runtime_job(
+            &runtime_job_id,
+            &RuntimeRunReport {
+                thread_id: job.agent_thread_id,
+                task_id: "task_background_tool".to_string(),
+                status: ThreadStatus::WaitingTool,
+                provider_stream_session_ids: Vec::new(),
+                tool_results: Vec::new(),
+                artifacts: Vec::new(),
+                final_submitted: false,
+                events: 1,
+            },
+        )
+        .unwrap();
 
         let read = request(
             &mut server,
@@ -1519,7 +1299,216 @@ mod tests {
     }
 
     #[test]
-    fn daemon_marks_runtime_job_failed_when_worker_returns_error() {
+    fn host_resumes_requeued_runtime_job_after_background_tool_readies_thread() {
+        let workspace = temp_workspace("background-tool-requeue-resume");
+        let host = AgentOsHost::in_memory();
+        let mut server = initialized_server_with_host(host.clone());
+        let thread_id = start_thread_with_workspace(&mut server, workspace.to_string_lossy());
+        let started = request(
+            &mut server,
+            "req_turn_start",
+            AppRequest::TurnStart {
+                client_thread_id: thread_id.clone(),
+                input: "resume runtime job after background tool completion".to_string(),
+            },
+        );
+        let runtime_job_id = accepted_body(started)["runtime_job"]["runtime_job_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let job = host.mark_runtime_job_running(&runtime_job_id).unwrap();
+        host.kernel()
+            .transition_thread(
+                &thread_id,
+                ThreadStatus::WaitingTool,
+                Some("test background tool wait".to_string()),
+            )
+            .unwrap();
+        host.finish_runtime_job(
+            &runtime_job_id,
+            &RuntimeRunReport {
+                thread_id: job.agent_thread_id,
+                task_id: "task_background_tool".to_string(),
+                status: ThreadStatus::WaitingTool,
+                provider_stream_session_ids: Vec::new(),
+                tool_results: Vec::new(),
+                artifacts: Vec::new(),
+                final_submitted: false,
+                events: 1,
+            },
+        )
+        .unwrap();
+        let ready = host
+            .kernel()
+            .transition_thread(
+                &thread_id,
+                ThreadStatus::Ready,
+                Some("test background tool completed".to_string()),
+            )
+            .unwrap();
+        assert_eq!(ready.active_turn.status, Some(TurnStatus::Completed));
+
+        host.spawn_runtime_job_worker(
+            &runtime_job_id,
+            ScriptedModelClient::command_then_final(&workspace),
+            RuntimeConfig::workspace_write(&workspace),
+        )
+        .unwrap();
+        let shutdown = host.shutdown().unwrap();
+
+        assert_eq!(shutdown.joined_runtime_workers, 1);
+        assert!(shutdown.failed_runtime_workers.is_empty());
+        let read = request(
+            &mut server,
+            "req_thread_read_after_requeued_resume",
+            AppRequest::ThreadRead {
+                client_thread_id: thread_id,
+            },
+        );
+        let body = accepted_body(read);
+        assert_eq!(body["runtime_jobs"][0]["runtime_job_id"], runtime_job_id);
+        assert_eq!(body["runtime_jobs"][0]["status"], "completed");
+        fs::remove_dir_all(workspace).unwrap();
+    }
+
+    #[test]
+    fn host_reaps_finished_background_worker_before_requeued_spawn() {
+        let workspace = temp_workspace("background-worker-requeue-respawn");
+        let host = AgentOsHost::in_memory();
+        let mut server = initialized_server_with_host(host.clone());
+        let thread_id = start_thread_with_workspace(&mut server, workspace.to_string_lossy());
+        let started = request(
+            &mut server,
+            "req_turn_start",
+            AppRequest::TurnStart {
+                client_thread_id: thread_id.clone(),
+                input: "start runtime worker with stale finished handle".to_string(),
+            },
+        );
+        let runtime_job_id = accepted_body(started)["runtime_job"]["runtime_job_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let finished_thread_id = thread_id.clone();
+        let finished_handle = std::thread::spawn(move || {
+            Ok(RuntimeRunReport {
+                thread_id: finished_thread_id,
+                task_id: "task_finished_background_worker".to_string(),
+                status: ThreadStatus::WaitingTool,
+                provider_stream_session_ids: Vec::new(),
+                tool_results: Vec::new(),
+                artifacts: Vec::new(),
+                final_submitted: false,
+                events: 1,
+            })
+        });
+        while !finished_handle.is_finished() {
+            std::thread::yield_now();
+        }
+        host.runtime_workers
+            .lock()
+            .unwrap()
+            .insert(runtime_job_id.clone(), finished_handle);
+
+        host.spawn_runtime_job_worker(
+            &runtime_job_id,
+            ScriptedModelClient::command_then_final(&workspace),
+            RuntimeConfig::workspace_write(&workspace),
+        )
+        .unwrap();
+        let shutdown = host.shutdown().unwrap();
+
+        assert_eq!(shutdown.joined_runtime_workers, 1);
+        assert!(shutdown.failed_runtime_workers.is_empty());
+        let read = request(
+            &mut server,
+            "req_thread_read_after_respawn",
+            AppRequest::ThreadRead {
+                client_thread_id: thread_id,
+            },
+        );
+        let body = accepted_body(read);
+        assert_eq!(body["runtime_jobs"][0]["runtime_job_id"], runtime_job_id);
+        assert_eq!(body["runtime_jobs"][0]["status"], "completed");
+        fs::remove_dir_all(workspace).unwrap();
+    }
+
+    #[test]
+    fn configured_autostart_does_not_respawn_queued_job_with_live_worker() {
+        let workspace = temp_workspace("background-worker-read-idempotent");
+        let host = AgentOsHost::in_memory();
+        let mut server = initialized_server_with_host(host.clone());
+        let thread_id = start_thread_with_workspace(&mut server, workspace.to_string_lossy());
+        let started = request(
+            &mut server,
+            "req_turn_start",
+            AppRequest::TurnStart {
+                client_thread_id: thread_id.clone(),
+                input: "start runtime worker with live handle".to_string(),
+            },
+        );
+        let runtime_job_id = accepted_body(started)["runtime_job"]["runtime_job_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        host.kernel()
+            .transition_thread(
+                &thread_id,
+                ThreadStatus::WaitingTool,
+                Some("test background tool wait".to_string()),
+            )
+            .unwrap();
+        host.kernel()
+            .transition_thread(
+                &thread_id,
+                ThreadStatus::Ready,
+                Some("test background tool ready".to_string()),
+            )
+            .unwrap();
+        let (release_worker, wait_for_release) = std::sync::mpsc::channel();
+        let live_thread_id = thread_id.clone();
+        let live_handle = std::thread::spawn(move || {
+            wait_for_release.recv().unwrap();
+            Ok(RuntimeRunReport {
+                thread_id: live_thread_id,
+                task_id: "task_live_background_worker".to_string(),
+                status: ThreadStatus::WaitingTool,
+                provider_stream_session_ids: Vec::new(),
+                tool_results: Vec::new(),
+                artifacts: Vec::new(),
+                final_submitted: false,
+                events: 1,
+            })
+        });
+        host.runtime_workers
+            .lock()
+            .unwrap()
+            .insert(runtime_job_id.clone(), live_handle);
+        let configured_host =
+            host.clone()
+                .with_runtime_model_config(HostRuntimeModelConfig::External(
+                    ExternalRuntimeModelConfig {
+                        program: env::current_exe().unwrap(),
+                        args: vec!["--help".to_string()],
+                        max_steps: 1,
+                    },
+                ));
+
+        let spawned = configured_host
+            .spawn_configured_runtime_job_for_ready_thread(&thread_id)
+            .unwrap();
+
+        assert_eq!(spawned.as_deref(), Some(runtime_job_id.as_str()));
+        release_worker.send(()).unwrap();
+        let shutdown = host.shutdown().unwrap();
+        assert_eq!(shutdown.joined_runtime_workers, 1);
+        assert!(shutdown.failed_runtime_workers.is_empty());
+        fs::remove_dir_all(workspace).unwrap();
+    }
+
+    #[test]
+    fn host_marks_runtime_job_failed_when_worker_returns_error() {
         struct FailingModelClient;
 
         impl ModelClient for FailingModelClient {
@@ -1529,8 +1518,8 @@ mod tests {
         }
 
         let workspace = temp_workspace("runtime-worker-failure");
-        let daemon = KernelDaemon::in_memory();
-        let mut server = initialized_server_with_daemon(daemon.clone());
+        let host = AgentOsHost::in_memory();
+        let mut server = initialized_server_with_host(host.clone());
         let thread_id = start_thread_with_workspace(&mut server, workspace.to_string_lossy());
         let started = request(
             &mut server,
@@ -1542,7 +1531,7 @@ mod tests {
         );
         assert_eq!(accepted_body(started)["runtime_job"]["status"], "queued");
 
-        let error = daemon.run_next_runtime_job(FailingModelClient).unwrap_err();
+        let error = host.run_next_runtime_job(FailingModelClient).unwrap_err();
 
         assert!(error.to_string().contains("model exploded"));
         let read = request(
@@ -1558,6 +1547,69 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("model exploded"));
+        fs::remove_dir_all(workspace).unwrap();
+    }
+
+    #[test]
+    fn host_marks_runtime_job_blocked_when_runtime_blocks_without_final() {
+        let workspace = temp_workspace("runtime-worker-blocked");
+        let host = AgentOsHost::in_memory();
+        let mut server = initialized_server_with_host(host.clone());
+        let thread_id = start_thread_with_workspace(&mut server, workspace.to_string_lossy());
+        let started = request(
+            &mut server,
+            "req_turn_start_blocked",
+            AppRequest::TurnStart {
+                client_thread_id: thread_id.clone(),
+                input: "start runtime worker that blocks".to_string(),
+            },
+        );
+        let body = accepted_body(started);
+        let runtime_job_id = body["runtime_job"]["runtime_job_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let job = host.mark_runtime_job_running(&runtime_job_id).unwrap();
+        host.kernel()
+            .transition_thread(
+                &thread_id,
+                ThreadStatus::Blocked,
+                Some("runtime reached max_steps without final submission".to_string()),
+            )
+            .unwrap();
+        host.finish_runtime_job(
+            &runtime_job_id,
+            &RuntimeRunReport {
+                thread_id: job.agent_thread_id,
+                task_id: job.turn_id,
+                status: ThreadStatus::Blocked,
+                provider_stream_session_ids: Vec::new(),
+                tool_results: Vec::new(),
+                artifacts: Vec::new(),
+                final_submitted: false,
+                events: 1,
+            },
+        )
+        .unwrap();
+
+        let read = request(
+            &mut server,
+            "req_thread_read_after_blocked",
+            AppRequest::ThreadRead {
+                client_thread_id: thread_id,
+            },
+        );
+        let body = accepted_body(read);
+        assert_eq!(body["runtime_jobs"][0]["runtime_job_id"], runtime_job_id);
+        assert_eq!(body["runtime_jobs"][0]["status"], "blocked");
+        assert!(body["runtime_jobs"][0]["last_error"]
+            .as_str()
+            .unwrap()
+            .contains("runtime blocked without final submission"));
+        assert!(host.kernel().events().unwrap().iter().any(|event| {
+            event.event_type == "RuntimeJobBlocked" && event.aggregate_id == runtime_job_id
+        }));
         fs::remove_dir_all(workspace).unwrap();
     }
 
@@ -1599,12 +1651,12 @@ mod tests {
     }
 
     #[test]
-    fn daemon_notifications_replay_projection_changes_after_cursor() {
-        let daemon = KernelDaemon::in_memory();
-        let mut server = initialized_server_with_daemon(daemon.clone());
+    fn host_notifications_replay_projection_changes_after_cursor() {
+        let host = AgentOsHost::in_memory();
+        let mut server = initialized_server_with_host(host.clone());
         let thread_id = start_thread(&mut server);
 
-        let notifications = daemon
+        let notifications = host
             .app_notifications_since(&ProjectionCursor {
                 last_event_ordinal: 0,
             })
@@ -1616,7 +1668,7 @@ mod tests {
                 if thread.client_thread_id == thread_id
         )));
         let cursor = notifications.last().unwrap().cursor.clone();
-        assert!(daemon.app_notifications_since(&cursor).unwrap().is_empty());
+        assert!(host.app_notifications_since(&cursor).unwrap().is_empty());
 
         let started = request(
             &mut server,
@@ -1631,7 +1683,7 @@ mod tests {
             .unwrap()
             .to_string();
 
-        let notifications = daemon.app_notifications_since(&cursor).unwrap();
+        let notifications = host.app_notifications_since(&cursor).unwrap();
 
         assert!(notifications.iter().any(|envelope| matches!(
             &envelope.notification,
@@ -1645,26 +1697,26 @@ mod tests {
     }
 
     #[test]
-    fn sqlite_daemon_replays_projection_after_restart() {
+    fn sqlite_host_replays_projection_after_restart() {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "agent-os-kerneld-{}-{unique}.sqlite",
+            "agent-os-host-{}-{unique}.sqlite",
             std::process::id()
         ));
         {
-            let daemon = KernelDaemon::open_sqlite(&path).unwrap();
-            let mut server = AppServer::new(daemon);
+            let host = AgentOsHost::open_sqlite(&path).unwrap();
+            let mut server = AppServer::new(host);
             let response = request(&mut server, "req_init", AppRequest::Initialize);
             assert!(matches!(response.response, AppResponse::Accepted(_)));
             start_thread(&mut server);
         }
 
         {
-            let daemon = KernelDaemon::open_sqlite(&path).unwrap();
-            let mut server = AppServer::new(daemon);
+            let host = AgentOsHost::open_sqlite(&path).unwrap();
+            let mut server = AppServer::new(host);
             let response = request(&mut server, "req_init", AppRequest::Initialize);
             assert!(matches!(response.response, AppResponse::Accepted(_)));
             let listed = request(
@@ -1684,20 +1736,20 @@ mod tests {
     }
 
     #[test]
-    fn sqlite_daemon_replays_resource_sessions_after_restart() {
+    fn sqlite_host_replays_resource_sessions_after_restart() {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "agent-os-kerneld-resource-sessions-{}-{unique}.sqlite",
+            "agent-os-host-resource-sessions-{}-{unique}.sqlite",
             std::process::id()
         ));
         let thread_id;
         let session_id;
         {
-            let daemon = KernelDaemon::open_sqlite(&path).unwrap();
-            let mut server = initialized_server_with_daemon(daemon);
+            let host = AgentOsHost::open_sqlite(&path).unwrap();
+            let mut server = initialized_server_with_host(host);
             thread_id = start_thread(&mut server);
             let opened = request(
                 &mut server,
@@ -1723,8 +1775,8 @@ mod tests {
         }
 
         {
-            let daemon = KernelDaemon::open_sqlite(&path).unwrap();
-            let mut server = initialized_server_with_daemon(daemon);
+            let host = AgentOsHost::open_sqlite(&path).unwrap();
+            let mut server = initialized_server_with_host(host);
             let read = request(
                 &mut server,
                 "req_thread_read_resources_after_restart",
@@ -1743,21 +1795,21 @@ mod tests {
     }
 
     #[test]
-    fn sqlite_daemon_replays_automation_schedules_and_runs_after_restart() {
+    fn sqlite_host_replays_automation_schedules_and_runs_after_restart() {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "agent-os-kerneld-automation-{}-{unique}.sqlite",
+            "agent-os-host-automation-{}-{unique}.sqlite",
             std::process::id()
         ));
         let thread_id;
         let schedule_id;
         let run_id;
         {
-            let daemon = KernelDaemon::open_sqlite(&path).unwrap();
-            let mut server = initialized_server_with_daemon(daemon.clone());
+            let host = AgentOsHost::open_sqlite(&path).unwrap();
+            let mut server = initialized_server_with_host(host.clone());
             thread_id = start_thread(&mut server);
             let created = request(
                 &mut server,
@@ -1777,15 +1829,13 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .to_string();
-            let runs = daemon
-                .run_due_automations_at("2026-06-30T00:00:01Z")
-                .unwrap();
+            let runs = host.run_due_automations_at("2026-06-30T00:00:01Z").unwrap();
             run_id = runs[0].run_id.clone();
         }
 
         {
-            let daemon = KernelDaemon::open_sqlite(&path).unwrap();
-            assert!(daemon
+            let host = AgentOsHost::open_sqlite(&path).unwrap();
+            assert!(host
                 .kernel()
                 .store()
                 .automation_schedules()
@@ -1793,14 +1843,14 @@ mod tests {
                 .iter()
                 .any(|schedule| schedule.schedule_id == schedule_id
                     && schedule.next_run_at.is_none()));
-            assert!(daemon
+            assert!(host
                 .kernel()
                 .store()
                 .automation_runs()
                 .unwrap()
                 .iter()
                 .any(|run| run.run_id == run_id && run.schedule_id == schedule_id));
-            let mut server = initialized_server_with_daemon(daemon);
+            let mut server = initialized_server_with_host(host);
             let read = request(
                 &mut server,
                 "req_thread_read_automation_after_restart",
@@ -1820,20 +1870,20 @@ mod tests {
     }
 
     #[test]
-    fn sqlite_daemon_replays_runtime_jobs_after_restart() {
+    fn sqlite_host_replays_runtime_jobs_after_restart() {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "agent-os-kerneld-runtime-jobs-{}-{unique}.sqlite",
+            "agent-os-host-runtime-jobs-{}-{unique}.sqlite",
             std::process::id()
         ));
         let workspace = temp_workspace("runtime-job-restart");
         let thread_id;
         {
-            let daemon = KernelDaemon::open_sqlite(&path).unwrap();
-            let mut server = initialized_server_with_daemon(daemon.clone());
+            let host = AgentOsHost::open_sqlite(&path).unwrap();
+            let mut server = initialized_server_with_host(host.clone());
             thread_id = start_thread_with_workspace(&mut server, workspace.to_string_lossy());
             request(
                 &mut server,
@@ -1843,8 +1893,7 @@ mod tests {
                     input: "run durable runtime job".to_string(),
                 },
             );
-            daemon
-                .run_next_runtime_job(ScriptedModelClient::command_then_final(&workspace))
+            host.run_next_runtime_job(ScriptedModelClient::command_then_final(&workspace))
                 .unwrap()
                 .expect("queued runtime job");
             let read = request(
@@ -1861,8 +1910,8 @@ mod tests {
         }
 
         {
-            let daemon = KernelDaemon::open_sqlite(&path).unwrap();
-            let mut server = initialized_server_with_daemon(daemon);
+            let host = AgentOsHost::open_sqlite(&path).unwrap();
+            let mut server = initialized_server_with_host(host);
             let read = request(
                 &mut server,
                 "req_thread_read",
@@ -1880,23 +1929,23 @@ mod tests {
         fs::remove_dir_all(workspace).unwrap();
     }
 
-    fn initialized_server() -> AppServer<KernelDaemon> {
-        initialized_server_with_daemon(KernelDaemon::in_memory())
+    fn initialized_server() -> AppServer<AgentOsHost> {
+        initialized_server_with_host(AgentOsHost::in_memory())
     }
 
-    fn initialized_server_with_daemon(daemon: KernelDaemon) -> AppServer<KernelDaemon> {
-        let mut server = AppServer::new(daemon);
+    fn initialized_server_with_host(host: AgentOsHost) -> AppServer<AgentOsHost> {
+        let mut server = AppServer::new(host);
         let response = request(&mut server, "req_init", AppRequest::Initialize);
         assert!(matches!(response.response, AppResponse::Accepted(_)));
         server
     }
 
-    fn start_thread(server: &mut AppServer<KernelDaemon>) -> String {
+    fn start_thread(server: &mut AppServer<AgentOsHost>) -> String {
         start_thread_with_workspace(server, "D:/work/example")
     }
 
     fn start_thread_with_workspace(
-        server: &mut AppServer<KernelDaemon>,
+        server: &mut AppServer<AgentOsHost>,
         workspace: impl Into<String>,
     ) -> String {
         let response = request(
@@ -1914,7 +1963,7 @@ mod tests {
     }
 
     fn request(
-        server: &mut AppServer<KernelDaemon>,
+        server: &mut AppServer<AgentOsHost>,
         request_id: &str,
         request: AppRequest,
     ) -> agent_os_sys::AppResponseEnvelope {
@@ -1950,7 +1999,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let path = env::temp_dir().join(format!(
-            "agent-os-kerneld-{label}-{}-{unique}",
+            "agent-os-host-{label}-{}-{unique}",
             std::process::id()
         ));
         fs::create_dir_all(&path).unwrap();
@@ -2002,7 +2051,8 @@ mod tests {
                 ScriptedStep::Command { workspace } => ModelAction::ToolCall(ToolAction::new(
                     "run_command",
                     serde_json::json!({
-                        "program": env::current_exe().unwrap().to_string_lossy(),
+                        "command": env::current_exe().unwrap().to_string_lossy(),
+                        "mode": "exec",
                         "args": ["--help"],
                         "cwd": workspace.to_string_lossy(),
                     }),
@@ -2023,6 +2073,7 @@ mod tests {
                         .context
                         .tool_results
                         .iter()
+                        .filter(|result| !result.evidence_ids.is_empty())
                         .filter_map(|result| {
                             result
                                 .evidence_claim

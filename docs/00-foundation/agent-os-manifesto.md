@@ -314,17 +314,18 @@ Human attention is also a resource. Agents that frequently request low-value con
 
 Agent-OS is not "a few more roles." It must establish institutions.
 
-### 6.1 Mandatory Producer-Reviewer-Verifier Loop
+### 6.1 Mandatory Supervisor-Producer-Reviewer Loop
 
 ```text
-Coder writes a patch.
-Tester runs tests.
-Reviewer independently reviews the diff.
-Verifier verifies evidence.
-Supervisor summarizes and decides whether to enter final.
+SupervisorAgent decomposes the goal and assigns work.
+ProducerAgent produces an artifact.
+ReviewerAgent independently reviews the artifact and verifies evidence with tools.
+SupervisorAgent accepts, rejects, delegates more work, or escalates.
 ```
 
 Checks and balances do not mean agent debate. They mean different agents are accountable for different artifacts.
+
+A separate verification role is not part of the foundation role set. Verification is a required ReviewerAgent mechanism.
 
 ### 6.2 Typed Blackboard
 
@@ -368,13 +369,9 @@ Natural-language summaries must be generated from evidence, not used as substitu
 Different agents should have different permissions:
 
 ```text
-Planner: can only plan
-Explorer: can only read
-Coder: can modify the workspace
-Tester: can run test commands
-Reviewer: cannot modify code
-Deploy Agent: requires human approval
-Email Agent: can draft but cannot send
+SupervisorAgent: can read, write, run commands, assign child agents, arbitrate permissions, and accept final results under policy.
+ProducerAgent: can read, write, run commands, and produce evidence-backed artifacts under scoped policy, but cannot create child agents or accept its own artifact.
+ReviewerAgent: has equivalent baseline capability to ProducerAgent, but must use it for independent review and evidence verification; it cannot mutate the artifact under review or accept final results.
 ```
 
 Organization exists only when responsibility boundaries are clear.

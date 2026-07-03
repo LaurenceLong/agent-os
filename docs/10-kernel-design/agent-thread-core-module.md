@@ -566,7 +566,7 @@ Agent Threads do not receive all messages by default.
 
 The Communication Kernel decides whether a message enters the receiver mailbox, triggers a receiver turn, waits for review, updates a blackboard projection, or is rejected.
 
-Worker communication rights are assigned at creation time through a Communication Profile. For example, a worker may be allowed to report blockers to its Supervisor, post `Risk` entries to a goal-scoped blackboard channel, and be denied human messaging. Direct worker-to-worker messaging is not part of the v0.1 core route set.
+Producer communication rights are assigned at creation time through a Communication Profile. For example, a producer may be allowed to report blockers to its Supervisor, post `Risk` entries to a goal-scoped blackboard channel, and be denied human messaging. Direct producer-to-producer messaging is not part of the v0.1 core route set.
 
 ## 13. Tool and Permission Pipeline
 
@@ -660,7 +660,7 @@ Required responsibilities:
 - release reservations on failure
 - assign stable agent paths
 - assign security levels (`S1`, `S2`, `S3`, ...) under implicit human `S0`
-- persist invocation edges for root Supervisors, Supervisor delegation, worker assignment, review request, and human escalation
+- persist invocation edges for root Supervisors, Supervisor delegation, producer assignment, review request, and human escalation
 - enforce max active threads
 - enforce max depth
 - persist parent-child edges
@@ -742,7 +742,7 @@ Recommended defaults:
 | Role | Workspace | Tool Risk Ceiling |
 |---|---|---|
 | SupervisorAgent | read-only | orchestration, approval, and final submission |
-| WorkerAgent | read-only, workspace-write, isolated worktree, or temp outputs depending on goal | scoped file CRUD and command execution |
+| ProducerAgent | read-only, workspace-write, isolated worktree, or temp outputs depending on goal | scoped file CRUD and command execution |
 | ReviewerAgent | read-only | review only |
 
 Production distributions SHOULD make sandbox unavailability a hard failure for high-risk roles.
@@ -827,7 +827,7 @@ Minimum conformance tests:
 5. Denied tool call does not mutate artifacts.
 6. Hook can deny a tool call but cannot grant missing capability.
 7. Classifier allow cannot override hard deny.
-8. WorkerAgent cannot be the sole reviewer or acceptor of its own artifact.
+8. ProducerAgent cannot be the sole reviewer or acceptor of its own artifact.
 9. ReviewerAgent cannot write workspace files.
 10. Child Agent Thread does not inherit parent permissions by default.
 11. Spawn reservation is released when spawn fails.
@@ -839,9 +839,9 @@ Minimum conformance tests:
 17. Supervisor can arm a Memento Fragment anchored to child completion.
 18. Child cannot read or mutate parent Memento Fragments.
 19. Triggered Memento Fragment is projected only to the owner thread.
-20. Worker without Supervisor route cannot send Supervisor messages.
-21. Worker without blackboard route cannot post blackboard messages.
-22. Worker without human route cannot contact a human.
+20. Producer without Supervisor route cannot send Supervisor messages.
+21. Producer without blackboard route cannot post blackboard messages.
+22. Producer without human route cannot contact a human.
 
 ## 22. Implementation Iterations
 

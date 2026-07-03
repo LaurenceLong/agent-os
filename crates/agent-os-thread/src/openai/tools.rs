@@ -33,20 +33,8 @@ pub(crate) fn tool_definitions_for_thread(thread: &AgentControlBlock) -> Vec<Val
 }
 
 pub(crate) fn tool_definitions_for_request(request: &ModelTurnRequest) -> Vec<Value> {
-    let mut tools = openai_tools_from_descriptors(
-        &request
-            .context
-            .tool_descriptors
-            .iter()
-            .filter(|descriptor| {
-                descriptor_permission_allows(
-                    descriptor,
-                    &request.thread.effective_permissions_snapshot,
-                )
-            })
-            .cloned()
-            .collect::<Vec<_>>(),
-    );
+    let tools = visible_tool_descriptors_for_request(request);
+    let mut tools = openai_tools_from_descriptors(&tools);
     redact_control_plane_tools(
         &mut tools,
         request.thread.security_level.allows_control_plane(),
@@ -56,6 +44,27 @@ pub(crate) fn tool_definitions_for_request(request: &ModelTurnRequest) -> Vec<Va
         request.thread.security_level.allows_control_plane(),
     );
     tools
+}
+
+pub(crate) fn visible_tool_descriptors_for_request(
+    request: &ModelTurnRequest,
+) -> Vec<ToolDescriptor> {
+    request
+        .context
+        .tool_descriptors
+        .iter()
+        .filter(|descriptor| {
+            descriptor_permission_allows(descriptor, &request.thread.effective_permissions_snapshot)
+        })
+        .filter(|descriptor| {
+            request.thread.security_level.allows_control_plane()
+                || !matches!(descriptor.name.as_str(), "agent_control" | "set_goal")
+        })
+        .filter(|descriptor| {
+            descriptor.name != "read_image" || request.model_capabilities.image_input
+        })
+        .cloned()
+        .collect()
 }
 
 #[cfg(test)]
@@ -129,6 +138,9 @@ fn openai_tools_to_anthropic(tools: Vec<Value>) -> Vec<Value> {
 }
 
 fn descriptor_permission_allows(descriptor: &ToolDescriptor, permissions: &PermissionSet) -> bool {
+    if descriptor.risk_level > permissions.max_risk_level {
+        return false;
+    }
     let name_allowed = permissions
         .allowed_tool_names
         .iter()

@@ -94,19 +94,25 @@ The final output of an Agent-OS task MUST be derived from structured evidence:
 
 Unsupported claims MUST either be removed, downgraded, or explicitly marked as unverified.
 
-## 5. Producer-Reviewer-Verifier Separation
+## 5. Supervisor-Producer-Reviewer Separation
 
 Agent-OS MUST enforce separation of responsibility.
 
-The producer of an artifact cannot be the sole reviewer or verifier of that artifact.
+The producer of an artifact cannot be the sole reviewer or acceptor of that artifact.
+
+The foundation role set is:
+
+- SupervisorAgent: owns goals, task DAGs, delegation, permission arbitration, final acceptance, and escalation.
+- ProducerAgent: produces artifacts.
+- ReviewerAgent: independently reviews artifacts and verifies supporting evidence with tools.
+
+ProducerAgent and ReviewerAgent have equivalent baseline capability. They differ by responsibility, artifact ownership, and review obligations, not by broad tool deprivation.
 
 For software engineering work:
 
-- Coder produces patches.
-- Tester runs tests or reproductions.
-- Reviewer inspects design, diff, edge cases, and regressions.
-- Verifier checks that evidence supports the final conclusion.
-- Supervisor accepts, rejects, or escalates.
+- A ProducerAgent creates patches, test logs, reproductions, plans, or reports.
+- A ReviewerAgent inspects design, diffs, edge cases, regressions, and evidence.
+- A SupervisorAgent accepts, rejects, delegates more work, or escalates.
 
 This is an operating rule, not a prompt style.
 

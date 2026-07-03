@@ -107,7 +107,7 @@ fn supervisor_hierarchy_and_invocation_edges_replay() {
         .kernel
         .spawn_agent(SpawnAgentInput {
             task_id: fx.task.task_id.clone(),
-            role_profile_id: "role_worker".to_string(),
+            role_profile_id: "role_producer".to_string(),
             owner: "tester".to_string(),
             goal: "assigned work".to_string(),
             success_criteria: Vec::new(),
@@ -146,7 +146,7 @@ fn supervisor_hierarchy_and_invocation_edges_replay() {
     );
     assert_eq!(
         worker_invocation.relationship,
-        AgentInvocationRelationship::WorkerAssignment
+        AgentInvocationRelationship::ProducerAssignment
     );
 
     let replayed = Kernel::from_events(&fx.kernel.events().unwrap()).unwrap();
@@ -254,7 +254,7 @@ fn agent_control_starts_child_and_records_hook_state() {
     let invocation = state.agent_invocations.get(&child.invocation_id).unwrap();
     assert_eq!(
         invocation.relationship,
-        AgentInvocationRelationship::WorkerAssignment
+        AgentInvocationRelationship::ProducerAssignment
     );
     assert_eq!(
         invocation.caller_thread_id,
@@ -305,7 +305,7 @@ fn supervisor_set_goal_retargets_direct_child_and_worker_is_denied() {
         .kernel
         .spawn_agent(SpawnAgentInput {
             task_id: fx.task.task_id.clone(),
-            role_profile_id: "role_worker".to_string(),
+            role_profile_id: "role_producer".to_string(),
             owner: supervisor.agent_id.clone(),
             goal: "initial child goal".to_string(),
             success_criteria: Vec::new(),
@@ -615,7 +615,7 @@ fn agent_control_lifecycle_actions_update_state_and_trace() {
             provider_profile_id: "prov_default".to_string(),
             model_routing_policy_id: "route_default".to_string(),
             requested_model_alias: None,
-            role: "WorkerAgent".to_string(),
+            role: "ProducerAgent".to_string(),
             task_id: fx.task.task_id.clone(),
             reasoning_profile: None,
             tool_visibility_profile: None,
@@ -749,7 +749,7 @@ fn privileged_agent_control_actions_require_privileged_risk() {
         .kernel
         .spawn_agent(SpawnAgentInput {
             task_id: fx.task.task_id.clone(),
-            role_profile_id: "role_worker".to_string(),
+            role_profile_id: "role_producer".to_string(),
             owner: supervisor.agent_id.clone(),
             goal: "target".to_string(),
             success_criteria: Vec::new(),

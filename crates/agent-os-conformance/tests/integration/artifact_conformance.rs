@@ -220,7 +220,7 @@ fn submit_final_lifecycle_tool_records_final_submission() {
         .kernel
         .spawn_agent(SpawnAgentInput {
             task_id: fx.task.task_id.clone(),
-            role_profile_id: "role_worker".to_string(),
+            role_profile_id: "role_producer".to_string(),
             owner: supervisor.agent_id.clone(),
             goal: "submit final with hook cleanup".to_string(),
             success_criteria: Vec::new(),
@@ -367,7 +367,8 @@ fn tool_invocation_routes_through_kernel_and_attaches_evidence() {
         json!({
             "tool_name": "run_command",
             "input": {
-                "program": std::env::current_exe().unwrap().to_string_lossy(),
+                "mode": "exec",
+                "command": std::env::current_exe().unwrap().to_string_lossy(),
                 "args": ["--help"],
                 "cwd": workspace.to_string_lossy()
             },
@@ -572,7 +573,8 @@ fn workspace_and_process_tools_execute_through_broker_and_attach_evidence() {
             ToolInvokeInput {
                 tool_name: "run_command".to_string(),
                 input: json!({
-                    "program": std::env::current_exe().unwrap().to_string_lossy(),
+                    "mode": "exec",
+                    "command": std::env::current_exe().unwrap().to_string_lossy(),
                     "args": ["--help"],
                     "cwd": workspace.to_string_lossy()
                 }),
@@ -658,14 +660,101 @@ fn read_file_paginates_with_offset_limit_metadata() {
 
     assert_eq!(read.status, ToolCallStatus::Completed);
     let output = read.output.as_ref().unwrap();
-    assert_eq!(output["content"], json!("two\nthree\n"));
+    assert_eq!(output["content"], json!("one\ntwo\n"));
     assert_eq!(output["offset"], json!(1));
     assert_eq!(output["limit"], json!(2));
     assert_eq!(output["total_lines"], json!(4));
     assert_eq!(output["returned_lines"], json!(2));
     assert_eq!(output["next_offset"], json!(3));
     assert_eq!(output["truncated"], json!(true));
-    assert_eq!(output["omitted_lines"], json!(1));
+    assert_eq!(output["omitted_lines"], json!(2));
+
+    let _ = std::fs::remove_dir_all(workspace);
+}
+
+#[test]
+fn read_image_returns_base64_data_url_with_source_evidence() {
+    let fx = fixture();
+    let workspace = std::env::temp_dir().join(format!(
+        "agent-os-read-image-{}-{}",
+        std::process::id(),
+        new_id("case_")
+    ));
+    let env = fx
+        .kernel
+        .create_environment(
+            BackendType::IsolatedWorktree,
+            workspace.to_string_lossy(),
+            "sbox_workspace_write",
+            ReusePolicy::TaskScoped,
+        )
+        .unwrap();
+    fx.kernel
+        .attach_environment(
+            &env.environment_id,
+            &fx.worker.agent_id,
+            &fx.worker.thread_id,
+            &fx.task.task_id,
+            AttachMode::WorkspaceWrite,
+        )
+        .unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(
+        workspace.join("shot.png"),
+        [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
+    )
+    .unwrap();
+    let cap = fx
+        .kernel
+        .grant_capability(
+            &fx.worker.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            1,
+            None,
+        )
+        .unwrap();
+
+    let read = fx
+        .kernel
+        .invoke_tool(
+            &fx.worker.agent_id,
+            &fx.task.task_id,
+            &fx.worker.session_id,
+            cap.capability_id,
+            1,
+            ToolInvokeInput {
+                tool_name: "read_image".to_string(),
+                input: json!({
+                    "workspace_root": workspace.to_string_lossy(),
+                    "path": "shot.png"
+                }),
+                evidence_claim: Some("workspace image was inspected".to_string()),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(read.status, ToolCallStatus::Completed);
+    assert_eq!(read.evidence_ids.len(), 1);
+    let output = read.output.as_ref().unwrap();
+    assert_eq!(output["mime_type"], json!("image/png"));
+    assert_eq!(output["encoding"], json!("base64"));
+    assert_eq!(output["bytes_read"], json!(8));
+    assert_eq!(
+        output["data_url"],
+        json!("data:image/png;base64,iVBORw0KGgo=")
+    );
+    assert_eq!(
+        fx.kernel
+            .state_snapshot()
+            .unwrap()
+            .evidence
+            .get(&read.evidence_ids[0])
+            .unwrap()
+            .evidence_type,
+        EvidenceType::SourceRef
+    );
 
     let _ = std::fs::remove_dir_all(workspace);
 }
@@ -695,7 +784,7 @@ fn long_running_command_returns_running_and_can_be_queried_by_tool_call_id() {
         .kernel
         .spawn_agent(SpawnAgentInput {
             task_id: fx.task.task_id.clone(),
-            role_profile_id: "role_worker".to_string(),
+            role_profile_id: "role_producer".to_string(),
             owner: supervisor.agent_id.clone(),
             goal: "run a slow command".to_string(),
             success_criteria: Vec::new(),
@@ -782,12 +871,7 @@ fn long_running_command_returns_running_and_can_be_queried_by_tool_call_id() {
             ToolInvokeInput {
                 tool_name: "run_command".to_string(),
                 input: json!({
-                    "program": "powershell",
-                    "args": [
-                        "-NoProfile",
-                        "-Command",
-                        "Write-Output stdout-before; [Console]::Error.WriteLine('stderr-before'); Start-Sleep -Seconds 16; Write-Output stdout-after"
-                    ],
+                    "command": "Write-Output stdout-before; [Console]::Error.WriteLine('stderr-before'); Start-Sleep -Seconds 16; Write-Output stdout-after",
                     "cwd": workspace.to_string_lossy()
                 }),
                 evidence_claim: Some("background command started".to_string()),
@@ -962,6 +1046,7 @@ fn default_tool_registry_is_minimal() {
         std::collections::BTreeSet::from([
             "apply_patch",
             "read_file",
+            "read_image",
             "run_command",
             "set_goal",
             "accomplish_goal",
@@ -1002,7 +1087,7 @@ fn tool_invocation_rejects_input_schema_violations_before_side_effects() {
         4,
         json!({
             "tool_name": "run_command",
-            "input": {"program": std::env::current_exe().unwrap().to_string_lossy()},
+            "input": {"command": std::env::current_exe().unwrap().to_string_lossy()},
             "evidence_claim": "tests were run"
         }),
     );
@@ -1015,7 +1100,7 @@ fn tool_invocation_rejects_input_schema_violations_before_side_effects() {
         .and_then(|output| output.get("error"))
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
-    assert!(error.contains("tool.input missing required field args"));
+    assert!(error.contains("tool.input missing required field cwd"));
     let state = fx.kernel.state_snapshot().unwrap();
     assert_eq!(state.tool_invocations.len(), 1);
     assert!(state.evidence.is_empty());

@@ -16,7 +16,7 @@
   ],
   "roles_provided": [
     "SupervisorAgent",
-    "WorkerAgent",
+    "ProducerAgent",
     "ReviewerAgent"
   ],
   "tools_provided": [],
@@ -24,7 +24,7 @@
     "policy/review.json",
     "policy/final-answer.json",
     "prompts/supervisor.md",
-    "prompts/worker.md",
+    "prompts/producer.md",
     "prompts/reviewer.md"
   ],
   "signature": null

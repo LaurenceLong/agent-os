@@ -1,11 +1,11 @@
-use crate::KernelDaemon;
+use crate::AgentOsHost;
 use agent_os_kernel::Kernel;
 use agent_os_sys::{AgentOsResult, EventEnvelope};
 use agent_os_thread::RuntimeJobRecord;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-impl KernelDaemon {
+impl AgentOsHost {
     pub(crate) fn with_runtime_jobs(
         kernel: Kernel,
         runtime_jobs: BTreeMap<String, RuntimeJobRecord>,

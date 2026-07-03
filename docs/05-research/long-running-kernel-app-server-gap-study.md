@@ -56,7 +56,7 @@ Agent-OS App Server
   - streamed notifications
         |
         v
-Agent-OS Kernel Daemon
+Agent-OS Host
   - thread/task/turn lifecycle
   - scheduler and resource arbitration
   - permissions and approval routing
@@ -167,7 +167,7 @@ audit JSONL.
 
 | Gap | Current implementation shape | Target shape | Implementation direction |
 | --- | --- | --- | --- |
-| G-01 Kernel process model | `Kernel` is an in-process Rust struct opened by CLI commands. | A long-running `agent-os-kerneld` owns state, scheduling, resources, and subscriptions. | Add a daemon/service boundary that loads the store once, owns the runtime registry, and exposes a local control endpoint. |
+| G-01 Kernel process model | `Kernel` is an in-process Rust struct opened by CLI commands. | A long-running `agent-os-host` owns state, scheduling, resources, and subscriptions. | Add a host service boundary that loads the store once, owns the runtime registry, and exposes a local control endpoint. |
 | G-02 App-server boundary | CLI calls kernel and `ThreadRuntime` directly. | Terminal UI, desktop app, IDE, and automation clients all use one app-server protocol. | Add an app-server crate with typed initialize, thread, turn, item, approval, stats, and subscription APIs. |
 | G-03 Thread terminology | CLI task processing can read like one prompt equals one Agent Thread run. | Client-facing threads contain turns/items; Agent Threads are kernel-managed execution units. | Add explicit session/thread, turn, and item read models while preserving Agent Thread as the internal governed executor. |
 | G-04 Runtime ownership | CLI constructs model client and runs `ThreadRuntime::run_to_completion`. | Kernel schedules Agent Thread runtime workers and controls turn lifecycle. | Move runtime start/resume/interrupt behind kernel-managed jobs and worker leases. |
@@ -180,7 +180,7 @@ audit JSONL.
 | G-11 Artifact and evidence UI | Artifact/evidence metadata exists but rich-client timeline and preview projections are incomplete. | Clients can inspect artifacts, evidence, generated files, logs, screenshots, and summaries through typed indexes. | Add item timeline entries and artifact/evidence index queries designed for UI previews. |
 | G-12 Provider operations | Provider config and usage events exist, but operational status is not a durable UI surface. | Kernel exposes provider profile, model alias, usage, cost, cache, rate-limit, retry, and error projections. | Expand provider usage schema and projection reducers; expose provider status and stats queries. |
 | G-13 Git and review surface | Git-related behavior is tool-driven and CLI-oriented. | App clients can show diffs, comments, staged changes, commits, pushes, PR creation, and review outcomes. | Add Git/review projection items and resource-scoped operations through tool broker or dedicated kernel actions. |
-| G-14 Conformance coverage | Existing conformance focuses on kernel/runtime/tool contracts, not app-server and projections. | Conformance covers daemon restart, projection rebuild, app-server lifecycle, streaming, approval routing, and multi-client behavior. | Add focused integration tests under `crates/agent-os-conformance/tests/integration/`. |
+| G-14 Conformance coverage | Existing conformance focuses on kernel/runtime/tool contracts, not app-server and projections. | Conformance covers host restart, projection rebuild, app-server lifecycle, streaming, approval routing, and multi-client behavior. | Add focused integration tests under `crates/agent-os-conformance/tests/integration/`. |
 | G-15 Old documentation accuracy | Normative docs already describe much of the intended architecture, but implementation is not fully caught up. | Normative docs describe the architecture only after the code proves it. | Keep this document as the interim record; update old docs after implementation and conformance pass. |
 
 ## 8. Implementation Order
@@ -191,7 +191,7 @@ The implementation should converge in this order:
    tests for current event streams.
 2. Statistics projection: add token, cost, cache, provider, tool, latency,
    budget, and benchmark-oriented read models.
-3. Kernel daemon boundary: add a long-running kernel process with startup,
+3. Host boundary: add a long-running host process with startup,
    shutdown, store locking, replay, projection rebuild, and event fanout.
 4. App-server protocol: add initialize, thread, turn, item, approval, stats, and
    subscription APIs.
@@ -216,12 +216,12 @@ as current implementation until these gates pass:
 - SQLite has durable typed projection tables beyond events and idempotency.
 - Projection reducers can rebuild thread, turn, item, stats, approval, and
   resource read models from the current event stream.
-- A long-running kernel service owns the store and event fanout.
+- A long-running host service owns the store and event fanout.
 - App-server APIs can start/resume/read/list/search client-facing threads and
   start/steer/interrupt turns.
 - Agent Thread runtime execution is scheduled through the kernel boundary.
 - CLI status and chat no longer need to duplicate rich-client state assembly.
-- Conformance tests cover daemon restart, projection rebuild, app-server
+- Conformance tests cover host restart, projection rebuild, app-server
   lifecycle, streaming notifications, approval routing, statistics queries, and
   at least one multi-client subscription scenario.
 

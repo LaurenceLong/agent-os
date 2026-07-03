@@ -106,6 +106,7 @@ fn mock_tool_call_strings_run_local_tools_and_build_llm_tool_results() {
         thread: agent,
         workspace_root: tmp.clone(),
         step_index: 1,
+        model_capabilities: image_capable_model(),
         context: ModelContextProjection {
             tool_results: records,
             ..ModelContextProjection::default()
@@ -207,6 +208,11 @@ fn openai_compatible_mock_adapter_runs_every_core_tool() {
     let tmp = std::env::temp_dir().join(format!("aos-openai-all-tools-{}", new_id("t_")));
     std::fs::create_dir_all(&tmp).unwrap();
     std::fs::write(tmp.join("read.txt"), "read me\n").unwrap();
+    std::fs::write(
+        tmp.join("shot.png"),
+        [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
+    )
+    .unwrap();
     std::fs::write(tmp.join("edit.txt"), "alpha old beta\n").unwrap();
     std::fs::write(tmp.join("delete.txt"), "remove me\n").unwrap();
     let (kernel, request) = make_kernel_request_for_role(
@@ -222,6 +228,7 @@ fn openai_compatible_mock_adapter_runs_every_core_tool() {
 
     let tool_calls = vec![
         ("call_read", "read_file", json!({"path": "read.txt"})),
+        ("call_image", "read_image", json!({"path": "shot.png"})),
         (
             "call_write",
             "apply_patch",
@@ -240,7 +247,7 @@ fn openai_compatible_mock_adapter_runs_every_core_tool() {
         (
             "call_run",
             "run_command",
-            json!({"program": current_exe.to_string_lossy(), "args": ["--help"]}),
+            json!({"mode": "exec", "command": current_exe.to_string_lossy(), "args": ["--help"]}),
         ),
         (
             "call_goal",
@@ -330,6 +337,7 @@ fn openai_compatible_mock_adapter_runs_every_core_tool() {
         thread: request.thread,
         workspace_root: tmp.clone(),
         step_index: 1,
+        model_capabilities: image_capable_model(),
         context: ModelContextProjection {
             tool_results: records,
             ..ModelContextProjection::default()
@@ -378,7 +386,7 @@ fn openai_compatible_mock_adapter_runs_every_core_tool() {
             }),
         ],
     );
-    assert_eq!(messages.iter().filter(|m| m["role"] == "tool").count(), 13);
+    assert_eq!(messages.iter().filter(|m| m["role"] == "tool").count(), 14);
     let first_args: Value = serde_json::from_str(
         messages[2]["tool_calls"][0]["function"]["arguments"]
             .as_str()
@@ -395,6 +403,11 @@ fn anthropic_compatible_mock_adapter_runs_every_core_tool() {
     let tmp = std::env::temp_dir().join(format!("aos-anthropic-all-tools-{}", new_id("t_")));
     std::fs::create_dir_all(&tmp).unwrap();
     std::fs::write(tmp.join("read.txt"), "read me\n").unwrap();
+    std::fs::write(
+        tmp.join("shot.png"),
+        [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
+    )
+    .unwrap();
     std::fs::write(tmp.join("edit.txt"), "alpha old beta\n").unwrap();
     std::fs::write(tmp.join("delete.txt"), "remove me\n").unwrap();
     let (kernel, request) = make_kernel_request_for_role(
@@ -415,10 +428,11 @@ fn anthropic_compatible_mock_adapter_runs_every_core_tool() {
         "role": "assistant",
         "content": [
             {"type": "tool_use", "id": "toolu_read", "name": "read_file", "input": {"path": "read.txt"}},
+            {"type": "tool_use", "id": "toolu_image", "name": "read_image", "input": {"path": "shot.png"}},
             {"type": "tool_use", "id": "toolu_write", "name": "apply_patch", "input": {"patch": "*** Begin Patch\n*** Add File: created.txt\n+created by provider mock\n*** End Patch\n"}},
             {"type": "tool_use", "id": "toolu_replace", "name": "apply_patch", "input": {"patch": "*** Begin Patch\n*** Update File: edit.txt\n@@\n-alpha old beta\n+alpha new beta\n*** End Patch\n"}},
             {"type": "tool_use", "id": "toolu_delete", "name": "apply_patch", "input": {"patch": "*** Begin Patch\n*** Delete File: delete.txt\n*** End Patch\n"}},
-            {"type": "tool_use", "id": "toolu_run", "name": "run_command", "input": {"program": current_exe.to_string_lossy(), "args": ["--help"]}},
+            {"type": "tool_use", "id": "toolu_run", "name": "run_command", "input": {"mode": "exec", "command": current_exe.to_string_lossy(), "args": ["--help"]}},
             {"type": "tool_use", "id": "toolu_goal", "name": "set_goal", "input": {"goal": "complete provider-neutral all-tool mock adapter coverage"}},
             {"type": "tool_use", "id": "toolu_accomplish_goal", "name": "accomplish_goal", "input": {"summary": "provider-neutral mock adapter local goal complete"}},
             {"type": "tool_use", "id": "toolu_checklist", "name": "update_checklist", "input": {"items": [
@@ -458,6 +472,7 @@ fn anthropic_compatible_mock_adapter_runs_every_core_tool() {
         thread: request.thread,
         workspace_root: tmp.clone(),
         step_index: 1,
+        model_capabilities: image_capable_model(),
         context: ModelContextProjection {
             tool_results: records,
             ..ModelContextProjection::default()
@@ -521,7 +536,7 @@ fn anthropic_compatible_mock_adapter_runs_every_core_tool() {
                     .is_some_and(|content| content.iter().any(|part| part["type"] == "tool_result"))
             })
             .count(),
-        13
+        14
     );
     assert_eq!(messages[1]["content"][0]["type"], "tool_use");
     assert_eq!(messages[2]["content"][0]["type"], "tool_result");

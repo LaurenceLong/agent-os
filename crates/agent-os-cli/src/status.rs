@@ -1,4 +1,5 @@
 use crate::args::StatusOptions;
+use crate::support::default_state_db;
 use agent_os_app_server::JsonlAppClient;
 use agent_os_sys::*;
 use serde_json::{json, Value};
@@ -7,8 +8,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 pub(crate) fn run_status(options: &StatusOptions) -> AgentOsResult<Value> {
-    let mut app_client = StdioStatusClient::open(options)?;
-    status_from_app_client(&mut app_client, options)
+    let state_db = options
+        .state_db
+        .clone()
+        .map(Ok)
+        .unwrap_or_else(default_state_db)?;
+    let mut app_client = StdioStatusClient::open(&state_db)?;
+    status_from_app_client(&mut app_client, options, &state_db)
 }
 
 trait StatusAppClient {
@@ -18,6 +24,7 @@ trait StatusAppClient {
 fn status_from_app_client(
     app_client: &mut impl StatusAppClient,
     options: &StatusOptions,
+    state_db: &Path,
 ) -> AgentOsResult<Value> {
     let _ = app_client.request(AppRequest::Initialize)?;
     let stats = app_request(
@@ -35,7 +42,7 @@ fn status_from_app_client(
             },
         )?;
         return Ok(json!({
-            "state_db": options.state_db.to_string_lossy(),
+            "state_db": state_db.to_string_lossy(),
             "thread": body["thread"],
             "turns": body["turns"],
             "timeline": body["timeline"],
@@ -45,7 +52,7 @@ fn status_from_app_client(
     }
     let body = app_request(app_client, AppRequest::ThreadList { archived: None })?;
     Ok(json!({
-        "state_db": options.state_db.to_string_lossy(),
+        "state_db": state_db.to_string_lossy(),
         "threads": body["threads"],
         "stats": stats,
     }))
@@ -61,30 +68,30 @@ struct StdioStatusClient {
 }
 
 impl StdioStatusClient {
-    fn open(options: &StatusOptions) -> AgentOsResult<Self> {
-        let kerneld = resolve_kerneld_executable()?;
-        let mut child = Command::new(&kerneld)
+    fn open(state_db: &Path) -> AgentOsResult<Self> {
+        let hostd = resolve_hostd_executable()?;
+        let mut child = Command::new(&hostd)
             .arg("--stdio")
             .arg("--state-db")
-            .arg(&options.state_db)
+            .arg(state_db)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .spawn()
             .map_err(|error| {
                 AgentOsError::Validation(format!(
-                    "spawn kerneld {}: {error}",
-                    kerneld.to_string_lossy()
+                    "spawn hostd {}: {error}",
+                    hostd.to_string_lossy()
                 ))
             })?;
         let stdin = child
             .stdin
             .take()
-            .ok_or_else(|| AgentOsError::Validation("kerneld stdin was not piped".to_string()))?;
+            .ok_or_else(|| AgentOsError::Validation("hostd stdin was not piped".to_string()))?;
         let stdout = child
             .stdout
             .take()
-            .ok_or_else(|| AgentOsError::Validation("kerneld stdout was not piped".to_string()))?;
+            .ok_or_else(|| AgentOsError::Validation("hostd stdout was not piped".to_string()))?;
         Ok(Self {
             client: JsonlAppClient::new(cli_client(), BufReader::new(stdout), stdin),
             child,
@@ -111,7 +118,7 @@ impl Drop for StdioStatusClient {
     }
 }
 
-fn resolve_kerneld_executable() -> AgentOsResult<PathBuf> {
+fn resolve_hostd_executable() -> AgentOsResult<PathBuf> {
     let current_exe = std::env::current_exe().map_err(|error| {
         AgentOsError::Validation(format!("resolve current executable: {error}"))
     })?;
@@ -121,14 +128,14 @@ fn resolve_kerneld_executable() -> AgentOsResult<PathBuf> {
             current_exe.to_string_lossy()
         ))
     })?;
-    let direct = current_dir.join(kerneld_executable_file_name());
+    let direct = current_dir.join(hostd_executable_file_name());
     if direct.exists() {
         return Ok(direct);
     }
     let cargo_test = if current_dir.file_name().and_then(|name| name.to_str()) == Some("deps") {
         current_dir
             .parent()
-            .map(|parent| parent.join(kerneld_executable_file_name()))
+            .map(|parent| parent.join(hostd_executable_file_name()))
     } else {
         None
     };
@@ -138,17 +145,17 @@ fn resolve_kerneld_executable() -> AgentOsResult<PathBuf> {
         }
     }
     Err(AgentOsError::Validation(format!(
-        "kerneld executable not found next to {}; expected {}",
+        "hostd executable not found next to {}; expected {}",
         current_exe.to_string_lossy(),
-        kerneld_executable_file_name().display()
+        hostd_executable_file_name().display()
     )))
 }
 
-fn kerneld_executable_file_name() -> &'static Path {
+fn hostd_executable_file_name() -> &'static Path {
     Path::new(if cfg!(windows) {
-        "agent-os-kerneld.exe"
+        "agent-os-hostd.exe"
     } else {
-        "agent-os-kerneld"
+        "agent-os-hostd"
     })
 }
 
@@ -174,9 +181,10 @@ mod tests {
         let output = status_from_app_client(
             &mut client,
             &StatusOptions {
-                state_db: state_db.clone(),
+                state_db: Some(state_db.clone()),
                 thread_id: None,
             },
+            &state_db,
         )
         .unwrap();
 
@@ -192,9 +200,10 @@ mod tests {
         let output = status_from_app_client(
             &mut client,
             &StatusOptions {
-                state_db: state_db.clone(),
+                state_db: Some(state_db.clone()),
                 thread_id: Some("thread_1".to_string()),
             },
+            &state_db,
         )
         .unwrap();
 
@@ -210,9 +219,10 @@ mod tests {
         let output = status_from_app_client(
             &mut client,
             &StatusOptions {
-                state_db: state_db.clone(),
+                state_db: Some(state_db.clone()),
                 thread_id: None,
             },
+            &state_db,
         )
         .unwrap();
 

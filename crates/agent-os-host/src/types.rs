@@ -4,7 +4,7 @@ use serde::Serialize;
 use std::thread::JoinHandle;
 
 #[derive(Debug, Clone, Serialize)]
-pub struct DaemonReplaySummary {
+pub struct HostReplaySummary {
     pub tasks: usize,
     pub threads: usize,
     pub artifacts: usize,
@@ -15,7 +15,7 @@ pub struct DaemonReplaySummary {
 pub(crate) type RuntimeWorkerJoinHandle = JoinHandle<AgentOsResult<RuntimeRunReport>>;
 
 #[derive(Debug, Clone, Serialize)]
-pub struct DaemonShutdownReport {
+pub struct HostShutdownReport {
     pub joined_runtime_workers: usize,
     pub failed_runtime_workers: Vec<String>,
     pub runtime_reports: Vec<RuntimeRunReport>,

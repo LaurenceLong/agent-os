@@ -114,9 +114,12 @@ IDs SHOULD be globally unique within a kernel namespace.
 ## 3.1 Ecosystem Imports
 
 Ecosystem imports are first-class kernel projections, not prompt-only text.
-The runtime MAY discover them from `agent-os.json`, project-local ecosystem
-directories, and global Agent-OS/OpenCode/Claude/Agents roots, but every
-accepted record MUST enter the event stream before it becomes model-visible.
+`agent-os-ecosystem` discovers them from global config, project
+`.agent-os/config.json`, project-local ecosystem directories, and global
+Agent-OS/Claude/Agents roots. The host imports the typed catalog into the
+kernel; every accepted record MUST enter the event stream before it becomes
+model-visible. `agent-os-thread` consumes the resulting kernel projection and
+does not scan the filesystem.
 
 Shared ecosystem records:
 
@@ -286,7 +289,7 @@ Rules:
 - Root agent threads created by human authority have `security_level = 1`.
 - Child agent threads increment parent security level by one.
 - `agent_control` and `set_goal` require `security_level <= 1`.
-- Threads created by delegation, worker assignment, review request, or human escalation MUST reference an AgentInvocation.
+- Threads created by delegation, producer assignment, review request, or human escalation MUST reference an AgentInvocation.
 
 ## 6.1 AgentInvocation
 
@@ -303,7 +306,7 @@ callee_thread_id: string
 callee_agent_id: string
 callee_role_profile_id: string
 callee_security_level: integer
-relationship: supervisor_delegation | worker_assignment | review_request | human_escalation | root_supervisor
+relationship: supervisor_delegation | producer_assignment | review_request | human_escalation | root_supervisor
 goal: string
 capability_snapshot_id: string | null
 profile_snapshot_id: string
@@ -649,8 +652,17 @@ model_alias_id: string
 alias: string
 provider_id: string
 provider_model_name: string
-capabilities: object
-limits: object
+capabilities:
+  streaming: boolean
+  tool_calling: boolean
+  reasoning: boolean
+  temperature: boolean
+  image_input: boolean
+  structured_output: boolean
+limit:
+  context: integer
+  input: integer | null
+  output: integer
 cost: object
 status: Active | Deprecated | Disabled
 created_at: string

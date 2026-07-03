@@ -2,7 +2,7 @@
 
 Status: normative
 
-Last updated: 2026-07-01
+Last updated: 2026-07-03
 
 ## 1. Purpose
 
@@ -29,6 +29,9 @@ communication profile enforcement
 provider system routing
 Memento Fragment immutability
 tool broker mediation
+runtime job queueing and background worker requeue
+app-server projection and notification behavior
+workspace crate dependency boundaries
 artifact lifecycle
 evidence attachment
 review independence
@@ -80,13 +83,17 @@ Runtime conformance tests MUST verify:
 - thread cannot use a writable workspace without an attached writable environment
 - child Agent Thread cannot read or mutate parent Memento Fragments
 - triggered Memento Fragments project only to the owner thread
-- worker cannot send to Supervisor unless profile allows it
-- worker cannot post to blackboard unless profile allows it
-- worker cannot message human unless profile allows it
-- worker communication is limited to Supervisor, scoped blackboard, and human routes allowed by profile
+- producer cannot send to Supervisor unless profile allows it
+- producer cannot post to blackboard unless profile allows it
+- producer cannot message human unless profile allows it
+- producer communication is limited to Supervisor, scoped blackboard, and human routes allowed by profile
 - crash and resume preserve task state
 - provider client calls have a hard request timeout and surface timeout failures
   through the normal provider retry/failure path
+- host-backed runtime jobs do not duplicate live background workers and can
+  requeue after foreground tool waits
+- host-backed runtime jobs preserve `Blocked` as a terminal runtime job
+  status instead of converting model non-finalization into host failure
 
 ## 5. Tool Driver Conformance
 
@@ -101,7 +108,7 @@ Tool driver tests MUST verify:
 - secret redaction behavior
 - failure semantics
 - provider capability declaration for model-facing tools where applicable
-- Host OS tool surface contains exactly `read_file`, `apply_patch`, and `run_command`; `apply_patch` covers workspace file creation, update, and deletion with exactly one file operation per call
+- Host OS tool surface contains exactly `read_file`, `read_image`, `apply_patch`, and `run_command`; `read_image` is visible only for image-capable model aliases, and `apply_patch` covers workspace file creation, update, and deletion with exactly one file operation per call
 - Agent-OS control-plane tools are grouped by work state, communication, permission request, agent supervision, privileged administration, and session lifecycle
 - `wait_agent` is absent from the core surface; child progress reporting is covered by `agent_control(action=set_hook)`
 - model-visible tools are filtered by effective permission set and S-level; `agent_control` and `set_goal` are hidden from S2+ views
@@ -152,7 +159,7 @@ Ecosystem conformance tests MUST verify:
 - OpenAI-compatible and Anthropic-compatible model tool views project core and
   dynamic schemas from kernel `ToolDescriptor` records
 
-### 5.1 Current v0.1 Tool Coverage
+## 5.3 Current v0.3 Tool and Live Coverage
 
 The current repo includes both deterministic mock/adapter tests and ignored live
 LLM e2e tests.
@@ -196,6 +203,18 @@ Anthropic-compatible workspace:
 Anthropic-compatible control plane:
   cargo test -p agent-os-thread live_anthropic_compatible_llm_goal_driven_control_plane_e2e -- --ignored --nocapture
   expected coverage: set_goal, accomplish_goal, update_checklist, record_evidence, report_supervisor, post_blackboard, ask_human, request_permissions, agent_control, read_file, submit_final
+
+OpenAI-compatible image input:
+  cargo test -p agent-os-thread live_openai_compatible_llm_read_image_success_e2e -- --ignored --nocapture
+  cargo test -p agent-os-thread live_openai_compatible_llm_read_image_unsupported_e2e -- --ignored --nocapture
+  cargo test -p agent-os-thread live_openai_compatible_llm_switches_read_image_context_to_text_only_model -- --ignored --nocapture
+  expected coverage: read_image success for image-capable aliases, hidden read_image for text-only aliases, and safe routing when prior image context is switched to a text-only alias
+
+Anthropic-compatible image input:
+  cargo test -p agent-os-thread live_anthropic_compatible_llm_read_image_success_e2e -- --ignored --nocapture
+  cargo test -p agent-os-thread live_anthropic_compatible_llm_read_image_unsupported_e2e -- --ignored --nocapture
+  cargo test -p agent-os-thread live_anthropic_compatible_llm_switches_read_image_context_to_text_only_model -- --ignored --nocapture
+  expected coverage: read_image success for image-capable aliases, hidden read_image for text-only aliases, and safe routing when prior image context is switched to a text-only alias
 ```
 
 Audit logs are emitted to:
@@ -205,6 +224,12 @@ target/agent-os-audit/live-openai-compatible-goal-workspace.jsonl
 target/agent-os-audit/live-openai-compatible-goal-control-plane.jsonl
 target/agent-os-audit/live-anthropic-compatible-goal-workspace.jsonl
 target/agent-os-audit/live-anthropic-compatible-goal-control-plane.jsonl
+target/agent-os-audit/live-openai-compatible-read-image-success.jsonl
+target/agent-os-audit/live-openai-compatible-read-image-unsupported.jsonl
+target/agent-os-audit/live-openai-compatible-read-image-switch-text-only.jsonl
+target/agent-os-audit/live-anthropic-compatible-read-image-success.jsonl
+target/agent-os-audit/live-anthropic-compatible-read-image-unsupported.jsonl
+target/agent-os-audit/live-anthropic-compatible-read-image-switch-text-only.jsonl
 ```
 
 Each log should contain the generated system prompt, provider request messages,
@@ -212,11 +237,37 @@ provider responses, tool invocations, tool results, and a
 `live_goal_driven_summary` record. The summary coverage rate MUST be `6/6` for
 workspace scenarios and `9/9` for control-plane scenarios. Pretty JSON siblings
 may be generated for review, but secrets must remain redacted or absent.
+Image-input logs contain `live_read_image_*` summary records and provider
+message assertions for tool visibility and image payload projection.
 
 The 2026-06-30 long-running kernel refactor gate used the all-scenario command
 above from WSL with exported provider variables. The observed result was 10
 ignored-by-default live LLM e2e tests passing: five OpenAI-compatible scenarios
-and five Anthropic-compatible scenarios.
+and five Anthropic-compatible scenarios. The v0.3 image-input gate adds six
+ignored-by-default `read_image` live scenarios across OpenAI-compatible and
+Anthropic-compatible adapter styles.
+
+Host and app-server behavior is covered by focused `agent-os-host` tests
+for JSONL app requests, runtime job persistence, configured provider workers,
+background runtime workers, requeued jobs after background tool waits, runtime
+job failure preservation, app projection resources, notifications, automation,
+and task bundle export. The interactive `chat` command depends on this path:
+`agent-os-cli` starts `agent-os-hostd --stdio`, sends typed app requests, and
+lets the host launch configured Agent Thread Runtime workers from the user's
+global provider config.
+
+Workspace dependency boundaries are covered by a conformance test that runs
+`cargo metadata --format-version=1 --no-deps` and checks normal `agent-os-*`
+dependencies for production crates. The current contract keeps `agent-os-sys`
+dependency-light, lets `agent-os-host` combine app-server/kernel/store/thread
+components, keeps `agent-os-cli` on app-server/config/sys/distro only in
+production, and keeps distribution prompt construction in `agent-os-distro`.
+
+The private SWE-bench Lite gate is documented in
+`docs/20-implementation/swe-bench-lite-private-benchmark.md`. Agent-OS process
+exit code is not the benchmark pass condition; after patches are generated, the
+official SWE-bench harness must evaluate the exact submitted instance ids and
+report the intended resolved set.
 
 ## 6. Storage Driver Conformance
 
@@ -260,8 +311,8 @@ Initial production targets:
 ```text
 single-node task replay: required
 worker restart recovery: required before distributed mode
-1000-event task replay: required before v0.1 release
-10000-event task replay: required before v0.2 release
+1000-event task replay: required before release hardening
+10000-event task replay: required before distributed or benchmark-scale gates
 permission bypass known test cases: zero allowed
 final evidence coverage: measurable
 audit export: required before production distro

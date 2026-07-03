@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from private20_runner import (
     BenchmarkTask,
     ProviderSpec,
+    agent_os_config_model_id,
     build_agent_os_command,
     build_opencode_command,
     build_swebench_harness_command,
@@ -328,11 +329,21 @@ class Private20RunnerTests(unittest.TestCase):
             )
             data = json.loads(path.read_text(encoding="utf-8"))
 
-        self.assertEqual(path.name, "providers.json")
+        self.assertEqual(path.name, "config.json")
         self.assertEqual(path.parent.name, "agent-os")
-        self.assertEqual(data["default_provider"], "default")
-        self.assertEqual(data["providers"]["default"]["api_key"], "test-key")
-        self.assertEqual(data["providers"]["default"]["api_style"], "anthropic-compatible")
+        self.assertEqual(data["model"], "default/tongyi_qwen3.6-plus")
+        provider = data["provider"]["default"]
+        self.assertEqual(provider["api_key"], "test-key")
+        self.assertEqual(provider["api_style"], "anthropic-compatible")
+        self.assertEqual(provider["options"]["base_url"], "http://model.example/anthropic")
+        model = provider["models"]["tongyi_qwen3.6-plus"]
+        self.assertEqual(model["name"], "tongyi/qwen3.6-plus")
+        self.assertEqual(model["limit"], {"context": 128000, "output": 8192})
+
+    def test_agent_os_config_model_id_rejects_empty_request_model(self):
+        self.assertEqual(agent_os_config_model_id(" provider/model "), "provider_model")
+        with self.assertRaisesRegex(ValueError, "must not be empty"):
+            agent_os_config_model_id(" ")
 
     def test_resolve_api_key_prefers_file_over_environment(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
@@ -507,12 +518,16 @@ class Private20RunnerTests(unittest.TestCase):
             state_db=Path("/out/django.sqlite"),
             bundle_output=Path("agent-os-task-bundle.json"),
             task_file=Path("/out/prompts/django.md"),
+            model="default/provider_model",
             max_steps=48,
             runtime_timeout_seconds=3600,
         )
 
         self.assertEqual(command[0], "/repo/target/wsl2-linux/debug/agent-os")
         self.assertIn("chat", command)
+        self.assertIn("--model", command)
+        self.assertIn("default/provider_model", command)
+        self.assertNotIn("--provider", command)
         self.assertIn("--workspace", command)
         self.assertIn("/work/django", command)
         self.assertIn("--state-db", command)
@@ -566,9 +581,10 @@ class Private20RunnerTests(unittest.TestCase):
                 captured["state_removed_before_run"] = not stale_state.exists()
                 captured["wal_removed_before_run"] = not stale_state.with_suffix(".sqlite-wal").exists()
                 captured["shm_removed_before_run"] = not stale_state.with_suffix(".sqlite-shm").exists()
-                provider_config = Path(env["XDG_CONFIG_HOME"]) / "agent-os" / "providers.json"
+                provider_config = Path(env["XDG_CONFIG_HOME"]) / "agent-os" / "config.json"
                 captured["provider_config_during_run"] = provider_config.exists()
                 captured["provider_config_path"] = provider_config
+                captured["provider_config"] = json.loads(provider_config.read_text(encoding="utf-8"))
                 (Path(cwd) / "bug.txt").write_text("after\n", encoding="utf-8")
                 Path(log_path).write_text("fake agent-os log\n", encoding="utf-8")
                 return 0
@@ -583,7 +599,7 @@ class Private20RunnerTests(unittest.TestCase):
                     base_url="http://model.example/anthropic",
                     model="tongyi/qwen3.6-plus",
                     api_key="test-key",
-                api_style="anthropic-compatible",
+                    api_style="anthropic-compatible",
                 ),
                 max_steps=12,
                 task_timeout_seconds=34,
@@ -598,6 +614,7 @@ class Private20RunnerTests(unittest.TestCase):
         self.assertIn("+after", patch)
         self.assertTrue(captured["provider_config_during_run"])
         self.assertTrue(provider_config_removed)
+        self.assertEqual(captured["provider_config"]["model"], "default/tongyi_qwen3.6-plus")
         self.assertTrue(captured["state_removed_before_run"])
         self.assertTrue(captured["wal_removed_before_run"])
         self.assertTrue(captured["shm_removed_before_run"])
@@ -605,6 +622,8 @@ class Private20RunnerTests(unittest.TestCase):
         self.assertEqual(captured["env"]["PYTHONPATH"], record["workspace"])
         self.assertEqual(captured["env"]["PYTHONNOUSERSITE"], "1")
         self.assertIn("chat", captured["command"])
+        self.assertIn("--model", captured["command"])
+        self.assertIn("default/tongyi_qwen3.6-plus", captured["command"])
         self.assertIn("--max-steps", captured["command"])
         self.assertIn("12", captured["command"])
         self.assertEqual(captured["timeout_seconds"], 34)

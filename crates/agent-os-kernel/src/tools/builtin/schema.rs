@@ -25,7 +25,7 @@ pub(super) fn descriptor(now: &str, spec: DescriptorSpec) -> ToolDescriptor {
         tool_id: spec.tool_id.to_string(),
         name: spec.name.to_string(),
         description: spec.description.to_string(),
-        version: "0.2.0".to_string(),
+        version: "0.3.0".to_string(),
         driver_class: spec.driver_class,
         risk_level: spec.risk_level,
         input_schema: spec.input_schema,

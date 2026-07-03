@@ -1,5 +1,10 @@
 use crate::common::*;
-use agent_os_thread::{expand_command_template, import_workspace_ecosystem, ModelTurnRequest};
+use agent_os_config::AgentOsPaths;
+use agent_os_ecosystem::{
+    discover_ecosystem, expand_command_template, EcosystemCatalog, EcosystemDiscoverOptions,
+    EcosystemImportReport,
+};
+use agent_os_thread::ModelTurnRequest;
 use std::fs;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -70,23 +75,28 @@ fn ecosystem_imports_project_sources_and_replays_kernel_events() {
 }
 
 #[test]
-fn ecosystem_rejects_duplicate_skill_names_from_different_sources() {
+fn ecosystem_project_agent_os_overrides_agents_and_claude_skill_names() {
     let workspace = temp_workspace("agent-os-ecosystem-duplicate-skill");
-    for root in [".agent-os", ".opencode"] {
+    for (root, marker) in [
+        (".claude", "claude"),
+        (".agents", "agents"),
+        (".agent-os", "agent-os"),
+    ] {
         fs::create_dir_all(workspace.join(root).join("skills/dupe")).unwrap();
         fs::write(
             workspace.join(root).join("skills/dupe/SKILL.md"),
-            format!(
-                "---\nname: dupe\ndescription: {root} skill.\n---\nDifferent content from {root}.\n"
-            ),
+            format!("---\nname: dupe\ndescription: {marker} skill.\n---\nDifferent content from {marker}.\n"),
         )
         .unwrap();
     }
 
-    let error = import_workspace_ecosystem(&Kernel::new(), &workspace).unwrap_err();
-    assert!(
-        matches!(&error, AgentOsError::Validation(message) if message.contains("duplicate skill name dupe")),
-        "{error:?}"
+    let kernel = Kernel::new();
+    import_workspace_ecosystem(&kernel, &workspace).unwrap();
+    let state = kernel.state_snapshot().unwrap();
+
+    assert_eq!(
+        state.skill_definitions["dupe"].description,
+        "agent-os skill."
     );
     let _ = fs::remove_dir_all(workspace);
 }
@@ -94,9 +104,9 @@ fn ecosystem_rejects_duplicate_skill_names_from_different_sources() {
 #[test]
 fn ecosystem_rejects_command_shell_interpolation() {
     let workspace = temp_workspace("agent-os-ecosystem-command-reject");
-    fs::create_dir_all(workspace.join(".opencode/commands")).unwrap();
+    fs::create_dir_all(workspace.join(".agent-os/commands")).unwrap();
     fs::write(
-        workspace.join(".opencode/commands/unsafe.md"),
+        workspace.join(".agent-os/commands/unsafe.md"),
         "---\ndescription: Unsafe command.\n---\nRun !`rm -rf .`.\n",
     )
     .unwrap();
@@ -161,7 +171,10 @@ fn skill_tools_enforce_scope_and_skill_root_resource_bounds() {
     assert_eq!(loaded_output["name"], json!("review-skill"));
     assert_eq!(loaded_output["offset"], json!(1));
     assert_eq!(loaded_output["limit"], json!(1));
-    assert_eq!(loaded_output["content"], json!("Second skill line.\n"));
+    assert_eq!(
+        loaded_output["content"],
+        json!("Use resources/checklist.md.\n")
+    );
     assert_eq!(loaded_output["total_lines"], json!(3));
     assert_eq!(loaded_output["returned_lines"], json!(1));
     assert_eq!(loaded_output["next_offset"], json!(2));
@@ -188,15 +201,15 @@ fn skill_tools_enforce_scope_and_skill_root_resource_bounds() {
         )
         .unwrap();
     let resource_output = resource.output.unwrap();
-    assert_eq!(resource_output["content"], json!("Check tests\n"));
-    assert_eq!(resource_output["bytes_read"], json!(12));
+    assert_eq!(resource_output["content"], json!("Check risk\n"));
+    assert_eq!(resource_output["bytes_read"], json!(11));
     assert_eq!(resource_output["offset"], json!(1));
     assert_eq!(resource_output["limit"], json!(1));
     assert_eq!(resource_output["total_lines"], json!(3));
     assert_eq!(resource_output["returned_lines"], json!(1));
     assert_eq!(resource_output["next_offset"], json!(2));
     assert_eq!(resource_output["truncated"], json!(true));
-    assert_eq!(resource_output["omitted_lines"], json!(1));
+    assert_eq!(resource_output["omitted_lines"], json!(2));
 
     let denied = fx
         .kernel
@@ -229,8 +242,9 @@ fn local_stdio_mcp_registers_and_executes_with_kernel_permissions() {
     let workspace = temp_workspace("agent-os-ecosystem-mcp");
     fs::create_dir_all(&workspace).unwrap();
     let server = compile_mcp_fixture(&workspace);
+    fs::create_dir_all(workspace.join(".agent-os")).unwrap();
     fs::write(
-        workspace.join("agent-os.json"),
+        workspace.join(".agent-os/config.json"),
         json!({
             "mcp": {
                 "local_stdio": {
@@ -358,7 +372,7 @@ fn runtime_projects_ecosystem_into_model_context() {
     let worker = kernel
         .spawn_agent(SpawnAgentInput {
             task_id: task.task_id,
-            role_profile_id: "role_worker".to_string(),
+            role_profile_id: "role_producer".to_string(),
             owner: "conformance".to_string(),
             goal: "Inspect projected ecosystem".to_string(),
             success_criteria: Vec::new(),
@@ -367,6 +381,7 @@ fn runtime_projects_ecosystem_into_model_context() {
             workspace_roots: vec![workspace.to_string_lossy().to_string()],
         })
         .unwrap();
+    import_workspace_ecosystem(&kernel, &workspace).unwrap();
     let seen = Arc::new(Mutex::new(None));
     let model = CapturingModel {
         seen: Arc::clone(&seen),
@@ -457,4 +472,60 @@ fn temp_workspace(prefix: &str) -> std::path::PathBuf {
         std::process::id(),
         new_id("case_")
     ))
+}
+
+fn import_workspace_ecosystem(
+    kernel: &Kernel,
+    workspace: &std::path::Path,
+) -> AgentOsResult<EcosystemImportReport> {
+    let catalog = discover_ecosystem(&EcosystemDiscoverOptions {
+        workspace_root: workspace.to_path_buf(),
+        paths: test_paths(workspace),
+    })?;
+    import_catalog(kernel, &catalog)
+}
+
+fn import_catalog(
+    kernel: &Kernel,
+    catalog: &EcosystemCatalog,
+) -> AgentOsResult<EcosystemImportReport> {
+    let mut report = EcosystemImportReport::default();
+    for document in &catalog.instruction_documents {
+        kernel.import_instruction_document(document.clone())?;
+        report.instructions += 1;
+    }
+    for skill in &catalog.skill_definitions {
+        kernel.import_skill_definition(skill.clone())?;
+        report.skills += 1;
+    }
+    for command in &catalog.command_definitions {
+        kernel.import_command_definition(command.clone())?;
+        report.commands += 1;
+    }
+    for profile in &catalog.imported_agent_profiles {
+        kernel.register_imported_agent_profile(profile.clone())?;
+        report.agents += 1;
+    }
+    for server in &catalog.mcp_servers {
+        kernel.register_mcp_server_spec(server.clone())?;
+        report.mcp_servers += 1;
+    }
+    for tool in &catalog.mcp_tools {
+        kernel.register_mcp_tool_definition(tool.clone())?;
+        report.mcp_tools += 1;
+    }
+    Ok(report)
+}
+
+fn test_paths(workspace: &std::path::Path) -> AgentOsPaths {
+    let home = workspace.join("__agent_os_home");
+    AgentOsPaths {
+        home: home.clone(),
+        config_dir: home.join("config"),
+        data_dir: home.join("data"),
+        state_dir: home.join("state"),
+        cache_dir: home.join("cache"),
+        log_dir: home.join("log"),
+        bin_dir: home.join("cache/bin"),
+    }
 }

@@ -1,11 +1,11 @@
 {
   "policy_name": "software-engineering-final-answer",
   "acceptance_criteria": [
-    "WorkerAgent inspects scoped source",
-    "WorkerAgent produces patch artifact",
-    "WorkerAgent records command evidence",
+    "ProducerAgent inspects scoped source",
+    "ProducerAgent produces patch artifact",
+    "ProducerAgent records command evidence",
     "ReviewerAgent reviews exact artifact",
-    "WorkerAgent passes evidence verification",
+    "ReviewerAgent verifies evidence with tools",
     "SupervisorAgent submits evidence-backed final"
   ],
   "required_evidence_types": [

@@ -29,30 +29,73 @@ fn default_system_prompt_generates_tool_contract() {
     let request = make_request(&tmp);
     let prompt = default_system_prompt(&request, tmp.to_str().unwrap());
 
-    assert!(prompt.contains("## Available tools"));
-    assert!(prompt.contains("read_file(path)"));
-    assert!(prompt.contains("apply_patch(patch)"));
-    assert!(prompt.contains("run_command(program, args, env?)"));
-    assert!(prompt.contains("set_goal(goal, target_thread_id, target_agent_id)"));
-    assert!(prompt.contains("accomplish_goal(summary)"));
-    assert!(prompt.contains("update_checklist(items)"));
-    assert!(prompt.contains("record_evidence(evidence_type, claim)"));
-    assert!(prompt.contains("report_supervisor(message)"));
-    assert!(prompt.contains("post_blackboard(channel_id, section, content)"));
-    assert!(prompt.contains("ask_human(question)"));
-    assert!(prompt.contains("request_permissions(reason, scope, permissions)"));
-    assert!(prompt.contains("agent_control(action, agent_id, thread_id, payload)"));
-    assert!(prompt.contains("Host OS tools"));
-    assert!(prompt.contains("Work State tools"));
-    assert!(prompt.contains("Communication tools"));
-    assert!(prompt.contains("Session Lifecycle"));
-    assert!(prompt.contains("For agent_control, use one action per call"));
+    assert!(prompt.contains("## Visible Tool Summary"));
+    assert!(prompt.contains("Producer responsibility:"));
+    assert!(prompt.contains("- read_file:"));
+    assert!(prompt.contains("- read_image:"));
+    assert!(prompt.contains("- apply_patch:"));
+    assert!(prompt.contains("run_command"));
+    assert!(prompt.contains(&format!("Host OS: {}", std::env::consts::OS)));
+    assert!(prompt.contains("Gather context with the most appropriate visible tool"));
+    assert!(prompt.contains("Run a shell command in the workspace by default"));
+    assert!(!prompt.contains(r#"program "cat" with args ["file.txt"]"#));
+    assert!(!prompt.contains("set_goal(goal, target_thread_id, target_agent_id)"));
+    assert!(prompt.contains("- accomplish_goal:"));
+    assert!(prompt.contains("- update_checklist:"));
+    assert!(prompt.contains("- record_evidence:"));
+    assert!(prompt.contains("- report_supervisor:"));
+    assert!(prompt.contains("- post_blackboard:"));
+    assert!(!prompt.contains("ask_human(question)"));
+    assert!(prompt.contains("- request_permissions:"));
+    assert!(!prompt.contains("agent_control(action, agent_id, thread_id, payload)"));
+    assert!(prompt.contains("coordinate with or escalate to the Supervisor"));
+    assert!(!prompt.contains("supervise and escalate"));
+    assert!(!prompt.contains("When answering a child permission request"));
     assert!(prompt.contains("Paths are relative to the workspace root"));
     assert!(!prompt.contains("write_file(path, content)"));
     assert!(!prompt.contains("replace_text(path, old, new)"));
     assert!(!prompt.contains("delete_file(path)"));
     assert!(!prompt.contains("workspace.read_file"));
     assert!(!prompt.contains("process.run"));
+}
+
+#[test]
+fn default_system_prompt_projects_supervisor_control_plane_tools() {
+    let tmp = std::env::temp_dir().join(format!("aos-openai-supervisor-prompt-{}", new_id("t_")));
+    let request = make_kernel_request_for_role(
+        &tmp,
+        "role_supervisor",
+        "Coordinate child work",
+        vec!["child work is assigned".to_string()],
+    )
+    .1;
+    let prompt = default_system_prompt(&request, tmp.to_str().unwrap());
+
+    assert!(prompt.contains("set_goal"));
+    assert!(prompt.contains("agent_control"));
+    assert!(prompt.contains("Supervisor responsibility:"));
+    assert!(prompt.contains("For agent_control, use one action per call"));
+    assert!(prompt.contains("When answering a child permission request"));
+    assert!(!prompt.contains("If agent_control or set_goal is not visible"));
+}
+
+#[test]
+fn default_system_prompt_projects_reviewer_responsibility() {
+    let tmp = std::env::temp_dir().join(format!("aos-openai-reviewer-prompt-{}", new_id("t_")));
+    let request = make_kernel_request_for_role(
+        &tmp,
+        "role_reviewer",
+        "Review the proposed patch",
+        vec!["review findings cite evidence".to_string()],
+    )
+    .1;
+    let prompt = default_system_prompt(&request, tmp.to_str().unwrap());
+
+    assert!(prompt.contains("Reviewer responsibility:"));
+    assert!(prompt.contains("producer-equivalent baseline capability"));
+    assert!(prompt.contains("must not mutate the artifact under review"));
+    assert!(prompt.contains("coordinate with or escalate to the Supervisor"));
+    assert!(!prompt.contains("When answering a child permission request"));
 }
 
 #[test]
@@ -107,6 +150,7 @@ fn build_messages_includes_tool_results() {
         thread: make_request(&tmp).thread,
         workspace_root: tmp.clone(),
         step_index: 1,
+        model_capabilities: image_capable_model(),
         context: ModelContextProjection {
             tool_results: vec![ToolExecutionRecord {
                 call_id: "call_001".to_string(),
@@ -139,12 +183,191 @@ fn build_messages_includes_tool_results() {
 }
 
 #[test]
+fn build_messages_projects_read_image_as_openai_image_part() {
+    let tmp = std::env::temp_dir().join(format!("aos-openai-image-{}", new_id("t_")));
+    let request = ModelTurnRequest {
+        thread: make_request(&tmp).thread,
+        workspace_root: tmp.clone(),
+        step_index: 1,
+        model_capabilities: image_capable_model(),
+        context: ModelContextProjection {
+            tool_results: vec![ToolExecutionRecord {
+                call_id: "call_image".to_string(),
+                tool_name: "read_image".to_string(),
+                status: ToolCallStatus::Completed,
+                input: Some(json!({"workspace_root": tmp.to_string_lossy(), "path": "shot.png"})),
+                output: Some(json!({
+                    "tool": "read_image",
+                    "status": "ok",
+                    "input": {"workspace_root": tmp.to_string_lossy(), "path": "shot.png"},
+                    "path": "shot.png",
+                    "mime_type": "image/png",
+                    "encoding": "base64",
+                    "data_url": "data:image/png;base64,AA==",
+                    "bytes_read": 1
+                })),
+                evidence_ids: Vec::new(),
+                evidence_claim: None,
+            }],
+            ..ModelContextProjection::default()
+        },
+    };
+
+    let messages = build_messages(&request, tmp.to_str().unwrap(), &None);
+
+    assert_eq!(messages.len(), 5);
+    assert_eq!(
+        messages[2]["tool_calls"][0]["function"]["name"],
+        "read_image"
+    );
+    assert_eq!(messages[3]["role"], "tool");
+    assert!(!messages[3]["content"]
+        .as_str()
+        .unwrap()
+        .contains("data:image/png"));
+    assert_eq!(messages[4]["role"], "user");
+    assert_eq!(messages[4]["content"][1]["type"], "image_url");
+    assert_eq!(
+        messages[4]["content"][1]["image_url"]["url"],
+        "data:image/png;base64,AA=="
+    );
+}
+
+#[test]
+fn build_messages_reports_read_image_error_for_text_only_model() {
+    let tmp = std::env::temp_dir().join(format!("aos-openai-image-text-{}", new_id("t_")));
+    let mut capabilities = image_capable_model();
+    capabilities.image_input = false;
+    let request = ModelTurnRequest {
+        thread: make_request(&tmp).thread,
+        workspace_root: tmp.clone(),
+        step_index: 1,
+        model_capabilities: capabilities,
+        context: ModelContextProjection {
+            tool_results: vec![ToolExecutionRecord {
+                call_id: "call_image".to_string(),
+                tool_name: "read_image".to_string(),
+                status: ToolCallStatus::Completed,
+                input: Some(json!({"workspace_root": tmp.to_string_lossy(), "path": "shot.png"})),
+                output: Some(json!({
+                    "path": "shot.png",
+                    "mime_type": "image/png",
+                    "encoding": "base64",
+                    "data_url": "data:image/png;base64,AA==",
+                    "bytes_read": 1
+                })),
+                evidence_ids: Vec::new(),
+                evidence_claim: None,
+            }],
+            ..ModelContextProjection::default()
+        },
+    };
+
+    let messages = build_messages(&request, tmp.to_str().unwrap(), &None);
+
+    assert_eq!(messages.len(), 5);
+    assert!(messages[4]["content"]
+        .as_str()
+        .unwrap()
+        .contains("does not support image input"));
+}
+
+#[test]
+fn build_anthropic_messages_projects_read_image_as_image_block() {
+    let tmp = std::env::temp_dir().join(format!("aos-anthropic-image-{}", new_id("t_")));
+    let request = ModelTurnRequest {
+        thread: make_request(&tmp).thread,
+        workspace_root: tmp.clone(),
+        step_index: 1,
+        model_capabilities: image_capable_model(),
+        context: ModelContextProjection {
+            tool_results: vec![ToolExecutionRecord {
+                call_id: "call_image".to_string(),
+                tool_name: "read_image".to_string(),
+                status: ToolCallStatus::Completed,
+                input: Some(json!({"workspace_root": tmp.to_string_lossy(), "path": "shot.png"})),
+                output: Some(json!({
+                    "path": "shot.png",
+                    "mime_type": "image/png",
+                    "encoding": "base64",
+                    "data_url": "data:image/png;base64,AA==",
+                    "bytes_read": 1
+                })),
+                evidence_ids: vec!["evi_image".to_string()],
+                evidence_claim: Some("read image".to_string()),
+            }],
+            ..ModelContextProjection::default()
+        },
+    };
+
+    let messages = build_anthropic_messages(&request, tmp.to_str().unwrap());
+
+    assert_eq!(messages.len(), 3);
+    assert_eq!(messages[2]["content"][0]["type"], "tool_result");
+    let text = messages[2]["content"][0]["content"][0]["text"]
+        .as_str()
+        .unwrap();
+    assert!(text.contains("evi_image"));
+    assert!(!text.contains("data:image/png"));
+    assert_eq!(messages[2]["content"][0]["content"][1]["type"], "image");
+    assert_eq!(
+        messages[2]["content"][0]["content"][1]["source"]["media_type"],
+        "image/png"
+    );
+    assert_eq!(
+        messages[2]["content"][0]["content"][1]["source"]["data"],
+        "AA=="
+    );
+}
+
+#[test]
+fn build_anthropic_messages_reports_read_image_error_for_text_only_model() {
+    let tmp = std::env::temp_dir().join(format!("aos-anthropic-image-text-{}", new_id("t_")));
+    let mut capabilities = image_capable_model();
+    capabilities.image_input = false;
+    let request = ModelTurnRequest {
+        thread: make_request(&tmp).thread,
+        workspace_root: tmp.clone(),
+        step_index: 1,
+        model_capabilities: capabilities,
+        context: ModelContextProjection {
+            tool_results: vec![ToolExecutionRecord {
+                call_id: "call_image".to_string(),
+                tool_name: "read_image".to_string(),
+                status: ToolCallStatus::Completed,
+                input: Some(json!({"workspace_root": tmp.to_string_lossy(), "path": "shot.png"})),
+                output: Some(json!({
+                    "path": "shot.png",
+                    "mime_type": "image/png",
+                    "encoding": "base64",
+                    "data_url": "data:image/png;base64,AA==",
+                    "bytes_read": 1
+                })),
+                evidence_ids: Vec::new(),
+                evidence_claim: None,
+            }],
+            ..ModelContextProjection::default()
+        },
+    };
+
+    let messages = build_anthropic_messages(&request, tmp.to_str().unwrap());
+
+    assert_eq!(messages.len(), 3);
+    assert_eq!(messages[2]["content"][0]["type"], "tool_result");
+    assert!(messages[2]["content"][0]["content"]
+        .as_str()
+        .unwrap()
+        .contains("does not support image input"));
+}
+
+#[test]
 fn build_messages_projects_runtime_feedback_as_user_text() {
     let tmp = std::env::temp_dir().join(format!("aos-openai-feedback-{}", new_id("t_")));
     let request = ModelTurnRequest {
         thread: make_request(&tmp).thread,
         workspace_root: tmp.clone(),
         step_index: 2,
+        model_capabilities: image_capable_model(),
         context: ModelContextProjection {
             tool_results: vec![ToolExecutionRecord {
                 call_id: "feedback_001".to_string(),
@@ -273,6 +496,7 @@ fn parse_response_extracts_submit_final() {
         thread: base_request.thread,
         workspace_root: tmp,
         step_index: 3,
+        model_capabilities: base_request.model_capabilities,
         context: ModelContextProjection {
             tool_results: vec![ToolExecutionRecord {
                 call_id: "call_1".to_string(),
@@ -337,6 +561,7 @@ fn parse_anthropic_response_extracts_submit_final() {
         thread: base_request.thread,
         workspace_root: tmp,
         step_index: 2,
+        model_capabilities: base_request.model_capabilities,
         context: ModelContextProjection {
             tool_results: vec![ToolExecutionRecord {
                 call_id: "call_1".to_string(),
@@ -420,9 +645,10 @@ fn tool_definitions_include_all_core_tools() {
                 .and_then(Value::as_str)
         })
         .collect();
-    assert_eq!(names.len(), 15);
+    assert_eq!(names.len(), 16);
     assert!(names.contains(&"apply_patch"));
     assert!(names.contains(&"read_file"));
+    assert!(names.contains(&"read_image"));
     assert!(names.contains(&"run_command"));
     assert!(names.contains(&"set_goal"));
     assert!(names.contains(&"accomplish_goal"));
@@ -459,6 +685,14 @@ fn tool_definitions_include_all_core_tools() {
         .iter()
         .find(|tool| tool.pointer("/function/name").and_then(Value::as_str) == Some("run_command"))
         .unwrap();
+    assert_eq!(
+        run_command.pointer("/function/parameters/required"),
+        Some(&json!(["command"]))
+    );
+    assert_eq!(
+        run_command.pointer("/function/parameters/properties/command/type"),
+        Some(&json!("string"))
+    );
     assert_eq!(
         run_command.pointer("/function/parameters/properties/env/type"),
         Some(&json!("object"))
@@ -573,8 +807,8 @@ fn anthropic_tool_definitions_mirror_core_tools() {
 }
 
 #[test]
-fn worker_tool_view_hides_privileged_agent_control_actions() {
-    let tmp = std::env::temp_dir().join(format!("aos-openai-worker-tools-{}", new_id("t_")));
+fn producer_tool_view_hides_privileged_agent_control_actions() {
+    let tmp = std::env::temp_dir().join(format!("aos-openai-producer-tools-{}", new_id("t_")));
     let request = make_request(&tmp);
     let tools = tool_definitions_for_thread(&request.thread);
     let names: Vec<&str> = tools
@@ -590,6 +824,57 @@ fn worker_tool_view_hides_privileged_agent_control_actions() {
     assert!(!actions.contains(&"kill".to_string()));
     assert!(!actions.contains(&"delete_session".to_string()));
     assert!(!actions.contains(&"purge_state".to_string()));
+}
+
+#[test]
+fn read_image_tool_is_hidden_for_text_only_models() {
+    let tmp = std::env::temp_dir().join(format!("aos-openai-image-tools-{}", new_id("t_")));
+    let mut request = make_request(&tmp);
+    request.model_capabilities.image_input = false;
+
+    let names = tool_definitions_for_request(&request)
+        .into_iter()
+        .filter_map(|tool| {
+            tool.pointer("/function/name")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect::<Vec<_>>();
+
+    assert!(names.contains(&"read_file".to_string()));
+    assert!(!names.contains(&"read_image".to_string()));
+}
+
+#[test]
+fn reviewer_tool_view_matches_producer_without_control_plane() {
+    let producer_tmp =
+        std::env::temp_dir().join(format!("aos-openai-producer-tools-{}", new_id("t_")));
+    let reviewer_tmp =
+        std::env::temp_dir().join(format!("aos-openai-reviewer-tools-{}", new_id("t_")));
+    let producer_request = make_request(&producer_tmp);
+    let reviewer_request = make_kernel_request_for_role(
+        &reviewer_tmp,
+        "role_reviewer",
+        "Review the proposed artifact",
+        vec!["review cites evidence".to_string()],
+    )
+    .1;
+    let producer_tools = tool_definitions_for_thread(&producer_request.thread);
+    let reviewer_tools = tool_definitions_for_thread(&reviewer_request.thread);
+    let producer_names: Vec<&str> = producer_tools
+        .iter()
+        .filter_map(|tool| tool.pointer("/function/name").and_then(Value::as_str))
+        .collect();
+    let reviewer_names: Vec<&str> = reviewer_tools
+        .iter()
+        .filter_map(|tool| tool.pointer("/function/name").and_then(Value::as_str))
+        .collect();
+    assert_eq!(reviewer_names, producer_names);
+    assert!(reviewer_names.contains(&"run_command"));
+    assert!(reviewer_names.contains(&"apply_patch"));
+    assert!(reviewer_names.contains(&"submit_final"));
+    assert!(!reviewer_names.contains(&"agent_control"));
+    assert!(!reviewer_names.contains(&"set_goal"));
 }
 
 #[test]
@@ -840,13 +1125,13 @@ fn mcp_echo_tool() -> McpToolDefinition {
         source: EcosystemSource {
             source_kind: EcosystemSourceKind::AgentOs,
             source_scope: EcosystemSourceScope::Config,
-            source_path: "agent-os.json".to_string(),
+            source_path: ".agent-os/config.json".to_string(),
         },
         tool_descriptor: ToolDescriptor {
             tool_id: "tool_mcp__echo__echo".to_string(),
             name: "mcp__echo__echo".to_string(),
             description: "Echo one text field.".to_string(),
-            version: "0.2.0".to_string(),
+            version: "0.3.0".to_string(),
             driver_class: ToolDriverClass::Mcp,
             risk_level: 3,
             input_schema: schema.clone(),

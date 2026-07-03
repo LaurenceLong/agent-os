@@ -73,6 +73,34 @@ fn fresh_live_tmp(prefix: &str, provider: &str) -> std::path::PathBuf {
     tmp
 }
 
+fn live_kernel_with_blob_stores(workspace: &Path) -> Kernel {
+    let artifact_blobs =
+        LocalBlobStore::new(workspace.join(".agent-os-blobs").join("artifacts")).unwrap();
+    let evidence_blobs =
+        LocalBlobStore::new(workspace.join(".agent-os-blobs").join("evidence")).unwrap();
+    Kernel::new().with_blob_stores(artifact_blobs, evidence_blobs)
+}
+
+fn live_runtime_config(workspace: &Path, max_steps: u32) -> RuntimeConfig {
+    let mut config = RuntimeConfig::workspace_write(workspace);
+    config.max_steps = max_steps;
+    config.fail_on_process_nonzero = false;
+    config
+}
+
+const LIVE_IMAGE_CAPABLE_MODEL_ALIAS: &str = "live-image-input";
+const LIVE_TEXT_ONLY_MODEL_ALIAS: &str = "live-text-only";
+const LIVE_IMAGE_OK_MARKER: &str = "READ_IMAGE_LIVE_OK";
+const LIVE_IMAGE_UNSUPPORTED_MARKER: &str = "READ_IMAGE_UNSUPPORTED_OK";
+const LIVE_IMAGE_PROBE_DATA_URL: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFklEQVR42mP4z8BAEmIY1TCqYfhqAACQ+f8B8u7oVwAAAABJRU5ErkJggg==";
+const LIVE_IMAGE_PROBE_PNG: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x10, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x91, 0x68,
+    0x36, 0x00, 0x00, 0x00, 0x16, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0xf8, 0xcf, 0xc0, 0x40,
+    0x12, 0x62, 0x18, 0xd5, 0x30, 0xaa, 0x61, 0xf8, 0x6a, 0x00, 0x00, 0x90, 0xf9, 0xff, 0x01, 0xf2,
+    0xee, 0xe8, 0x57, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+];
+
 #[test]
 fn live_env_file_parser_handles_bom_comments_quotes_and_precedence() {
     let file_values = parse_live_env_content(
@@ -226,6 +254,975 @@ fn live_anthropic_compatible_llm_goal_driven_agent_control_lifecycle_success_e2e
     );
 }
 
+#[test]
+#[ignore = "requires AGENT_OS_LIVE_OPENAI_API_KEY and a live OpenAI-compatible endpoint"]
+fn live_openai_compatible_llm_goal_driven_ecosystem_e2e() {
+    run_live_llm_goal_driven_ecosystem_e2e(
+        "openai-compatible",
+        LlmApiStyle::OpenAiCompatible,
+        "AGENT_OS_LIVE_OPENAI_API_KEY",
+        "AGENT_OS_LIVE_OPENAI_MODEL",
+        "AGENT_OS_LIVE_OPENAI_BASE_URL",
+        "live-openai-compatible-goal-ecosystem.jsonl",
+    );
+}
+
+#[test]
+#[ignore = "requires AGENT_OS_LIVE_ANTHROPIC_API_KEY and a live Anthropic-compatible endpoint"]
+fn live_anthropic_compatible_llm_goal_driven_ecosystem_e2e() {
+    run_live_llm_goal_driven_ecosystem_e2e(
+        "anthropic-compatible",
+        LlmApiStyle::AnthropicCompatible,
+        "AGENT_OS_LIVE_ANTHROPIC_API_KEY",
+        "AGENT_OS_LIVE_ANTHROPIC_MODEL",
+        "AGENT_OS_LIVE_ANTHROPIC_BASE_URL",
+        "live-anthropic-compatible-goal-ecosystem.jsonl",
+    );
+}
+
+#[test]
+#[ignore = "requires a live OpenAI-compatible image-capable model"]
+fn live_openai_compatible_llm_read_image_success_e2e() {
+    run_live_llm_read_image_success_e2e(
+        "openai-compatible",
+        LlmApiStyle::OpenAiCompatible,
+        "AGENT_OS_LIVE_OPENAI_API_KEY",
+        "AGENT_OS_LIVE_OPENAI_MODEL",
+        "AGENT_OS_LIVE_OPENAI_BASE_URL",
+        "live-openai-compatible-read-image-success.jsonl",
+    );
+}
+
+#[test]
+#[ignore = "requires a live Anthropic-compatible image-capable model"]
+fn live_anthropic_compatible_llm_read_image_success_e2e() {
+    run_live_llm_read_image_success_e2e(
+        "anthropic-compatible",
+        LlmApiStyle::AnthropicCompatible,
+        "AGENT_OS_LIVE_ANTHROPIC_API_KEY",
+        "AGENT_OS_LIVE_ANTHROPIC_MODEL",
+        "AGENT_OS_LIVE_ANTHROPIC_BASE_URL",
+        "live-anthropic-compatible-read-image-success.jsonl",
+    );
+}
+
+#[test]
+#[ignore = "requires a live OpenAI-compatible text-only model"]
+fn live_openai_compatible_llm_read_image_unsupported_e2e() {
+    run_live_llm_read_image_unsupported_e2e(
+        "openai-compatible",
+        LlmApiStyle::OpenAiCompatible,
+        "AGENT_OS_LIVE_OPENAI_API_KEY",
+        "AGENT_OS_LIVE_OPENAI_MODEL",
+        "AGENT_OS_LIVE_OPENAI_BASE_URL",
+        "live-openai-compatible-read-image-unsupported.jsonl",
+    );
+}
+
+#[test]
+#[ignore = "requires a live Anthropic-compatible text-only model"]
+fn live_anthropic_compatible_llm_read_image_unsupported_e2e() {
+    run_live_llm_read_image_unsupported_e2e(
+        "anthropic-compatible",
+        LlmApiStyle::AnthropicCompatible,
+        "AGENT_OS_LIVE_ANTHROPIC_API_KEY",
+        "AGENT_OS_LIVE_ANTHROPIC_MODEL",
+        "AGENT_OS_LIVE_ANTHROPIC_BASE_URL",
+        "live-anthropic-compatible-read-image-unsupported.jsonl",
+    );
+}
+
+#[test]
+#[ignore = "requires a live OpenAI-compatible text-only model"]
+fn live_openai_compatible_llm_switches_read_image_context_to_text_only_model() {
+    run_live_llm_switch_read_image_context_to_text_only_model(
+        "openai-compatible",
+        LlmApiStyle::OpenAiCompatible,
+        "AGENT_OS_LIVE_OPENAI_API_KEY",
+        "AGENT_OS_LIVE_OPENAI_MODEL",
+        "AGENT_OS_LIVE_OPENAI_BASE_URL",
+        "live-openai-compatible-read-image-switch-text-only.jsonl",
+    );
+}
+
+#[test]
+#[ignore = "requires a live Anthropic-compatible text-only model"]
+fn live_anthropic_compatible_llm_switches_read_image_context_to_text_only_model() {
+    run_live_llm_switch_read_image_context_to_text_only_model(
+        "anthropic-compatible",
+        LlmApiStyle::AnthropicCompatible,
+        "AGENT_OS_LIVE_ANTHROPIC_API_KEY",
+        "AGENT_OS_LIVE_ANTHROPIC_MODEL",
+        "AGENT_OS_LIVE_ANTHROPIC_BASE_URL",
+        "live-anthropic-compatible-read-image-switch-text-only.jsonl",
+    );
+}
+
+#[test]
+#[ignore = "requires a live OpenAI-compatible text-only model"]
+fn live_openai_compatible_llm_forced_image_payload_returns_provider_error() {
+    run_live_llm_forced_image_payload_returns_provider_error(
+        "openai-compatible",
+        LlmApiStyle::OpenAiCompatible,
+        "AGENT_OS_LIVE_OPENAI_API_KEY",
+        "AGENT_OS_LIVE_OPENAI_MODEL",
+        "AGENT_OS_LIVE_OPENAI_BASE_URL",
+        "live-openai-compatible-read-image-forced-text-model-error.jsonl",
+    );
+}
+
+#[test]
+#[ignore = "requires a live Anthropic-compatible text-only model"]
+fn live_anthropic_compatible_llm_forced_image_payload_returns_provider_error() {
+    run_live_llm_forced_image_payload_returns_provider_error(
+        "anthropic-compatible",
+        LlmApiStyle::AnthropicCompatible,
+        "AGENT_OS_LIVE_ANTHROPIC_API_KEY",
+        "AGENT_OS_LIVE_ANTHROPIC_MODEL",
+        "AGENT_OS_LIVE_ANTHROPIC_BASE_URL",
+        "live-anthropic-compatible-read-image-forced-text-model-error.jsonl",
+    );
+}
+
+#[test]
+#[ignore = "requires a live Anthropic-compatible text-only model with gateway compatibility behavior"]
+fn live_anthropic_compatible_llm_forced_image_payload_observes_gateway_behavior() {
+    run_live_llm_forced_image_payload_observes_gateway_behavior(
+        "anthropic-compatible",
+        LlmApiStyle::AnthropicCompatible,
+        "AGENT_OS_LIVE_ANTHROPIC_API_KEY",
+        "AGENT_OS_LIVE_ANTHROPIC_MODEL",
+        "AGENT_OS_LIVE_ANTHROPIC_BASE_URL",
+        "live-anthropic-compatible-read-image-forced-text-model-observed.jsonl",
+    );
+}
+
+fn run_live_llm_goal_driven_ecosystem_e2e(
+    provider: &str,
+    api_style: LlmApiStyle,
+    api_key_env: &str,
+    model_env: &str,
+    base_env: &str,
+    log_file_name: &str,
+) {
+    let api_key = live_env_var(api_key_env);
+    let model = live_env_var(model_env);
+    let api_base = live_env_var(base_env);
+    let tmp = fresh_live_tmp("aos-live-goal-ecosystem", provider);
+    let skill_name = "live-ecosystem-skill";
+    let skill_marker = "LIVE_SKILL_MARKER_SKILL_AND_MCP_E2E";
+    let mcp_marker = "LIVE_MCP_MARKER_SKILL_AND_MCP_E2E";
+    let kernel = live_kernel_with_blob_stores(&tmp);
+    let mcp_tool_name = import_live_ecosystem(&kernel, &tmp, skill_name, skill_marker)
+        .unwrap_or_else(|error| panic!("import live ecosystem: {error}"));
+    let goal = format!(
+        "Produce a focused ecosystem evidence report. Load the skill named {skill_name}, follow its marker instruction, call the local MCP echo tool {mcp_tool_name} with text exactly {mcp_marker}, then submit_final with a summary containing both {skill_marker} and {mcp_marker}. The final submit_final call must include an evidence_map that cites evidence_ids from the completed load_skill and MCP tool results."
+    );
+    let audit_log_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/agent-os-audit")
+        .join(log_file_name);
+    let _ = std::fs::remove_file(&audit_log_path);
+    let (kernel, request) = make_kernel_request_for_role_on_kernel_with_requirements(
+        kernel,
+        &tmp,
+        "role_producer",
+        &goal,
+        Vec::new(),
+        Vec::new(),
+        vec![EvidenceType::SourceRef, EvidenceType::ExternalReference],
+    );
+    let client = OpenAiModelClient::new(api_key, model.clone())
+        .with_api_base(api_base.clone())
+        .with_api_style(api_style)
+        .with_max_tokens(2048)
+        .with_audit_log(audit_log_path.clone());
+    append_jsonl(
+        &audit_log_path,
+        &json!({
+            "type": "live_goal_driven_ecosystem_start",
+            "provider": provider,
+            "api_base": api_base,
+            "model": model,
+            "workspace": tmp,
+            "skill_name": skill_name,
+            "mcp_tool_name": mcp_tool_name,
+            "task_goal": request.thread.task.goal,
+        }),
+    )
+    .unwrap();
+
+    let mut runtime = ThreadRuntime::new(kernel.clone(), request.thread.thread_id.clone(), client);
+    let config = live_runtime_config(&tmp, 8);
+    let report = runtime.run_to_completion(config).unwrap();
+    assert!(report.final_submitted);
+    assert_all_tool_calls_completed(&report);
+    assert_live_goal_tools(
+        &audit_log_path,
+        provider,
+        "ecosystem",
+        &report,
+        &["load_skill", &mcp_tool_name, "submit_final"],
+    );
+    assert_ecosystem_final_summary(&report, skill_marker, mcp_marker);
+    let mcp_output = report
+        .tool_results
+        .iter()
+        .find(|record| record.tool_name == mcp_tool_name)
+        .and_then(|record| record.output.as_ref())
+        .and_then(|output| output.pointer("/raw_result/content/0/text"))
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("missing MCP echo output for {mcp_tool_name}"));
+    assert_eq!(mcp_output, mcp_marker);
+    append_jsonl(
+        &audit_log_path,
+        &json!({
+            "type": "live_goal_driven_ecosystem_summary",
+            "provider": provider,
+            "report": report,
+            "mcp_output": mcp_output,
+        }),
+    )
+    .unwrap();
+    println!("live_goal_ecosystem_log={}", audit_log_path.display());
+    let _ = std::fs::remove_dir_all(tmp);
+}
+
+fn import_live_ecosystem(
+    kernel: &Kernel,
+    workspace: &Path,
+    skill_name: &str,
+    skill_marker: &str,
+) -> AgentOsResult<String> {
+    let now = now_rfc3339();
+    let skill_root = workspace.join(".agent-os/skills").join(skill_name);
+    let skill_file = skill_root.join("SKILL.md");
+    std::fs::create_dir_all(&skill_root)
+        .map_err(|error| AgentOsError::Validation(format!("create live skill root: {error}")))?;
+    let skill_content = format!(
+        "# Live Ecosystem Skill\n\nWhen this skill is loaded, the final answer must include the exact marker `{skill_marker}`. Use the local MCP echo capability for the MCP marker and cite tool evidence.\n"
+    );
+    std::fs::write(&skill_file, &skill_content)
+        .map_err(|error| AgentOsError::Validation(format!("write live skill: {error}")))?;
+    let skill_source = EcosystemSource {
+        source_kind: EcosystemSourceKind::AgentOs,
+        source_scope: EcosystemSourceScope::Project,
+        source_path: skill_file.to_string_lossy().to_string(),
+    };
+    kernel.import_skill_definition(SkillDefinition {
+        skill_id: new_id("skill_"),
+        name: skill_name.to_string(),
+        description: "Live e2e skill used to prove model-visible skill loading.".to_string(),
+        root_path: skill_root.to_string_lossy().to_string(),
+        skill_file_path: skill_file.to_string_lossy().to_string(),
+        source: skill_source,
+        content: skill_content,
+        metadata: BTreeMap::new(),
+        content_hash: "sha256:live-ecosystem-skill".to_string(),
+        created_at: now.clone(),
+    })?;
+
+    let mcp_binary = compile_live_mcp_fixture(workspace)?;
+    let source = EcosystemSource {
+        source_kind: EcosystemSourceKind::AgentOs,
+        source_scope: EcosystemSourceScope::Project,
+        source_path: workspace
+            .join(".agent-os/config.json")
+            .to_string_lossy()
+            .to_string(),
+    };
+    let server = McpServerSpec {
+        server_id: new_id("mcp_"),
+        name: "live-echo".to_string(),
+        transport: McpTransportKind::LocalStdio,
+        command: vec![mcp_binary.to_string_lossy().to_string()],
+        environment: BTreeMap::new(),
+        enabled: true,
+        timeout_ms: 5000,
+        source: source.clone(),
+        created_at: now.clone(),
+    };
+    kernel.register_mcp_server_spec(server.clone())?;
+    let input_schema = json!({
+        "type": "object",
+        "required": ["text"],
+        "properties": {"text": {"type": "string"}},
+        "additionalProperties": false
+    });
+    let output_schema = json!({"type": "object"});
+    let mut descriptor = agent_os_kernel::mcp_tool_descriptor(
+        &server,
+        "echo",
+        "Echo one text field through a local stdio MCP server for live e2e coverage.",
+        input_schema.clone(),
+        output_schema.clone(),
+        &now,
+    )?;
+    descriptor.examples.push(ToolExample {
+        description: "Echo the live MCP marker.".to_string(),
+        parameters: json!({"text": "LIVE_MCP_MARKER_SKILL_AND_MCP_E2E"}),
+        expected_result: "Returns a text content item with the same marker.".to_string(),
+    });
+    let model_tool_name = descriptor.name.clone();
+    kernel.register_mcp_tool_definition(McpToolDefinition {
+        mcp_tool_id: new_id("mcptool_"),
+        server_name: server.name,
+        tool_name: "echo".to_string(),
+        model_tool_name: model_tool_name.clone(),
+        description: descriptor.description.clone(),
+        input_schema,
+        output_schema,
+        source,
+        tool_descriptor: descriptor,
+        created_at: now,
+    })?;
+    Ok(model_tool_name)
+}
+
+fn compile_live_mcp_fixture(workspace: &Path) -> AgentOsResult<std::path::PathBuf> {
+    let source = workspace.join("live_mcp_echo_fixture.rs");
+    let binary = workspace.join(format!(
+        "live_mcp_echo_fixture{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    std::fs::write(
+        &source,
+        r##"
+use std::io::{self, BufRead};
+
+fn main() {
+    for line in io::stdin().lock().lines() {
+        let line = line.unwrap();
+        if line.contains("\"method\":\"tools/call\"") {
+            let text = line.split("\"text\":\"").nth(1).and_then(|rest| rest.split('"').next()).unwrap_or("");
+            println!(r#"{{"jsonrpc":"2.0","id":2,"result":{{"content":[{{"type":"text","text":"{}"}}]}}}}"#, text);
+        } else if line.contains("\"method\":\"initialize\"") {
+            println!("{}", r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"live-echo-fixture","version":"0.0.1"}}}"#);
+        }
+    }
+}
+"##,
+    )
+    .map_err(|error| AgentOsError::Validation(format!("write live MCP fixture: {error}")))?;
+    let output = std::process::Command::new("rustc")
+        .arg(&source)
+        .arg("-o")
+        .arg(&binary)
+        .output()
+        .map_err(|error| AgentOsError::Validation(format!("compile live MCP fixture: {error}")))?;
+    if !output.status.success() {
+        return Err(AgentOsError::Validation(format!(
+            "compile live MCP fixture failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    Ok(binary)
+}
+
+fn assert_ecosystem_final_summary(report: &RuntimeRunReport, skill_marker: &str, mcp_marker: &str) {
+    let summary = report
+        .tool_results
+        .iter()
+        .rev()
+        .find(|record| record.tool_name == "submit_final")
+        .and_then(|record| record.input.as_ref())
+        .and_then(|input| input.get("summary"))
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("missing submit_final summary"));
+    assert!(
+        summary.contains(skill_marker),
+        "submit_final summary did not contain skill marker: {summary}"
+    );
+    assert!(
+        summary.contains(mcp_marker),
+        "submit_final summary did not contain MCP marker: {summary}"
+    );
+}
+
+fn run_live_llm_read_image_success_e2e(
+    provider: &str,
+    api_style: LlmApiStyle,
+    api_key_env: &str,
+    model_env: &str,
+    base_env: &str,
+    log_file_name: &str,
+) {
+    let api_key = live_env_var(api_key_env);
+    let model = live_env_var(model_env);
+    let api_base = live_env_var(base_env);
+    let tmp = fresh_live_tmp("aos-live-read-image-success", provider);
+    std::fs::write(tmp.join("image_probe.png"), LIVE_IMAGE_PROBE_PNG).unwrap();
+    let audit_log_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/agent-os-audit")
+        .join(log_file_name);
+    let _ = std::fs::remove_file(&audit_log_path);
+    let goal = format!(
+        "Use read_image exactly once for image_probe.png. Do not use read_file or run_command. After read_image completes, call submit_final with summary exactly {LIVE_IMAGE_OK_MARKER}, evidence_map citing the evidence_id from the completed read_image result, tests_run containing read_image image_probe.png, tests_not_run as an empty array, known_risks as an empty array, and unverified_claims as an empty array. submit_final must be the last tool call."
+    );
+    let (kernel, request) = make_kernel_request_for_role_with_blob_store_and_requirements(
+        &tmp,
+        "role_producer",
+        &goal,
+        Vec::new(),
+        Vec::new(),
+        vec![EvidenceType::SourceRef],
+    );
+    register_live_model_alias(
+        &kernel,
+        &request,
+        LIVE_IMAGE_CAPABLE_MODEL_ALIAS,
+        &model,
+        true,
+    );
+    let client = OpenAiModelClient::new(api_key, model.clone())
+        .with_api_base(api_base.clone())
+        .with_api_style(api_style)
+        .with_max_tokens(2048)
+        .with_audit_log(audit_log_path.clone());
+    append_jsonl(
+        &audit_log_path,
+        &json!({
+            "type": "live_read_image_success_start",
+            "provider": provider,
+            "api_base": api_base,
+            "model": model,
+            "workspace": tmp,
+            "model_alias": LIVE_IMAGE_CAPABLE_MODEL_ALIAS,
+            "task_goal": request.thread.task.goal,
+        }),
+    )
+    .unwrap();
+
+    let mut runtime = ThreadRuntime::new(kernel.clone(), request.thread.thread_id.clone(), client);
+    let mut config = live_runtime_config(&tmp, 8);
+    config.requested_model_alias = Some(LIVE_IMAGE_CAPABLE_MODEL_ALIAS.to_string());
+    let report = runtime.run_to_completion(config).unwrap();
+    assert!(report.final_submitted);
+    assert_all_tool_calls_completed(&report);
+    assert_completed_tool(&report, "read_image");
+    assert_submit_final_summary(&report, LIVE_IMAGE_OK_MARKER);
+    assert_provider_request_exposes_tool(&audit_log_path, "read_image");
+    assert_provider_request_contains_image_payload(&audit_log_path, provider);
+    append_jsonl(
+        &audit_log_path,
+        &json!({
+            "type": "live_read_image_success_summary",
+            "provider": provider,
+            "report": report,
+        }),
+    )
+    .unwrap();
+    println!("live_read_image_success_log={}", audit_log_path.display());
+    let _ = std::fs::remove_dir_all(tmp);
+}
+
+fn run_live_llm_read_image_unsupported_e2e(
+    provider: &str,
+    api_style: LlmApiStyle,
+    api_key_env: &str,
+    model_env: &str,
+    base_env: &str,
+    log_file_name: &str,
+) {
+    let api_key = live_env_var(api_key_env);
+    let model = live_env_var(model_env);
+    let api_base = live_env_var(base_env);
+    let tmp = fresh_live_tmp("aos-live-read-image-unsupported", provider);
+    std::fs::write(tmp.join("image_probe.png"), LIVE_IMAGE_PROBE_PNG).unwrap();
+    std::fs::write(
+        tmp.join("image_status.txt"),
+        "image_input=false\nread_image must be unavailable for this live text-only model.\n",
+    )
+    .unwrap();
+    let audit_log_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/agent-os-audit")
+        .join(log_file_name);
+    let _ = std::fs::remove_file(&audit_log_path);
+    let goal = format!(
+        "This run intentionally uses a model alias without image_input capability. Confirm the unsupported image-input condition by reading image_status.txt. Do not call run_command. Do not attempt image analysis. If read_image is not visible, that is the expected result. Then call submit_final with summary exactly {LIVE_IMAGE_UNSUPPORTED_MARKER}, evidence_map citing the evidence_id from the completed read_file result, tests_run containing read_file image_status.txt, tests_not_run as an empty array, known_risks as an empty array, and unverified_claims as an empty array. submit_final must be the last tool call."
+    );
+    let (kernel, request) = make_kernel_request_for_role_with_blob_store_and_requirements(
+        &tmp,
+        "role_producer",
+        &goal,
+        Vec::new(),
+        Vec::new(),
+        vec![EvidenceType::SourceRef],
+    );
+    register_live_model_alias(&kernel, &request, LIVE_TEXT_ONLY_MODEL_ALIAS, &model, false);
+    let client = OpenAiModelClient::new(api_key, model.clone())
+        .with_api_base(api_base.clone())
+        .with_api_style(api_style)
+        .with_max_tokens(2048)
+        .with_audit_log(audit_log_path.clone());
+    append_jsonl(
+        &audit_log_path,
+        &json!({
+            "type": "live_read_image_unsupported_start",
+            "provider": provider,
+            "api_base": api_base,
+            "model": model,
+            "workspace": tmp,
+            "model_alias": LIVE_TEXT_ONLY_MODEL_ALIAS,
+            "task_goal": request.thread.task.goal,
+        }),
+    )
+    .unwrap();
+
+    let mut runtime = ThreadRuntime::new(kernel.clone(), request.thread.thread_id.clone(), client);
+    let mut config = live_runtime_config(&tmp, 8);
+    config.requested_model_alias = Some(LIVE_TEXT_ONLY_MODEL_ALIAS.to_string());
+    let report = runtime.run_to_completion(config).unwrap();
+    assert!(report.final_submitted);
+    assert_all_tool_calls_completed(&report);
+    assert_completed_tool(&report, "read_file");
+    assert_submit_final_summary(&report, LIVE_IMAGE_UNSUPPORTED_MARKER);
+    assert_no_completed_read_image(&report);
+    assert_provider_requests_do_not_expose_tool(&audit_log_path, "read_image");
+    append_jsonl(
+        &audit_log_path,
+        &json!({
+            "type": "live_read_image_unsupported_summary",
+            "provider": provider,
+            "report": report,
+        }),
+    )
+    .unwrap();
+    println!(
+        "live_read_image_unsupported_log={}",
+        audit_log_path.display()
+    );
+    let _ = std::fs::remove_dir_all(tmp);
+}
+
+fn run_live_llm_switch_read_image_context_to_text_only_model(
+    provider: &str,
+    api_style: LlmApiStyle,
+    api_key_env: &str,
+    model_env: &str,
+    base_env: &str,
+    log_file_name: &str,
+) {
+    let api_key = live_env_var(api_key_env);
+    let model = live_env_var(model_env);
+    let api_base = live_env_var(base_env);
+    let tmp = fresh_live_tmp("aos-live-read-image-switch-text-only", provider);
+    let audit_log_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/agent-os-audit")
+        .join(log_file_name);
+    let _ = std::fs::remove_file(&audit_log_path);
+    let request = live_read_image_context_request(
+        &tmp,
+        false,
+        "Continue this conversation after a previous image was read. The current model route is text-only, so do not request image input. Reply normally or call submit_final only if appropriate.",
+    );
+    let mut client = OpenAiModelClient::new(api_key, model.clone())
+        .with_api_base(api_base.clone())
+        .with_api_style(api_style)
+        .with_max_tokens(512)
+        .with_audit_log(audit_log_path.clone());
+    append_jsonl(
+        &audit_log_path,
+        &json!({
+            "type": "live_read_image_switch_text_only_start",
+            "provider": provider,
+            "api_base": api_base,
+            "model": model,
+            "workspace": tmp,
+            "model_capabilities": request.model_capabilities.clone(),
+        }),
+    )
+    .unwrap();
+
+    let response = crate::ModelClient::next(&mut client, &request).unwrap();
+    assert!(
+        response.actions.iter().all(|action| {
+            !matches!(action, ModelAction::ToolCall(tool) if tool.tool_name == "read_image")
+        }),
+        "text-only switch response attempted read_image: {:?}",
+        response.actions
+    );
+    assert_provider_requests_do_not_expose_tool(&audit_log_path, "read_image");
+    assert_provider_requests_do_not_contain_image_payload(&audit_log_path, provider);
+    append_jsonl(
+        &audit_log_path,
+        &json!({
+            "type": "live_read_image_switch_text_only_summary",
+            "provider": provider,
+            "actions": response.actions,
+        }),
+    )
+    .unwrap();
+    println!(
+        "live_read_image_switch_text_only_log={}",
+        audit_log_path.display()
+    );
+    let _ = std::fs::remove_dir_all(tmp);
+}
+
+fn run_live_llm_forced_image_payload_returns_provider_error(
+    provider: &str,
+    api_style: LlmApiStyle,
+    api_key_env: &str,
+    model_env: &str,
+    base_env: &str,
+    log_file_name: &str,
+) {
+    let api_key = live_env_var(api_key_env);
+    let model = live_env_var(model_env);
+    let api_base = live_env_var(base_env);
+    let tmp = fresh_live_tmp("aos-live-read-image-forced-error", provider);
+    let audit_log_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/agent-os-audit")
+        .join(log_file_name);
+    let _ = std::fs::remove_file(&audit_log_path);
+    let request = live_read_image_context_request(
+        &tmp,
+        true,
+        "This live negative test intentionally sends a prior read_image image payload to the current provider model. The model is expected to reject image input.",
+    );
+    let mut client = OpenAiModelClient::new(api_key, model.clone())
+        .with_api_base(api_base.clone())
+        .with_api_style(api_style)
+        .with_max_tokens(512)
+        .with_audit_log(audit_log_path.clone());
+    append_jsonl(
+        &audit_log_path,
+        &json!({
+            "type": "live_read_image_forced_text_model_error_start",
+            "provider": provider,
+            "api_base": api_base,
+            "model": model,
+            "workspace": tmp,
+            "model_capabilities": request.model_capabilities.clone(),
+        }),
+    )
+    .unwrap();
+
+    let error = crate::ModelClient::next(&mut client, &request).unwrap_err();
+    let error_text = error.to_string();
+    assert!(
+        error_text.contains("API error") || error_text.contains("image"),
+        "forced image payload returned unexpected error: {error_text}"
+    );
+    assert_provider_request_exposes_tool(&audit_log_path, "read_image");
+    assert_provider_request_contains_image_payload(&audit_log_path, provider);
+    assert_provider_error_logged(&audit_log_path, provider);
+    append_jsonl(
+        &audit_log_path,
+        &json!({
+            "type": "live_read_image_forced_text_model_error_summary",
+            "provider": provider,
+            "error": error_text,
+        }),
+    )
+    .unwrap();
+    println!(
+        "live_read_image_forced_text_model_error_log={}",
+        audit_log_path.display()
+    );
+    let _ = std::fs::remove_dir_all(tmp);
+}
+
+fn run_live_llm_forced_image_payload_observes_gateway_behavior(
+    provider: &str,
+    api_style: LlmApiStyle,
+    api_key_env: &str,
+    model_env: &str,
+    base_env: &str,
+    log_file_name: &str,
+) {
+    let api_key = live_env_var(api_key_env);
+    let model = live_env_var(model_env);
+    let api_base = live_env_var(base_env);
+    let tmp = fresh_live_tmp("aos-live-read-image-forced-accepted", provider);
+    let audit_log_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/agent-os-audit")
+        .join(log_file_name);
+    let _ = std::fs::remove_file(&audit_log_path);
+    let request = live_read_image_context_request(
+        &tmp,
+        true,
+        "This live compatibility test intentionally sends a prior read_image image payload to a provider model that may not support images. Record whether the gateway accepts, ignores, or downgrades the image input.",
+    );
+    let mut client = OpenAiModelClient::new(api_key, model.clone())
+        .with_api_base(api_base.clone())
+        .with_api_style(api_style)
+        .with_max_tokens(512)
+        .with_audit_log(audit_log_path.clone());
+    append_jsonl(
+        &audit_log_path,
+        &json!({
+            "type": "live_read_image_forced_payload_observed_start",
+            "provider": provider,
+            "api_base": api_base,
+            "model": model,
+            "workspace": tmp,
+            "model_capabilities": request.model_capabilities.clone(),
+        }),
+    )
+    .unwrap();
+
+    let outcome = match crate::ModelClient::next(&mut client, &request) {
+        Ok(response) => {
+            assert_provider_error_not_logged(&audit_log_path, provider);
+            json!({
+                "status": "accepted",
+                "actions": response.actions,
+            })
+        }
+        Err(error) => {
+            assert_provider_error_logged(&audit_log_path, provider);
+            json!({
+                "status": "provider_error",
+                "error": error.to_string(),
+            })
+        }
+    };
+    assert_provider_request_exposes_tool(&audit_log_path, "read_image");
+    assert_provider_request_contains_image_payload(&audit_log_path, provider);
+    append_jsonl(
+        &audit_log_path,
+        &json!({
+            "type": "live_read_image_forced_payload_observed_summary",
+            "provider": provider,
+            "outcome": outcome,
+        }),
+    )
+    .unwrap();
+    println!(
+        "live_read_image_forced_payload_observed_log={}",
+        audit_log_path.display()
+    );
+    let _ = std::fs::remove_dir_all(tmp);
+}
+
+fn live_read_image_context_request(
+    workspace: &Path,
+    image_input: bool,
+    goal: &str,
+) -> ModelTurnRequest {
+    live_read_image_context_request_with_data_url(
+        workspace,
+        image_input,
+        goal,
+        LIVE_IMAGE_PROBE_DATA_URL,
+        LIVE_IMAGE_PROBE_PNG.len(),
+    )
+}
+
+fn live_read_image_context_request_with_data_url(
+    workspace: &Path,
+    image_input: bool,
+    goal: &str,
+    data_url: &str,
+    bytes_read: usize,
+) -> ModelTurnRequest {
+    let (_kernel, mut request) = make_kernel_request_for_role_with_blob_store_and_requirements(
+        workspace,
+        "role_producer",
+        goal,
+        Vec::new(),
+        Vec::new(),
+        vec![EvidenceType::SourceRef],
+    );
+    let mut capabilities = image_capable_model();
+    capabilities.image_input = image_input;
+    request.model_capabilities = capabilities;
+    request.context.tool_results = vec![ToolExecutionRecord {
+        call_id: "call_live_image_context".to_string(),
+        tool_name: "read_image".to_string(),
+        status: ToolCallStatus::Completed,
+        input: Some(
+            json!({"workspace_root": workspace.to_string_lossy(), "path": "image_probe.png"}),
+        ),
+        output: Some(json!({
+            "tool": "read_image",
+            "status": "ok",
+            "input": {"workspace_root": workspace.to_string_lossy(), "path": "image_probe.png"},
+            "path": "image_probe.png",
+            "mime_type": "image/png",
+            "encoding": "base64",
+            "data_url": data_url,
+            "bytes_read": bytes_read
+        })),
+        evidence_ids: vec!["evd_live_image_context".to_string()],
+        evidence_claim: Some("previous image context was read".to_string()),
+    }];
+    request
+}
+
+fn register_live_model_alias(
+    kernel: &Kernel,
+    request: &ModelTurnRequest,
+    alias: &str,
+    provider_model_name: &str,
+    image_input: bool,
+) {
+    kernel
+        .register_model_alias(
+            alias,
+            "primary-provider",
+            provider_model_name,
+            agent_os_sys::ModelCapabilities {
+                streaming: true,
+                tool_calling: true,
+                reasoning: true,
+                temperature: true,
+                image_input,
+                structured_output: true,
+            },
+            agent_os_sys::ModelLimit {
+                context: 128_000,
+                input: None,
+                output: 4_096,
+            },
+            &request.thread.config_snapshot.provider_profile_id,
+        )
+        .unwrap();
+}
+
+fn assert_completed_tool(report: &RuntimeRunReport, tool_name: &str) {
+    assert!(
+        report
+            .tool_results
+            .iter()
+            .any(|record| record.tool_name == tool_name
+                && record.status == agent_os_sys::ToolCallStatus::Completed),
+        "missing completed tool result for {tool_name}: {:?}",
+        report.tool_results
+    );
+}
+
+fn assert_no_completed_read_image(report: &RuntimeRunReport) {
+    let completed_read_image = report.tool_results.iter().any(|record| {
+        record.tool_name == "read_image" && record.status == agent_os_sys::ToolCallStatus::Completed
+    });
+    assert!(
+        !completed_read_image,
+        "text-only live run completed read_image unexpectedly: {:?}",
+        report.tool_results
+    );
+}
+
+fn assert_submit_final_summary(report: &RuntimeRunReport, expected: &str) {
+    let summary = report
+        .tool_results
+        .iter()
+        .rev()
+        .find(|record| record.tool_name == "submit_final")
+        .and_then(|record| record.input.as_ref())
+        .and_then(|input| input.get("summary"))
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("missing submit_final summary"));
+    assert_eq!(summary, expected);
+}
+
+fn assert_provider_request_exposes_tool(audit_log_path: &Path, tool_name: &str) {
+    let observed = provider_request_tool_names(audit_log_path);
+    assert!(
+        observed.iter().any(|name| name == tool_name),
+        "provider requests did not expose {tool_name}; observed tools: {observed:?}"
+    );
+}
+
+fn assert_provider_requests_do_not_expose_tool(audit_log_path: &Path, tool_name: &str) {
+    let observed = provider_request_tool_names(audit_log_path);
+    assert!(
+        observed.iter().all(|name| name != tool_name),
+        "provider requests exposed {tool_name} for text-only model; observed tools: {observed:?}"
+    );
+}
+
+fn provider_request_tool_names(audit_log_path: &Path) -> Vec<String> {
+    let mut names = Vec::new();
+    for entry in read_audit_jsonl(audit_log_path) {
+        if entry.get("type").and_then(Value::as_str) != Some("provider_request") {
+            continue;
+        }
+        let Some(tools) = entry.pointer("/body/tools").and_then(Value::as_array) else {
+            continue;
+        };
+        for tool in tools {
+            if let Some(name) = tool.pointer("/function/name").and_then(Value::as_str) {
+                names.push(name.to_string());
+            } else if let Some(name) = tool.get("name").and_then(Value::as_str) {
+                names.push(name.to_string());
+            }
+        }
+    }
+    names
+}
+
+fn assert_provider_request_contains_image_payload(audit_log_path: &Path, provider: &str) {
+    let has_image_payload = read_audit_jsonl(audit_log_path).into_iter().any(|entry| {
+        entry.get("type").and_then(Value::as_str) == Some("provider_request")
+            && json_contains_image_payload(entry.pointer("/body/messages").unwrap_or(&Value::Null))
+    });
+    assert!(
+        has_image_payload,
+        "{provider} live read_image run did not send an image payload to the provider"
+    );
+}
+
+fn assert_provider_requests_do_not_contain_image_payload(audit_log_path: &Path, provider: &str) {
+    let has_image_payload = read_audit_jsonl(audit_log_path).into_iter().any(|entry| {
+        entry.get("type").and_then(Value::as_str) == Some("provider_request")
+            && json_contains_image_payload(entry.pointer("/body/messages").unwrap_or(&Value::Null))
+    });
+    assert!(
+        !has_image_payload,
+        "{provider} text-only switch sent an image payload to the provider"
+    );
+}
+
+fn assert_provider_error_logged(audit_log_path: &Path, provider: &str) {
+    let has_provider_error = read_audit_jsonl(audit_log_path).into_iter().any(|entry| {
+        entry.get("type").and_then(Value::as_str) == Some("provider_error")
+            && entry.get("provider").and_then(Value::as_str) == Some(provider)
+    });
+    assert!(
+        has_provider_error,
+        "{provider} forced image payload did not record provider_error"
+    );
+}
+
+fn assert_provider_error_not_logged(audit_log_path: &Path, provider: &str) {
+    let has_provider_error = read_audit_jsonl(audit_log_path).into_iter().any(|entry| {
+        entry.get("type").and_then(Value::as_str) == Some("provider_error")
+            && entry.get("provider").and_then(Value::as_str) == Some(provider)
+    });
+    assert!(
+        !has_provider_error,
+        "{provider} compatibility run recorded provider_error unexpectedly"
+    );
+}
+
+fn json_contains_image_payload(value: &Value) -> bool {
+    match value {
+        Value::Array(items) => items.iter().any(json_contains_image_payload),
+        Value::Object(map) => {
+            let is_openai_image = map.get("type").and_then(Value::as_str) == Some("image_url")
+                && value
+                    .pointer("/image_url/url")
+                    .and_then(Value::as_str)
+                    .is_some();
+            let is_anthropic_image = map.get("type").and_then(Value::as_str) == Some("image")
+                && value.pointer("/source/type").and_then(Value::as_str) == Some("base64");
+            is_openai_image || is_anthropic_image || map.values().any(json_contains_image_payload)
+        }
+        _ => false,
+    }
+}
+
+fn read_audit_jsonl(path: &Path) -> Vec<Value> {
+    std::fs::read_to_string(path)
+        .unwrap_or_else(|error| panic!("read audit log {}: {error}", path.display()))
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|error| panic!("{error}: {line}")))
+        .collect()
+}
+
 fn run_live_llm_e2e(
     provider: &str,
     api_style: LlmApiStyle,
@@ -253,11 +1250,19 @@ fn run_live_llm_e2e(
         }),
     )
     .unwrap();
+    let verifier_command = if cfg!(windows) {
+        r#"command "Get-Content live_result.txt""#
+    } else {
+        r#"command "cat live_result.txt""#
+    };
+    let goal = format!(
+        "Create a workspace file named live_result.txt whose entire content is LIVE_LLM_E2E_OK followed by one newline. Verify the file content by calling run_command with {verifier_command}. Finish with a concise final result. The final submit_final call must include an evidence_map that cites evidence_ids from completed tool results."
+    );
 
     let (kernel, request) = make_kernel_request_for_role_with_blob_store_and_requirements(
         &tmp,
-        "role_worker",
-        "Create a workspace file named live_result.txt whose entire content is LIVE_LLM_E2E_OK followed by one newline. Verify the file content by calling run_command with program cat and args [\"live_result.txt\"]. Do not put cat inside args. Finish with a concise final result. The final submit_final call must include an evidence_map that cites evidence_ids from completed tool results.",
+        "role_producer",
+        &goal,
         Vec::new(),
         vec![ArtifactType::Patch],
         vec![EvidenceType::DiffRef, EvidenceType::CommandLog],
@@ -268,8 +1273,7 @@ fn run_live_llm_e2e(
         .with_max_tokens(2048)
         .with_audit_log(audit_log_path.clone());
     let mut runtime = ThreadRuntime::new(kernel.clone(), request.thread.thread_id.clone(), client);
-    let mut config = RuntimeConfig::workspace_write(tmp.clone());
-    config.max_steps = 6;
+    let config = live_runtime_config(&tmp, 6);
     let report = runtime.run_to_completion(config).unwrap();
     let result_path = tmp.join("live_result.txt");
     let result = std::fs::read_to_string(&result_path).unwrap();
@@ -313,20 +1317,20 @@ fn run_live_llm_goal_driven_workspace_e2e(
         "remove this generated scratch file\n",
     )
     .unwrap();
-    let verifier_name = if cfg!(windows) {
+    let (verifier_name, verifier_command) = if cfg!(windows) {
         std::fs::write(
                 tmp.join("verify_goal.cmd"),
                 "@echo off\r\nfindstr /C:\"Status: ready\" task.md >nul || exit /b 1\r\nfindstr /C:\"WORKSPACE_GOAL_OK\" live_result.txt >nul || exit /b 1\r\nif exist obsolete.tmp exit /b 1\r\necho WORKSPACE_GOAL_VERIFIED\r\n",
             )
             .unwrap();
-        "verify_goal.cmd"
+        ("verify_goal.cmd", r#"command ".\verify_goal.cmd""#)
     } else {
         std::fs::write(
                 tmp.join("verify_goal.sh"),
                 "#!/bin/sh\ngrep -F \"Status: ready\" task.md >/dev/null || exit 1\ngrep -F \"WORKSPACE_GOAL_OK\" live_result.txt >/dev/null || exit 1\n[ ! -e obsolete.tmp ] || exit 1\necho WORKSPACE_GOAL_VERIFIED\n",
             )
             .unwrap();
-        "verify_goal.sh"
+        ("verify_goal.sh", r#"command "sh verify_goal.sh""#)
     };
 
     let audit_log_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -335,9 +1339,9 @@ fn run_live_llm_goal_driven_workspace_e2e(
     let _ = std::fs::remove_file(&audit_log_path);
     let (kernel, request) = make_kernel_request_for_role_with_blob_store_and_requirements(
         &tmp,
-        "role_worker",
+        "role_producer",
         &format!(
-            "Prepare the workspace for release. Inspect task.md, preserve its existing Keep line, change the single status marker from draft to ready, create live_result.txt containing WORKSPACE_GOAL_OK followed by one newline, remove obsolete.tmp, run the provided verifier script {verifier_name}, and finish with a concise final result. The final submit_final call must include an evidence_map that cites evidence_ids from completed tool results."
+            "Prepare the workspace for release. Inspect task.md, preserve its existing Keep line, change the single status marker from draft to ready, create live_result.txt containing WORKSPACE_GOAL_OK followed by one newline, remove obsolete.tmp, run the provided verifier script {verifier_name} by calling run_command with {verifier_command}, and finish with a concise final result. The final submit_final call must include an evidence_map that cites evidence_ids from completed tool results."
         ),
         Vec::new(),
         vec![ArtifactType::Patch],
@@ -362,8 +1366,7 @@ fn run_live_llm_goal_driven_workspace_e2e(
     .unwrap();
 
     let mut runtime = ThreadRuntime::new(kernel.clone(), request.thread.thread_id.clone(), client);
-    let mut config = RuntimeConfig::workspace_write(tmp.clone());
-    config.max_steps = 10;
+    let config = live_runtime_config(&tmp, 24);
     let report = runtime.run_to_completion(config).unwrap();
     assert!(report.final_submitted);
     assert_all_tool_calls_completed(&report);
@@ -413,7 +1416,7 @@ fn run_live_llm_goal_driven_control_plane_e2e(
     let (kernel, request) = make_kernel_request_for_role_with_blob_store_and_requirements(
             &tmp,
             "role_supervisor",
-                "Complete this live control-plane checklist as a supervisor. 1. read_file coordination_seed.md. 2. update_checklist with one completed item. 3. record_evidence for the coordination seed. 4. report_supervisor with a concise progress message. 5. post_blackboard one task-scoped risk note on the risks channel. 6. ask_human exactly once to confirm there is no extra scope, then continue after delivery. 7. agent_control start a child worker with role_profile_id role_worker and a one-sentence goal in payload.goal. 8. set_goal with target_thread_id set to the child thread_id returned by agent_control and goal saying the live control-plane goal is achieved; do not set_goal on your own thread. 9. accomplish_goal with a concise summary. 10. submit_final with summary exactly Control-plane coordination complete., evidence_map citing evidence_ids from completed tool results, tests_run containing read_file coordination_seed.md, and known_risks as an empty array. submit_final must be the last tool call. Do not skip ask_human, agent_control, set_goal, or report_supervisor.",
+                "Complete this live control-plane checklist as a supervisor. 1. read_file coordination_seed.md. 2. update_checklist with one completed item. 3. record_evidence for the coordination seed. 4. report_supervisor with a concise progress message. 5. post_blackboard one risk note with channel_id exactly risks, scope task, and section risk. 6. ask_human exactly once to confirm there is no extra scope, then continue after delivery. 7. agent_control start a child producer with role_profile_id role_producer and a one-sentence goal in payload.goal. 8. set_goal with target_thread_id set to the child thread_id returned by agent_control and goal saying the live control-plane goal is achieved; do not set_goal on your own thread. 9. accomplish_goal with a concise summary. 10. submit_final with summary exactly Control-plane coordination complete., evidence_map citing evidence_ids from completed tool results, tests_run containing read_file coordination_seed.md, and known_risks as an empty array. submit_final must be the last tool call. Do not skip ask_human, agent_control, set_goal, or report_supervisor.",
             Vec::new(),
             Vec::new(),
             vec![EvidenceType::SourceRef],
@@ -437,8 +1440,7 @@ fn run_live_llm_goal_driven_control_plane_e2e(
     .unwrap();
 
     let mut runtime = ThreadRuntime::new(kernel.clone(), request.thread.thread_id.clone(), client);
-    let mut config = RuntimeConfig::workspace_write(tmp.clone());
-    config.max_steps = 12;
+    let config = live_runtime_config(&tmp, 12);
     let report = runtime.run_to_completion(config).unwrap();
     assert!(report.final_submitted);
     assert_all_tool_calls_completed(&report);
@@ -501,9 +1503,9 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
     let (workspace_kernel, workspace_request) =
         make_kernel_request_for_role_with_blob_store_and_requirements(
             &tmp,
-            "role_worker",
+            "role_producer",
             &format!(
-                "Complete this focused workspace validation. Read read.txt, write created.txt with exactly FULL_TOOL_SURFACE_OK followed by one newline, replace status=old with status=new in edit.txt, delete obsolete.tmp, run {verifier_command}, then call accomplish_goal with a concise summary, then submit_final with summary exactly Workspace surface complete., evidence_map citing evidence_ids from completed tool results, tests_run containing {verifier_command}, and known_risks as an empty array. submit_final must be the last tool call."
+                "Complete this focused workspace validation. Read read.txt. Use apply_patch for every workspace mutation: add created.txt with exactly FULL_TOOL_SURFACE_OK followed by one newline, update edit.txt by replacing status=old with status=new, and delete obsolete.tmp with an apply_patch delete operation. Use run_command only for the final verifier command {verifier_command}; do not use run_command for listing, deleting, or editing files. After the verifier succeeds, call accomplish_goal with a concise summary, then submit_final with summary exactly Workspace surface complete., evidence_map citing evidence_ids from completed tool results, tests_run containing {verifier_command}, and known_risks as an empty array. submit_final must be the last tool call."
             ),
             Vec::new(),
             vec![ArtifactType::Patch],
@@ -519,8 +1521,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
         workspace_request.thread.thread_id.clone(),
         workspace_client,
     );
-    let mut workspace_config = RuntimeConfig::workspace_write(tmp.clone());
-    workspace_config.max_steps = 10;
+    let workspace_config = live_runtime_config(&tmp, 14);
     let workspace_report = workspace_runtime
         .run_to_completion(workspace_config)
         .unwrap();
@@ -558,7 +1559,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
         make_kernel_request_for_role_with_blob_store_and_requirements(
             &tmp,
             "role_supervisor",
-            "Complete this focused control-plane validation. Read coordination_seed.md, update_checklist with one completed item, record_evidence for coordination_seed.md as source_ref, report_supervisor with a short progress message, post_blackboard on channel test-results with scope task and section test_result, ask_human exactly once whether there is extra scope and continue after delivery, start one child worker with role_profile_id role_worker and payload.goal, then set_goal with target_thread_id set to the child thread_id returned by agent_control and goal saying the live full-surface control-plane segment is achieved; do not set_goal on your own thread. Then call accomplish_goal with a concise summary, then submit_final with summary exactly Control-plane surface complete., evidence_map citing evidence_ids from completed tool results, tests_run containing read_file coordination_seed.md, and known_risks as an empty array. submit_final must be the last tool call.",
+            "Complete this focused control-plane validation. Read coordination_seed.md, update_checklist with one completed item, record_evidence for coordination_seed.md as source_ref, report_supervisor with a short progress message, post_blackboard on channel test-results with scope task and section test_result, ask_human exactly once whether there is extra scope and continue after delivery, start one child producer with role_profile_id role_producer and payload.goal, then set_goal with target_thread_id set to the child thread_id returned by agent_control and goal saying the live full-surface control-plane segment is achieved; do not set_goal on your own thread. Then call accomplish_goal with a concise summary, then submit_final with summary exactly Control-plane surface complete., evidence_map citing evidence_ids from completed tool results, tests_run containing read_file coordination_seed.md, and known_risks as an empty array. submit_final must be the last tool call.",
             Vec::new(),
             Vec::new(),
             vec![EvidenceType::SourceRef],
@@ -573,8 +1574,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
         control_request.thread.thread_id.clone(),
         control_client,
     );
-    let mut control_config = RuntimeConfig::workspace_write(tmp.clone());
-    control_config.max_steps = 14;
+    let control_config = live_runtime_config(&tmp, 14);
     let control_report = control_runtime.run_to_completion(control_config).unwrap();
     assert!(control_report.final_submitted);
     assert_all_tool_calls_completed(&control_report);
@@ -609,7 +1609,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
         "Agent control seed: focused live lifecycle validation\n",
     )
     .unwrap();
-    let lifecycle_kernel = Kernel::new();
+    let lifecycle_kernel = live_kernel_with_blob_stores(&tmp);
     let lifecycle_goal = lifecycle_kernel
         .register_goal(RegisterGoalInput {
             namespace: "live-e2e".to_string(),
@@ -680,7 +1680,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
             task_id: status_task.task_id.clone(),
             role_profile_id: "role_supervisor".to_string(),
             owner: "agent-os-thread-live-test".to_string(),
-            goal: "Complete this focused agent_control read-only validation. Read agent_control_seed.md, then use status_target_thread_id from that file to call agent_control status, output, and export_trace exactly once each. Use the thread_id field only; do not provide agent_id. Then submit_final with summary exactly Agent control read surface complete., evidence_map citing evidence_ids from completed tool results, and known_risks as an empty array.".to_string(),
+            goal: "Complete this focused agent_control read-only validation. Read agent_control_seed.md, then use status_target_thread_id from that file to call agent_control status, output, and export_trace exactly once each. Use the thread_id field only; do not provide agent_id. For output, omit payload.tool_call_id because the seed file does not provide a tool call id. Then submit_final with summary exactly Agent control read surface complete., evidence_map citing evidence_ids from completed tool results, and known_risks as an empty array.".to_string(),
             success_criteria: Vec::new(),
             failure_criteria: Vec::new(),
             parent_thread_id: None,
@@ -712,8 +1712,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
         status_supervisor.thread_id.clone(),
         status_client,
     );
-    let mut status_config = RuntimeConfig::workspace_write(tmp.clone());
-    status_config.max_steps = 8;
+    let status_config = live_runtime_config(&tmp, 8);
     let status_report = status_runtime.run_to_completion(status_config).unwrap();
     assert!(status_report.final_submitted);
     assert_all_tool_calls_completed(&status_report);
@@ -775,8 +1774,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
         mutation_supervisor.thread_id.clone(),
         mutation_client,
     );
-    let mut mutation_config = RuntimeConfig::workspace_write(tmp.clone());
-    mutation_config.max_steps = 10;
+    let mutation_config = live_runtime_config(&tmp, 10);
     let mutation_report = mutation_runtime.run_to_completion(mutation_config).unwrap();
     assert!(mutation_report.final_submitted);
     assert_all_tool_calls_completed(&mutation_report);
@@ -844,8 +1842,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
         terminal_supervisor.thread_id.clone(),
         terminal_client,
     );
-    let mut terminal_config = RuntimeConfig::workspace_write(tmp.clone());
-    terminal_config.max_steps = 8;
+    let mut terminal_config = live_runtime_config(&tmp, 8);
     terminal_config.tool_risk_ceiling = 6;
     let terminal_report = terminal_runtime
         .run_to_completion_with_overrides(
@@ -920,7 +1917,7 @@ fn run_live_llm_goal_driven_single_lifecycle_success_agent_control_e2e(
         .join("../../target/agent-os-audit")
         .join(log_file_name);
 
-    let kernel = Kernel::new();
+    let kernel = live_kernel_with_blob_stores(&tmp);
     let goal = kernel
         .register_goal(RegisterGoalInput {
             namespace: "live-e2e".to_string(),
@@ -998,8 +1995,7 @@ fn run_live_llm_goal_driven_single_lifecycle_success_agent_control_e2e(
     )
     .unwrap();
     let mut runtime = ThreadRuntime::new(kernel.clone(), supervisor.thread_id.clone(), client);
-    let mut config = RuntimeConfig::workspace_write(tmp.clone());
-    config.max_steps = 4;
+    let mut config = live_runtime_config(&tmp, 6);
     config.tool_risk_ceiling = 6;
     let report = runtime
         .run_to_completion_with_overrides(
@@ -1120,7 +2116,7 @@ fn live_child_agent(
     kernel
         .spawn_agent(SpawnAgentInput {
             task_id: task_id.to_string(),
-            role_profile_id: "role_worker".to_string(),
+            role_profile_id: "role_producer".to_string(),
             owner: supervisor.agent_id.clone(),
             goal: goal.to_string(),
             success_criteria: vec!["target action is observable".to_string()],

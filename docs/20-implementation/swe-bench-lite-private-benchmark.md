@@ -158,11 +158,11 @@ the Hugging Face dataset row, runs the selected agent, and writes a patch file.
 Build Agent-OS for the Linux runner:
 
 ```bash
-CARGO_TARGET_DIR=target/wsl2-linux cargo build -p agent-os-kerneld
+CARGO_TARGET_DIR=target/wsl2-linux cargo build -p agent-os-host
 CARGO_TARGET_DIR=target/wsl2-linux cargo build -p agent-os-cli --bin agent-os
 ```
 
-The Agent-OS runner starts the standalone `agent-os-kerneld` binary next to the
+The Agent-OS runner starts the standalone `agent-os-hostd` binary next to the
 CLI binary. The benchmark process must therefore run from a build output where
 both binaries are present.
 
@@ -180,10 +180,11 @@ Run the deterministic random-5 Agent-OS smoke sample used for the 2026-06-30
 long-running kernel refactor gate:
 
 ```bash
+AGENT_OS_BIN="$(pwd)/target/wsl2-linux/debug/agent-os"
 python benchmarks/swe-bench-lite/private20_runner.py run-agent-os \
   --repo-cache /root/swebench-repo-cache \
   --output-root "$RUN_ROOT" \
-  --agent-os-bin target/wsl2-linux/debug/agent-os \
+  --agent-os-bin "$AGENT_OS_BIN" \
   --instance-id sympy__sympy-15308 \
   --instance-id sympy__sympy-24066 \
   --instance-id mwaskom__seaborn-2848 \
@@ -194,10 +195,13 @@ python benchmarks/swe-bench-lite/private20_runner.py run-agent-os \
 This sample was selected by shuffling the 20-task manifest with random seed
 `20260630` and taking the first five tasks. The runner resolves `LLM_API_KEY`,
 `LLM_MODEL`, `LLM_BASE_URL`, and optional `LLM_API_STYLE` from the process
-environment first and then from the repository-root `.env` file. `--api-key-file`
-overrides the API key source, and `--base-url`, `--model`, or `--api-style`
-override their matching environment keys. If neither source supplies API style,
-the runner uses `anthropic-compatible`. Before claiming this gate, verify that
+environment first and then from the repository-root `.env` file. `LLM_MODEL` is
+the provider request model name; the runner writes an Agent-OS `config.json`
+entry whose local model key is the sanitized selection name and whose `name`
+field is the request model. `--api-key-file` overrides the API key source, and
+`--base-url`, `--model`, `--api-style`, `--context-limit`, or `--output-limit`
+override their matching runtime config values. If neither source supplies API
+style, the runner uses `anthropic-compatible`. Before claiming this gate, verify that
 `/root/swebench-repo-cache` contains bare clones for `sympy__sympy.git`,
 `mwaskom__seaborn.git`,
 `matplotlib__matplotlib.git`, and `pydata__xarray.git`.

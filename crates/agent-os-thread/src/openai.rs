@@ -1,11 +1,12 @@
-﻿mod audit;
+mod api_error;
+mod audit;
 mod client;
 mod messages;
 mod parser;
 mod prompt;
 mod tools;
 
-pub use client::{LlmApiStyle, OpenAiModelClient};
+pub use client::OpenAiModelClient;
 
 #[cfg(test)]
 pub(super) use audit::append_jsonl;

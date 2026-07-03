@@ -151,7 +151,7 @@ fn main() {
         let agent = kernel
             .spawn_agent(SpawnAgentInput {
                 task_id: task.task_id,
-                role_profile_id: "role_worker".to_string(),
+                role_profile_id: "role_producer".to_string(),
                 owner: "agent-os-thread-test".to_string(),
                 goal: "Run one external model turn".to_string(),
                 success_criteria: Vec::new(),
@@ -167,6 +167,7 @@ fn main() {
                 thread: agent,
                 workspace_root: workspace.clone(),
                 step_index: 7,
+                model_capabilities: ModelCapabilities::default(),
                 context: crate::ModelContextProjection::default(),
             })
             .unwrap();
@@ -242,7 +243,7 @@ fn main() {
         let agent = kernel
             .spawn_agent(SpawnAgentInput {
                 task_id: task.task_id,
-                role_profile_id: "role_worker".to_string(),
+                role_profile_id: "role_producer".to_string(),
                 owner: "agent-os-thread-test".to_string(),
                 goal: "Run one external model turn".to_string(),
                 success_criteria: Vec::new(),
@@ -258,6 +259,7 @@ fn main() {
                 thread: agent,
                 workspace_root: workspace.clone(),
                 step_index: 0,
+                model_capabilities: ModelCapabilities::default(),
                 context: crate::ModelContextProjection::default(),
             })
             .unwrap_err();

@@ -27,6 +27,13 @@ pub use job::{RuntimeJob, RuntimeJobRecord, RuntimeJobStatus};
 pub use report::{RuntimeConfig, RuntimeRunOverrides, RuntimeRunReport};
 
 const MAX_PROJECTED_ARTIFACTS: usize = 8;
+const RUNTIME_GRANT_RESOURCE_SCOPE_CANDIDATES: &[&str] = &[
+    "tool:*",
+    "instruction:*",
+    "skill:*",
+    "skill_file:*",
+    "mcp:*",
+];
 
 pub struct ThreadRuntime<C> {
     kernel: Kernel,
@@ -63,7 +70,6 @@ impl<C: ModelClient> ThreadRuntime<C> {
         config: RuntimeConfig,
         overrides: RuntimeRunOverrides,
     ) -> AgentOsResult<RuntimeRunReport> {
-        crate::ecosystem::import_workspace_ecosystem(&self.kernel, &config.workspace_root)?;
         let acb = self.acb()?;
         self.kernel.update_task(UpdateTaskInput {
             task_id: acb.task.task_id.clone(),
@@ -91,7 +97,6 @@ impl<C: ModelClient> ThreadRuntime<C> {
         config: RuntimeConfig,
         overrides: RuntimeRunOverrides,
     ) -> AgentOsResult<RuntimeRunReport> {
-        crate::ecosystem::import_workspace_ecosystem(&self.kernel, &config.workspace_root)?;
         let job = self.job.clone().ok_or_else(|| {
             AgentOsError::Validation("run_job_to_completion requires RuntimeJob".to_string())
         })?;
@@ -140,13 +145,7 @@ impl<C: ModelClient> ThreadRuntime<C> {
             &acb.agent_id,
             &acb.task.task_id,
             vec!["tool.invoke".to_string()],
-            vec![
-                "tool:*".to_string(),
-                "instruction:*".to_string(),
-                "skill:*".to_string(),
-                "skill_file:*".to_string(),
-                "mcp:*".to_string(),
-            ],
+            runtime_grant_resource_scopes(&acb.effective_permissions_snapshot),
             config.tool_risk_ceiling,
             overrides.tool_approval_id.clone(),
         )?;
@@ -259,6 +258,7 @@ impl<C: ModelClient> ThreadRuntime<C> {
                 thread: acb.clone(),
                 workspace_root: config.workspace_root.clone(),
                 step_index,
+                model_capabilities: stream.route_decision.model_capabilities.clone(),
                 context: ModelContextProjection {
                     tool_results: projected_tool_results,
                     artifacts: projected_artifacts,
@@ -300,6 +300,7 @@ impl<C: ModelClient> ThreadRuntime<C> {
                 }
             };
             let mut turn_had_completion_action = false;
+            let mut duplicate_block_reason = None;
             let mut output_texts = Vec::new();
             for action in response.actions {
                 match action {
@@ -336,9 +337,20 @@ impl<C: ModelClient> ThreadRuntime<C> {
                             )?;
                             continue;
                         }
+                        if action.tool_name == "read_image"
+                            && !request.model_capabilities.image_input
+                        {
+                            tool_results
+                                .push(unsupported_image_input_tool_record(step_index, &action));
+                            self.kernel.record_checkpoint(
+                                &acb.thread_id,
+                                format!("ckpt_after_model_capability_feedback_{}", new_id("y_")),
+                            )?;
+                            continue;
+                        }
                         if should_guard_duplicate_tool_call(&action) {
                             let duplicate_count = repeated_tool_call.observe(&action);
-                            if duplicate_count > MAX_CONSECUTIVE_IDENTICAL_TOOL_CALLS {
+                            if duplicate_count >= DUPLICATE_TOOL_WARNING_COUNT {
                                 tool_results.push(duplicate_tool_feedback_record(
                                     step_index,
                                     duplicate_count,
@@ -348,6 +360,12 @@ impl<C: ModelClient> ThreadRuntime<C> {
                                     &acb.thread_id,
                                     format!("ckpt_after_duplicate_tool_feedback_{}", new_id("y_")),
                                 )?;
+                                if duplicate_count >= MAX_CONSECUTIVE_IDENTICAL_TOOL_CALLS {
+                                    duplicate_block_reason = Some(format!(
+                                        "runtime received {duplicate_count} consecutive identical tool calls for `{}`",
+                                        action.tool_name
+                                    ));
+                                }
                                 continue;
                             }
                         } else {
@@ -483,6 +501,17 @@ impl<C: ModelClient> ThreadRuntime<C> {
                     tool_results,
                     artifacts,
                 );
+            }
+            if !final_submitted {
+                if let Some(reason) = duplicate_block_reason {
+                    return self.block_without_final(
+                        &acb,
+                        reason,
+                        provider_stream_session_ids,
+                        tool_results,
+                        artifacts,
+                    );
+                }
             }
             if final_submitted {
                 break;
@@ -925,6 +954,31 @@ impl<C: ModelClient> ThreadRuntime<C> {
             })
             .collect())
     }
+}
+
+fn runtime_grant_resource_scopes(permissions: &PermissionSet) -> Vec<String> {
+    RUNTIME_GRANT_RESOURCE_SCOPE_CANDIDATES
+        .iter()
+        .filter(|scope| {
+            permissions
+                .resource_scopes
+                .iter()
+                .any(|allowed| scope_pattern_allows(allowed, scope))
+        })
+        .map(|scope| (*scope).to_string())
+        .collect()
+}
+
+fn scope_pattern_allows(allowed: &str, requested: &str) -> bool {
+    if allowed == "*" || allowed == requested {
+        return true;
+    }
+    allowed.strip_suffix(":*").is_some_and(|prefix| {
+        requested == prefix
+            || requested
+                .strip_prefix(prefix)
+                .is_some_and(|rest| rest.starts_with(':'))
+    })
 }
 
 #[cfg(test)]

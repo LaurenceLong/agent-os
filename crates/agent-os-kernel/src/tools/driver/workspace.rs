@@ -2,6 +2,7 @@ use crate::state::ToolStreamOutput;
 use crate::util::{hash_json, required_string};
 use crate::*;
 use agent_os_sys::*;
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
@@ -150,6 +151,57 @@ pub(in crate::tools) fn run_workspace_read_file(
     }))
 }
 
+pub(in crate::tools) fn run_workspace_read_image(
+    kernel: &Kernel,
+    syscall: &SyscallEnvelope,
+    descriptor: &ToolDescriptor,
+    input: &Value,
+) -> AgentOsResult<Value> {
+    let workspace_root = PathBuf::from(required_string(input, "workspace_root")?);
+    let relative_path = PathBuf::from(required_string(input, "path")?);
+    let mime_type = image_mime_type(&relative_path).ok_or_else(|| {
+        AgentOsError::Validation(
+            "read_image supports png, jpg, jpeg, gif, webp, bmp, tif, tiff, avif, and ico files"
+                .to_string(),
+        )
+    })?;
+    let (root, path) = resolve_workspace_path(&workspace_root, &relative_path)?;
+    ensure_environment_lease_for_path(kernel, syscall, &root, false)?;
+    ensure_workspace_target_contained(&root, &path)?;
+    let metadata = fs::metadata(&path)
+        .map_err(|error| AgentOsError::Validation(format!("stat workspace image: {error}")))?;
+    if !metadata.is_file() {
+        return Err(AgentOsError::Validation(
+            "read_image path must point to a file".to_string(),
+        ));
+    }
+    if metadata.len() == 0 {
+        return Err(AgentOsError::Validation(
+            "read_image cannot read an empty image file".to_string(),
+        ));
+    }
+    if metadata.len() > super::super::builtin::read_image::MAX_IMAGE_BYTES {
+        return Err(AgentOsError::Validation(format!(
+            "read_image file exceeds {} byte limit",
+            super::super::builtin::read_image::MAX_IMAGE_BYTES
+        )));
+    }
+    let bytes = fs::read(&path)
+        .map_err(|error| AgentOsError::Validation(format!("read workspace image: {error}")))?;
+    let encoded = BASE64_STANDARD.encode(&bytes);
+    Ok(json!({
+        "tool": descriptor.name.clone(),
+        "status": "ok",
+        "input": input.clone(),
+        "driver_class": descriptor.driver_class,
+        "path": path.to_string_lossy(),
+        "mime_type": mime_type,
+        "encoding": "base64",
+        "data_url": format!("data:{mime_type};base64,{encoded}"),
+        "bytes_read": bytes.len(),
+    }))
+}
+
 pub(in crate::tools) fn run_process(
     kernel: &Kernel,
     syscall: &SyscallEnvelope,
@@ -157,30 +209,22 @@ pub(in crate::tools) fn run_process(
     tool_call_id: &str,
     input: &Value,
 ) -> AgentOsResult<Value> {
-    let program = required_string(input, "program")?;
+    let command_text = required_string(input, "command")?;
     let cwd = PathBuf::from(required_string(input, "cwd")?);
-    let args = input
-        .get("args")
-        .and_then(Value::as_array)
-        .ok_or_else(|| AgentOsError::Validation("run_command args must be an array".to_string()))?
-        .iter()
-        .map(|arg| {
-            arg.as_str().map(str::to_string).ok_or_else(|| {
-                AgentOsError::Validation("run_command args must be strings".to_string())
-            })
-        })
-        .collect::<AgentOsResult<Vec<_>>>()?;
-    if args.first().is_some_and(|arg| arg == &program) {
+    let args = optional_string_array(input, "args")?.unwrap_or_default();
+    let mode = run_command_mode(input, !args.is_empty())?;
+    if mode == "shell" && !args.is_empty() {
         return Err(AgentOsError::Validation(
-            "run_command args must not include the program itself as args[0]".to_string(),
+            "run_command args require exec mode".to_string(),
         ));
     }
     let env = optional_string_map(input, "env")?;
     let cwd = canonical_workspace_root(&cwd)?;
     ensure_environment_lease_for_path(kernel, syscall, &cwd, false)?;
-    let mut command = Command::new(program);
+    let (program, command_args) = run_command_program_and_args(&mode, &command_text, args);
+    let mut command = Command::new(&program);
     command
-        .args(args)
+        .args(&command_args)
         .current_dir(&cwd)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -241,6 +285,9 @@ pub(in crate::tools) fn run_process(
         "input": input.clone(),
         "driver_class": descriptor.driver_class,
         "exit_code": status.code().unwrap_or(-1),
+        "execution_mode": mode,
+        "executed_program": program,
+        "executed_args": command_args,
         "stdout": stdout.tail_window(super::super::builtin::run_command::OUTPUT_PREVIEW_CHARS).text,
         "stderr": stderr.tail_window(super::super::builtin::run_command::OUTPUT_PREVIEW_CHARS).text,
         "stdout_truncated": stdout.truncated,
@@ -248,6 +295,49 @@ pub(in crate::tools) fn run_process(
         "stdout_bytes": stdout.bytes,
         "stderr_bytes": stderr.bytes,
     }))
+}
+
+fn run_command_mode(input: &Value, has_args: bool) -> AgentOsResult<String> {
+    let mode = optional_string(input, "mode")?.unwrap_or_else(|| {
+        if has_args {
+            "exec".to_string()
+        } else {
+            "shell".to_string()
+        }
+    });
+    match mode.as_str() {
+        "shell" | "exec" => Ok(mode),
+        _ => Err(AgentOsError::Validation(
+            "run_command mode must be shell or exec".to_string(),
+        )),
+    }
+}
+
+fn run_command_program_and_args(
+    mode: &str,
+    command_text: &str,
+    args: Vec<String>,
+) -> (String, Vec<String>) {
+    if mode == "exec" {
+        return (command_text.to_string(), args);
+    }
+    if cfg!(windows) {
+        (
+            "powershell.exe".to_string(),
+            vec![
+                "-NoProfile".to_string(),
+                "-ExecutionPolicy".to_string(),
+                "Bypass".to_string(),
+                "-Command".to_string(),
+                command_text.to_string(),
+            ],
+        )
+    } else {
+        (
+            "sh".to_string(),
+            vec!["-lc".to_string(), command_text.to_string()],
+        )
+    }
 }
 
 fn tool_output_spool_paths(tool_call_id: &str) -> AgentOsResult<(PathBuf, PathBuf)> {
@@ -369,6 +459,48 @@ fn optional_string_map(input: &Value, field: &str) -> AgentOsResult<BTreeMap<Str
         env.insert(key.clone(), value.to_string());
     }
     Ok(env)
+}
+
+fn optional_string(input: &Value, field: &str) -> AgentOsResult<Option<String>> {
+    let Some(value) = input.get(field) else {
+        return Ok(None);
+    };
+    value
+        .as_str()
+        .map(|value| Some(value.to_string()))
+        .ok_or_else(|| AgentOsError::Validation(format!("run_command {field} must be a string")))
+}
+
+fn optional_string_array(input: &Value, field: &str) -> AgentOsResult<Option<Vec<String>>> {
+    let Some(value) = input.get(field) else {
+        return Ok(None);
+    };
+    value
+        .as_array()
+        .ok_or_else(|| AgentOsError::Validation(format!("run_command {field} must be an array")))?
+        .iter()
+        .map(|item| {
+            item.as_str().map(str::to_string).ok_or_else(|| {
+                AgentOsError::Validation(format!("run_command {field} values must be strings"))
+            })
+        })
+        .collect::<AgentOsResult<Vec<_>>>()
+        .map(Some)
+}
+
+fn image_mime_type(path: &Path) -> Option<&'static str> {
+    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+    match extension.as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        "bmp" => Some("image/bmp"),
+        "tif" | "tiff" => Some("image/tiff"),
+        "avif" => Some("image/avif"),
+        "ico" => Some("image/x-icon"),
+        _ => None,
+    }
 }
 
 enum WorkspacePatch {
@@ -827,5 +959,13 @@ mod tests {
             error.contains("apply_patch update hunk must change at least one line"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn image_mime_type_maps_supported_extensions_and_rejects_svg() {
+        assert_eq!(image_mime_type(Path::new("shot.PNG")), Some("image/png"));
+        assert_eq!(image_mime_type(Path::new("photo.jpeg")), Some("image/jpeg"));
+        assert_eq!(image_mime_type(Path::new("icon.svg")), None);
+        assert_eq!(image_mime_type(Path::new("archive.zip")), None);
     }
 }

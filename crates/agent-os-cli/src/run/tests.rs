@@ -197,7 +197,7 @@ impl RunAppClient for FakeRunClient {
                 assert_eq!(client_thread_id, "thread_1");
                 Ok(json!({
                     "bundle": {
-                        "abi_version": "0.2.0",
+                        "abi_version": "0.3.0",
                         "bundle_kind": "task",
                         "exported_at": "2026-06-30T00:00:00Z",
                         "root_task_id": "task_1",
@@ -389,7 +389,7 @@ fn first_evidence_id(input: &str) -> String {
         task: "Write result.md with an external model".to_string(),
         output: PathBuf::from("result.md"),
         bundle_output: Some(PathBuf::from("bundle/run.json")),
-        state_db: None,
+        state_db: Some(workspace.join("agent-os.sqlite")),
         model_command: Some(model_program),
         model_args: Vec::new(),
     };

@@ -12,6 +12,7 @@ pub struct ModelTurnRequest {
     pub thread: AgentControlBlock,
     pub workspace_root: PathBuf,
     pub step_index: u32,
+    pub model_capabilities: ModelCapabilities,
     pub context: ModelContextProjection,
 }
 

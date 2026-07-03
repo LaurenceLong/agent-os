@@ -345,7 +345,7 @@ fn memento_is_owner_scoped_and_triggered_by_child_completion() {
         .kernel
         .spawn_agent(SpawnAgentInput {
             task_id: fx.task.task_id.clone(),
-            role_profile_id: "role_worker".to_string(),
+            role_profile_id: "role_producer".to_string(),
             owner: "tester".to_string(),
             goal: "test".to_string(),
             success_criteria: Vec::new(),

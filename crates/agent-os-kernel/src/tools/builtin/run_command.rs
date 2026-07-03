@@ -20,13 +20,14 @@ fn descriptor(now: &str) -> ToolDescriptor {
         schema::DescriptorSpec {
             tool_id: "tool_run_command",
             name: "run_command",
-            description: "Run an allowlisted command in the workspace and capture bounded stdout, stderr, exit code, and truncation metadata.",
+            description: "Run a shell command in the workspace by default, or run one executable with explicit args in exec mode. Captures bounded stdout, stderr, exit code, and truncation metadata.",
             driver_class: ToolDriverClass::Shell,
             risk_level: 4,
             input_schema: schema::object(
-            &["program", "args", "cwd"],
+            &["command", "cwd"],
             json!({
-                "program": {"type": "string"},
+                "command": {"type": "string"},
+                "mode": {"enum": ["shell", "exec"]},
                 "args": {"type": "array", "items": {"type": "string"}},
                 "cwd": {"type": "string"},
                 "env": {
@@ -36,12 +37,19 @@ fn descriptor(now: &str) -> ToolDescriptor {
             }),
         ),
             model_input_schema: schema::object(
-            &["program", "args"],
+            &["command"],
             json!({
-                "program": {"type": "string"},
+                "command": {
+                    "type": "string",
+                    "description": "Shell command by default. In exec mode, this is the executable name or path."
+                },
+                "mode": {
+                    "enum": ["shell", "exec"],
+                    "description": "Defaults to shell. If args is present and mode is omitted, exec mode is inferred."
+                },
                 "args": {
                     "type": "array",
-                    "description": "Arguments only. Do not include the program itself as args[0].",
+                    "description": "Optional exec-mode arguments for command. Omit for normal shell command strings.",
                     "items": {"type": "string"}
                 },
                 "env": {
@@ -53,18 +61,18 @@ fn descriptor(now: &str) -> ToolDescriptor {
         ),
             examples: vec![
                 schema::example(
-                    "List the workspace directory without repeating the executable in args.",
-                    json!({"program": "ls", "args": ["-la"]}),
+                    "Search the workspace with the default shell command mode.",
+                    json!({"command": "rg -n \"TODO\" crates"}),
                     "Returns exit_code plus bounded stdout/stderr and truncation metadata.",
                 ),
                 schema::example(
-                    "Run a focused Python test through the module entrypoint.",
-                    json!({"program": "python", "args": ["-m", "pytest", "tests/test_api.py"]}),
+                    "Run a focused Python test through shell syntax.",
+                    json!({"command": "python -m pytest tests/test_api.py"}),
                     "Returns the test command exit code plus bounded stdout/stderr.",
                 ),
                 schema::example(
-                    "Run a focused Rust test command with explicit arguments.",
-                    json!({"program": "cargo", "args": ["test", "-p", "agent-os-kernel"]}),
+                    "Run one executable with explicit argv when shell parsing is not wanted.",
+                    json!({"mode": "exec", "command": "cargo", "args": ["test", "-p", "agent-os-kernel"]}),
                     "Returns exit_code plus bounded stdout/stderr and truncation metadata.",
                 ),
             ],
@@ -90,6 +98,9 @@ fn descriptor(now: &str) -> ToolDescriptor {
                 "stderr": {"type": "string"},
                 "stdout_truncated": {"type": "boolean"},
                 "stderr_truncated": {"type": "boolean"},
+                "execution_mode": {"enum": ["shell", "exec"]},
+                "executed_program": {"type": "string"},
+                "executed_args": {"type": "array", "items": {"type": "string"}},
                 "stdout_bytes": {"type": "integer"},
                 "stderr_bytes": {"type": "integer"}
             }),
@@ -130,7 +141,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn schema_requires_program_args_and_injects_cwd() {
+    fn schema_requires_command_and_injects_cwd() {
         let descriptor = descriptor("now");
         let required = descriptor
             .model_input_schema
@@ -139,8 +150,8 @@ mod tests {
             .pointer("/required")
             .and_then(Value::as_array)
             .unwrap();
-        assert!(required.iter().any(|value| value == "program"));
-        assert!(required.iter().any(|value| value == "args"));
+        assert!(required.iter().any(|value| value == "command"));
+        assert!(!required.iter().any(|value| value == "args"));
         assert!(descriptor
             .model_input_schema
             .as_ref()
@@ -155,18 +166,18 @@ mod tests {
                 .map(String::as_str),
             Some("workspace_root")
         );
-        let args_description = descriptor
+        let command_description = descriptor
             .model_input_schema
             .as_ref()
             .unwrap()
-            .pointer("/properties/args/description")
+            .pointer("/properties/command/description")
             .and_then(Value::as_str)
             .unwrap();
-        assert!(args_description.contains("Do not include the program itself"));
+        assert!(command_description.contains("Shell command by default"));
         assert!(descriptor
             .examples
             .iter()
-            .any(|example| example.parameters == json!({"program": "ls", "args": ["-la"]})));
+            .any(|example| example.parameters == json!({"command": "rg -n \"TODO\" crates"})));
     }
 
     #[test]

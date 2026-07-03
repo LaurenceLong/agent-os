@@ -64,12 +64,12 @@ fn selected_task_bundle_exports_replayable_projection_slice() {
         .profile_snapshot
         .role_profiles
         .iter()
-        .any(|profile| profile.role_profile_id == "role_worker"));
+        .any(|profile| profile.role_profile_id == "role_producer"));
     assert!(bundle
         .profile_snapshot
         .permission_profiles
         .iter()
-        .any(|profile| profile.permission_profile_id == "perm_worker"));
+        .any(|profile| profile.permission_profile_id == "perm_producer"));
     for required_event in [
         "GoalRegistered",
         "TaskSpawned",

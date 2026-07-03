@@ -34,6 +34,8 @@ class ProviderSpec:
     model: str
     api_key: str
     api_style: str
+    context_limit: int = 128000
+    output_limit: int = 8192
 
 
 DEFAULT_SWEBENCH_VENV = Path("/root/agent-os-swebench-venv")
@@ -349,17 +351,35 @@ def evaluate_agent_os_run(
     ) else 1
 
 
+def agent_os_config_model_id(request_model_name: str) -> str:
+    model_id = request_model_name.strip().replace("/", "_")
+    if not model_id:
+        raise ValueError("Agent-OS request model name must not be empty")
+    return model_id
+
+
 def write_agent_os_provider_config(*, config_home: Path, provider: ProviderSpec) -> Path:
-    path = config_home / "agent-os" / "providers.json"
+    model_id = agent_os_config_model_id(provider.model)
+    path = config_home / "agent-os" / "config.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     data = {
-        "default_provider": "default",
-        "providers": {
+        "model": f"default/{model_id}",
+        "provider": {
             "default": {
                 "api_key": provider.api_key,
-                "base_url": provider.base_url,
-                "model": provider.model,
                 "api_style": provider.api_style,
+                "options": {
+                    "base_url": provider.base_url,
+                },
+                "models": {
+                    model_id: {
+                        "name": provider.model,
+                        "limit": {
+                            "context": provider.context_limit,
+                            "output": provider.output_limit,
+                        },
+                    },
+                },
             }
         },
     }
@@ -448,14 +468,15 @@ def build_agent_os_command(
     state_db: Path,
     bundle_output: Path,
     task_file: Path,
+    model: str,
     max_steps: int,
     runtime_timeout_seconds: int,
 ) -> list[str]:
     return [
         agent_os_bin.as_posix(),
         "chat",
-        "--provider",
-        "default",
+        "--model",
+        model,
         "--workspace",
         workspace.as_posix(),
         "--state-db",
@@ -614,12 +635,14 @@ def run_agent_os_task(
     paths["prompt"].parent.mkdir(parents=True, exist_ok=True)
     paths["prompt"].write_text(prompt, encoding="utf-8", newline="\n")
     tool_bin = prepare_agent_os_tool_bin(output_root)
+    model = f"default/{agent_os_config_model_id(provider.model)}"
     command = build_agent_os_command(
         agent_os_bin=agent_os_bin,
         workspace=paths["workspace"],
         state_db=paths["state_db"],
         bundle_output=Path("agent-os-task-bundle.json"),
         task_file=paths["prompt"],
+        model=model,
         max_steps=max_steps,
         runtime_timeout_seconds=task_timeout_seconds or 3600,
     )
@@ -743,6 +766,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     run_agent.add_argument("--api-key-file", type=Path)
     run_agent.add_argument("--api-key-env", default="LLM_API_KEY")
     run_agent.add_argument("--api-style")
+    run_agent.add_argument("--context-limit", type=int, default=128000)
+    run_agent.add_argument("--output-limit", type=int, default=8192)
     run_agent.add_argument("--max-steps", type=int, default=48)
     run_agent.add_argument("--task-timeout-seconds", type=int, default=3600)
     run_agent.add_argument("--resume-existing", action="store_true")
@@ -830,6 +855,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 dotenv_values=dotenv_values,
                 default="anthropic-compatible",
             ),
+            context_limit=args.context_limit,
+            output_limit=args.output_limit,
         )
         records = []
         for task in selected:

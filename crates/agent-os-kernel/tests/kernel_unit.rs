@@ -32,7 +32,7 @@ fn fixture() -> (Kernel, Goal, Task, AgentControlBlock, CapabilityToken) {
     let agent = kernel
         .spawn_agent(SpawnAgentInput {
             task_id: task.task_id.clone(),
-            role_profile_id: "role_worker".to_string(),
+            role_profile_id: "role_producer".to_string(),
             owner: "user".to_string(),
             goal: "patch".to_string(),
             success_criteria: Vec::new(),
@@ -52,6 +52,60 @@ fn fixture() -> (Kernel, Goal, Task, AgentControlBlock, CapabilityToken) {
         )
         .unwrap();
     (kernel, goal, task, agent, cap)
+}
+
+#[test]
+fn default_provider_profile_uses_nonzero_retry_backoff() {
+    let kernel = Kernel::new();
+    let state = kernel.state_snapshot().unwrap();
+    let profile = state
+        .provider_profiles
+        .get("prov_default")
+        .expect("default provider profile");
+    let retry_policy = profile.retry_policy.as_ref().expect("retry policy");
+
+    assert_eq!(retry_policy["max_attempts"], json!(2));
+    assert_eq!(retry_policy["backoff_ms"], json!(30_000));
+}
+
+#[test]
+fn default_model_aliases_mark_multimodal_and_text_only_routes() {
+    let kernel = Kernel::new();
+    let state = kernel.state_snapshot().unwrap();
+
+    for alias in ["coding-primary", "review-primary", "general-primary"] {
+        let model_alias = state.model_aliases.get(alias).expect("seeded model alias");
+        assert!(
+            model_alias.capabilities.image_input,
+            "{alias} should expose image input in the v0.3 default catalog"
+        );
+    }
+
+    let text_only = state
+        .model_aliases
+        .get("text-only")
+        .expect("seeded text-only model alias");
+    assert!(
+        !text_only.capabilities.image_input,
+        "text-only must fail closed for image input"
+    );
+}
+
+#[test]
+fn ready_thread_can_resume_existing_turn_as_in_progress() {
+    let (kernel, _, _, agent, _) = fixture();
+    let started = kernel.start_turn(&agent.thread_id).unwrap();
+    assert_eq!(started.active_turn.status, Some(TurnStatus::InProgress));
+
+    let ready = kernel
+        .transition_thread(&agent.thread_id, ThreadStatus::Ready, None)
+        .unwrap();
+    assert_eq!(ready.active_turn.status, Some(TurnStatus::Completed));
+
+    let running = kernel
+        .transition_thread(&agent.thread_id, ThreadStatus::Running, None)
+        .unwrap();
+    assert_eq!(running.active_turn.status, Some(TurnStatus::InProgress));
 }
 
 #[test]

@@ -128,7 +128,8 @@ fn runtime_job_runner_uses_existing_turn_without_starting_another() {
         DeterministicStep::ToolCall(ToolAction::new(
             "run_command",
             json!({
-                "program": current_exe.to_string_lossy(),
+                "mode": "exec",
+                "command": current_exe.to_string_lossy(),
                 "args": ["--help"],
                 "cwd": workspace.to_string_lossy()
             }),
@@ -136,7 +137,7 @@ fn runtime_job_runner_uses_existing_turn_without_starting_another() {
             Some("runtime job command evidence was captured".to_string()),
         )),
         DeterministicStep::Final {
-            summary: "Finished from an existing daemon turn.".to_string(),
+            summary: "Finished from an existing host turn.".to_string(),
             known_risks: Vec::new(),
             tests_run: vec!["test binary --help".to_string()],
             tests_not_run: Vec::new(),
@@ -238,7 +239,7 @@ fn deterministic_runtime_finishes_code_task_through_tool_loop() {
     let agent = kernel
         .spawn_agent(SpawnAgentInput {
             task_id: task.task_id,
-            role_profile_id: "role_worker".to_string(),
+            role_profile_id: "role_producer".to_string(),
             owner: "agent-os-thread-test".to_string(),
             goal: "Change answer from one to two".to_string(),
             success_criteria: vec!["test command passes".to_string()],
@@ -270,7 +271,8 @@ fn deterministic_runtime_finishes_code_task_through_tool_loop() {
         DeterministicStep::ToolCall(ToolAction::new(
             "run_command",
             json!({
-                "program": current_exe.to_string_lossy(),
+                "mode": "exec",
+                "command": current_exe.to_string_lossy(),
                 "args": ["--help"],
                 "cwd": workspace.to_string_lossy()
             }),
@@ -318,6 +320,95 @@ fn deterministic_runtime_finishes_code_task_through_tool_loop() {
     let _ = fs::remove_dir_all(workspace);
 }
 
+#[test]
+fn runtime_rejects_read_image_when_routed_model_lacks_image_input() {
+    struct AttemptsUnsupportedReadImage {
+        calls: u8,
+        observed_failure: Arc<AtomicBool>,
+    }
+
+    impl ModelClient for AttemptsUnsupportedReadImage {
+        fn next(&mut self, request: &ModelTurnRequest) -> AgentOsResult<ModelTurnResponse> {
+            if self.calls == 0 {
+                self.calls += 1;
+                return Ok(ModelTurnResponse::single(ModelAction::ToolCall(
+                    ToolAction::new(
+                        "read_image",
+                        json!({"path": "image_probe.png"}),
+                        1,
+                        Some("image read attempt should be rejected".to_string()),
+                    ),
+                )));
+            }
+
+            let image_result = request
+                .context
+                .tool_results
+                .iter()
+                .find(|result| result.tool_name == "read_image")
+                .unwrap_or_else(|| panic!("missing read_image capability failure"));
+            assert_eq!(image_result.status, ToolCallStatus::Failed);
+            assert_eq!(
+                image_result
+                    .output
+                    .as_ref()
+                    .and_then(|output| output.get("stage"))
+                    .and_then(serde_json::Value::as_str),
+                Some("model_capability")
+            );
+            assert_eq!(
+                image_result
+                    .output
+                    .as_ref()
+                    .and_then(|output| output.get("error"))
+                    .and_then(serde_json::Value::as_str),
+                Some("read_image requires a model with image_input capability")
+            );
+            assert!(image_result.evidence_ids.is_empty());
+            self.observed_failure.store(true, Ordering::SeqCst);
+            Ok(ModelTurnResponse::single(ModelAction::Final {
+                submission: FinalSubmission {
+                    summary: "Text-only image request rejected".to_string(),
+                    changed_artifacts: Vec::new(),
+                    evidence_map: Vec::new(),
+                    unverified_claims: Vec::new(),
+                    known_risks: Vec::new(),
+                    tests_run: Vec::new(),
+                    tests_not_run: Vec::new(),
+                    approvals: Vec::new(),
+                },
+            }))
+        }
+    }
+
+    let workspace = temp_workspace("runtime-read-image-text-only");
+    fs::write(
+        workspace.join("image_probe.png"),
+        [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
+    )
+    .unwrap();
+    let kernel = Kernel::new();
+    let agent = spawn_runtime_agent(&kernel, &workspace, "Handle text-only image request");
+    let observed_failure = Arc::new(AtomicBool::new(false));
+    let client = AttemptsUnsupportedReadImage {
+        calls: 0,
+        observed_failure: observed_failure.clone(),
+    };
+    let mut runtime = ThreadRuntime::new(kernel.clone(), agent.thread_id, client);
+    let mut config = RuntimeConfig::workspace_write(&workspace);
+    config.requested_model_alias = Some("text-only".to_string());
+    config.max_steps = 4;
+    let error = runtime.run_to_completion(config).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("final answer without evidence map is rejected"),
+        "unexpected runtime error: {error}"
+    );
+    assert!(observed_failure.load(Ordering::SeqCst));
+    let _ = fs::remove_dir_all(workspace);
+}
+
 fn temp_workspace(label: &str) -> std::path::PathBuf {
     let workspace = env::temp_dir().join(format!(
         "agent-os-thread-{label}-{}-{}",
@@ -361,7 +452,7 @@ fn spawn_runtime_agent(
     kernel
         .spawn_agent(SpawnAgentInput {
             task_id: task.task_id,
-            role_profile_id: "role_worker".to_string(),
+            role_profile_id: "role_producer".to_string(),
             owner: "agent-os-thread-test".to_string(),
             goal: goal_text.to_string(),
             success_criteria: Vec::new(),
@@ -489,7 +580,7 @@ fn runtime_projects_feedback_after_text_only_model_response() {
     let agent = kernel
         .spawn_agent(SpawnAgentInput {
             task_id: task.task_id,
-            role_profile_id: "role_worker".to_string(),
+            role_profile_id: "role_producer".to_string(),
             owner: "agent-os-thread-test".to_string(),
             goal: "Finish after feedback".to_string(),
             success_criteria: Vec::new(),
@@ -558,7 +649,8 @@ fn runtime_projects_feedback_after_repeated_identical_tool_call() {
                 ToolAction::new(
                     "run_command",
                     json!({
-                        "program": self.program.to_string_lossy(),
+                        "mode": "exec",
+                        "command": self.program.to_string_lossy(),
                         "args": ["--help"],
                         "cwd": self.workspace.to_string_lossy()
                     }),
@@ -591,7 +683,7 @@ fn runtime_projects_feedback_after_repeated_identical_tool_call() {
         .iter()
         .filter(|result| result.tool_name == "run_command")
         .count();
-    assert_eq!(run_command_results, 2);
+    assert_eq!(run_command_results, 1);
     let feedback = report
         .tool_results
         .iter()
@@ -604,6 +696,23 @@ fn runtime_projects_feedback_after_repeated_identical_tool_call() {
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
     assert!(message.contains("repeated an identical tool call"));
+    assert!(message.contains("rejected this duplicate without executing it"));
+    assert_eq!(
+        feedback
+            .input
+            .as_ref()
+            .and_then(|input| input.get("consecutive_identical_tool_calls"))
+            .and_then(serde_json::Value::as_u64),
+        Some(2)
+    );
+    assert_eq!(
+        feedback
+            .output
+            .as_ref()
+            .and_then(|output| output.get("severity"))
+            .and_then(serde_json::Value::as_str),
+        Some("warning")
+    );
     let persisted_run_commands = kernel
         .state_snapshot()
         .unwrap()
@@ -613,7 +722,7 @@ fn runtime_projects_feedback_after_repeated_identical_tool_call() {
             invocation.tool_name == "run_command" && invocation.status == ToolCallStatus::Completed
         })
         .count();
-    assert_eq!(persisted_run_commands, 2);
+    assert_eq!(persisted_run_commands, 1);
     let _ = fs::remove_dir_all(workspace);
 }
 
@@ -686,7 +795,7 @@ fn runtime_projects_feedback_after_repeated_identical_read_file_call() {
             .iter()
             .filter(|result| result.tool_name == "read_file")
             .count(),
-        2
+        1
     );
     let feedback = report
         .tool_results
@@ -701,6 +810,111 @@ fn runtime_projects_feedback_after_repeated_identical_read_file_call() {
             .and_then(serde_json::Value::as_str),
         Some("read_file")
     );
+    assert_eq!(
+        feedback
+            .output
+            .as_ref()
+            .and_then(|output| output.get("severity"))
+            .and_then(serde_json::Value::as_str),
+        Some("warning")
+    );
+    let _ = fs::remove_dir_all(workspace);
+}
+
+#[test]
+fn runtime_blocks_on_fifth_consecutive_identical_tool_call() {
+    struct RepeatReadForever;
+
+    impl ModelClient for RepeatReadForever {
+        fn next(&mut self, request: &ModelTurnRequest) -> AgentOsResult<ModelTurnResponse> {
+            Ok(ModelTurnResponse::single(ModelAction::ToolCall(
+                ToolAction::new(
+                    "read_file",
+                    json!({
+                        "workspace_root": request.workspace_root.to_string_lossy(),
+                        "path": "README.md"
+                    }),
+                    1,
+                    Some("README was inspected".to_string()),
+                ),
+            )))
+        }
+    }
+
+    let workspace = temp_workspace("runtime-duplicate-tool-block");
+    fs::write(workspace.join("README.md"), "hello\n").unwrap();
+    let kernel = Kernel::new();
+    let agent = spawn_runtime_agent(&kernel, &workspace, "Block duplicate read calls");
+    let mut config = RuntimeConfig::workspace_write(&workspace);
+    config.max_steps = 10;
+    let mut runtime = ThreadRuntime::new(kernel.clone(), agent.thread_id, RepeatReadForever);
+
+    let report = runtime.run_to_completion(config).unwrap();
+
+    assert_eq!(report.status, ThreadStatus::Blocked);
+    assert!(!report.final_submitted);
+    assert_eq!(
+        report
+            .tool_results
+            .iter()
+            .filter(|result| result.tool_name == "read_file")
+            .count(),
+        1
+    );
+    let duplicate_feedback = report
+        .tool_results
+        .iter()
+        .filter(|result| result.tool_name == "runtime_feedback")
+        .filter(|result| {
+            result
+                .input
+                .as_ref()
+                .and_then(|input| input.get("tool_name"))
+                .and_then(serde_json::Value::as_str)
+                == Some("read_file")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(duplicate_feedback.len(), 4);
+    let severities = duplicate_feedback
+        .iter()
+        .map(|result| {
+            result
+                .output
+                .as_ref()
+                .and_then(|output| output.get("severity"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(severities, vec!["warning", "warning", "warning", "error"]);
+    let duplicate_counts = duplicate_feedback
+        .iter()
+        .map(|result| {
+            result
+                .input
+                .as_ref()
+                .and_then(|input| input.get("consecutive_identical_tool_calls"))
+                .and_then(serde_json::Value::as_u64)
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(duplicate_counts, vec![2, 3, 4, 5]);
+    assert_eq!(
+        duplicate_feedback
+            .last()
+            .and_then(|result| result.input.as_ref())
+            .and_then(|input| input.get("consecutive_identical_tool_calls"))
+            .and_then(serde_json::Value::as_u64),
+        Some(MAX_CONSECUTIVE_IDENTICAL_TOOL_CALLS as u64)
+    );
+    let state = kernel.state_snapshot().unwrap();
+    let task = state.tasks.get(&report.task_id).unwrap();
+    assert_eq!(task.status, TaskStatus::Blocked);
+    assert!(task
+        .blocked_reason
+        .as_deref()
+        .unwrap_or_default()
+        .contains("5 consecutive identical tool calls"));
     let _ = fs::remove_dir_all(workspace);
 }
 
@@ -753,7 +967,8 @@ fn runtime_projects_finalization_feedback_after_patch_and_command_and_filters_to
                         ToolAction::new(
                             "run_command",
                             json!({
-                                "program": self.program.to_string_lossy(),
+                                "mode": "exec",
+                                "command": self.program.to_string_lossy(),
                                 "args": ["--help"],
                                 "cwd": self.workspace.to_string_lossy()
                             }),
@@ -816,7 +1031,8 @@ fn runtime_projects_finalization_feedback_after_patch_and_command_and_filters_to
                     ToolAction::new(
                         "run_command",
                         json!({
-                            "program": self.program.to_string_lossy(),
+                            "mode": "exec",
+                            "command": self.program.to_string_lossy(),
                             "args": ["--help"],
                             "cwd": self.workspace.to_string_lossy()
                         }),
@@ -942,7 +1158,8 @@ fn runtime_projects_pre_patch_resolution_feedback_after_bounded_investigation() 
                     ToolAction::new(
                         "run_command",
                         json!({
-                            "program": self.program.to_string_lossy(),
+                            "mode": "exec",
+                            "command": self.program.to_string_lossy(),
                             "args": ["--help"],
                             "cwd": self.workspace.to_string_lossy()
                         }),
@@ -994,7 +1211,7 @@ fn runtime_projects_pre_patch_resolution_feedback_after_bounded_investigation() 
                             json!({
                                 "workspace_root": self.workspace.to_string_lossy(),
                                 "path": "notes.txt",
-                                "offset": 0,
+                                "offset": 1,
                                 "limit": self.investigation_calls,
                             }),
                             1,
@@ -1011,7 +1228,8 @@ fn runtime_projects_pre_patch_resolution_feedback_after_bounded_investigation() 
                         ToolAction::new(
                             "run_command",
                             json!({
-                                "program": self.program.to_string_lossy(),
+                                "mode": "exec",
+                                "command": self.program.to_string_lossy(),
                                 "args": ["--help"],
                                 "cwd": self.workspace.to_string_lossy()
                             }),
@@ -1041,7 +1259,7 @@ fn runtime_projects_pre_patch_resolution_feedback_after_bounded_investigation() 
                     json!({
                         "workspace_root": self.workspace.to_string_lossy(),
                         "path": "notes.txt",
-                        "offset": 0,
+                        "offset": 1,
                         "limit": self.investigation_calls,
                     }),
                     1,
@@ -1159,7 +1377,7 @@ fn runtime_returns_blocked_report_after_consecutive_no_action_model_responses() 
     let agent = kernel
         .spawn_agent(SpawnAgentInput {
             task_id: task.task_id,
-            role_profile_id: "role_worker".to_string(),
+            role_profile_id: "role_producer".to_string(),
             owner: "agent-os-thread-test".to_string(),
             goal: "Block after repeated no-action responses".to_string(),
             success_criteria: Vec::new(),
@@ -1234,7 +1452,7 @@ fn runtime_returns_blocked_report_at_max_steps_without_final_submission() {
     let agent = kernel
         .spawn_agent(SpawnAgentInput {
             task_id: task.task_id,
-            role_profile_id: "role_worker".to_string(),
+            role_profile_id: "role_producer".to_string(),
             owner: "agent-os-thread-test".to_string(),
             goal: "Make one edit but do not submit final".to_string(),
             success_criteria: Vec::new(),
@@ -1378,7 +1596,7 @@ fn runtime_compacts_older_evidence_tool_outputs_in_projection() {
     let agent = kernel
         .spawn_agent(SpawnAgentInput {
             task_id: task.task_id,
-            role_profile_id: "role_worker".to_string(),
+            role_profile_id: "role_producer".to_string(),
             owner: "agent-os-thread-test".to_string(),
             goal: "Read large file repeatedly".to_string(),
             success_criteria: Vec::new(),
@@ -1512,7 +1730,7 @@ fn runtime_projects_failed_tool_result_for_model_recovery() {
     let agent = kernel
         .spawn_agent(SpawnAgentInput {
             task_id: task.task_id,
-            role_profile_id: "role_worker".to_string(),
+            role_profile_id: "role_producer".to_string(),
             owner: "agent-os-thread-test".to_string(),
             goal: "Recover after a failed apply_patch call".to_string(),
             success_criteria: Vec::new(),
@@ -1566,7 +1784,8 @@ fn runtime_projects_failed_run_command_results_for_model_recovery() {
                     ToolAction::new(
                         "run_command",
                         json!({
-                            "program": "cmd",
+                            "command": "cmd",
+                            "mode": "exec",
                             "args": {"bad": "shape"},
                             "cwd": request.workspace_root.to_string_lossy()
                         }),
@@ -1587,7 +1806,8 @@ fn runtime_projects_failed_run_command_results_for_model_recovery() {
                         ToolAction::new(
                             "run_command",
                             json!({
-                                "program": "agent-os-definitely-missing-executable",
+                                "mode": "exec",
+                                "command": "agent-os-definitely-missing-executable",
                                 "args": [],
                                 "cwd": request.workspace_root.to_string_lossy()
                             }),
@@ -1702,7 +1922,7 @@ fn runtime_projects_failed_run_command_results_for_model_recovery() {
     let agent = kernel
         .spawn_agent(SpawnAgentInput {
             task_id: task.task_id,
-            role_profile_id: "role_worker".to_string(),
+            role_profile_id: "role_producer".to_string(),
             owner: "agent-os-thread-test".to_string(),
             goal: "Recover after failed run_command calls".to_string(),
             success_criteria: Vec::new(),
@@ -1831,7 +2051,7 @@ fn runtime_resumes_with_persisted_failed_tool_results() {
     let agent = kernel
         .spawn_agent(SpawnAgentInput {
             task_id: task.task_id,
-            role_profile_id: "role_worker".to_string(),
+            role_profile_id: "role_producer".to_string(),
             owner: "agent-os-thread-test".to_string(),
             goal: "Resume after failed apply_patch call".to_string(),
             success_criteria: Vec::new(),
@@ -1957,7 +2177,7 @@ fn runtime_resumes_with_persisted_tool_results_and_artifacts() {
     let agent = kernel
         .spawn_agent(SpawnAgentInput {
             task_id: task.task_id.clone(),
-            role_profile_id: "role_worker".to_string(),
+            role_profile_id: "role_producer".to_string(),
             owner: "agent-os-thread-test".to_string(),
             goal: "Write result.md".to_string(),
             success_criteria: vec!["result.md exists".to_string()],
@@ -2106,7 +2326,7 @@ fn runtime_retries_model_call_from_provider_profile_policy() {
     let agent = kernel
         .spawn_agent(SpawnAgentInput {
             task_id: task.task_id,
-            role_profile_id: "role_worker".to_string(),
+            role_profile_id: "role_producer".to_string(),
             owner: "agent-os-thread-test".to_string(),
             goal: "Read README after retry".to_string(),
             success_criteria: Vec::new(),

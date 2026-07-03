@@ -1,7 +1,7 @@
 use crate::args::ResumeOptions;
 use crate::support::{
-    ensure_safe_relative_workspace_path, io_result, write_task_bundle_from_app_response,
-    StdioKerneldAppClient, StdioKerneldConfig,
+    default_state_db_for_workspace, ensure_safe_relative_workspace_path, io_result,
+    write_task_bundle_from_app_response, StdioHostAppClient, StdioHostConfig,
 };
 use agent_os_sys::*;
 use serde_json::{json, Value};
@@ -19,26 +19,32 @@ pub(crate) fn run_resume(options: &ResumeOptions) -> AgentOsResult<Value> {
         fs::create_dir_all(&options.workspace),
         "create workspace directory",
     )?;
-    let mut config = StdioKerneldConfig::state_db(options.state_db.clone());
+    let state_db = options
+        .state_db
+        .clone()
+        .map(Ok)
+        .unwrap_or_else(|| default_state_db_for_workspace(&options.workspace))?;
+    let mut config = StdioHostConfig::state_db(state_db.clone());
     config.model_command = Some(options.model_command.clone());
     config.model_args = options.model_args.clone();
-    let mut app_client = StdioKerneldAppClient::open(&config)?;
-    resume_from_app_client(&mut app_client, options)
+    let mut app_client = StdioHostAppClient::open(&config)?;
+    resume_from_app_client(&mut app_client, options, &state_db)
 }
 
 trait ResumeAppClient {
     fn request(&mut self, request: AppRequest) -> AgentOsResult<Value>;
 }
 
-impl ResumeAppClient for StdioKerneldAppClient {
+impl ResumeAppClient for StdioHostAppClient {
     fn request(&mut self, request: AppRequest) -> AgentOsResult<Value> {
-        StdioKerneldAppClient::request(self, request)
+        StdioHostAppClient::request(self, request)
     }
 }
 
 fn resume_from_app_client(
     app_client: &mut impl ResumeAppClient,
     options: &ResumeOptions,
+    state_db: &std::path::Path,
 ) -> AgentOsResult<Value> {
     app_client.request(AppRequest::Initialize)?;
     let resumed = app_client.request(AppRequest::ThreadResume {
@@ -71,7 +77,7 @@ fn resume_from_app_client(
     };
     Ok(json!({
         "status": "completed",
-        "state_db": options.state_db.to_string_lossy(),
+        "state_db": state_db.to_string_lossy(),
         "thread_id": options.thread_id,
         "task_id": thread["thread"]["task_id"],
         "previous_thread_status": previous_thread_status,
@@ -103,6 +109,12 @@ fn wait_for_runtime_job(
                 return Err(AgentOsError::Validation(format!(
                     "runtime job {runtime_job_id} failed: {}",
                     job["last_error"].as_str().unwrap_or("unknown error")
+                )))
+            }
+            Some("blocked") => {
+                return Err(AgentOsError::Validation(format!(
+                    "runtime job {runtime_job_id} blocked: {}",
+                    job["last_error"].as_str().unwrap_or("unknown reason")
                 )))
             }
             Some("interrupted" | "cancelled") => {
@@ -143,14 +155,14 @@ fn runtime_job_by_id<'a>(thread: &'a Value, runtime_job_id: &str) -> AgentOsResu
 }
 
 #[cfg(test)]
-fn resume_thread_recovery_from_daemon(
+fn resume_thread_recovery_from_host(
     state_db: &std::path::Path,
     thread_id: &str,
 ) -> AgentOsResult<Value> {
-    use agent_os_kerneld::{AppServer, KernelDaemon};
+    use agent_os_host::{AgentOsHost, AppServer};
 
-    let daemon = KernelDaemon::open_sqlite(state_db)?;
-    let mut server = AppServer::new(daemon);
+    let host = AgentOsHost::open_sqlite(state_db)?;
+    let mut server = AppServer::new(host);
     let client = ClientConnection {
         client_id: "agent-os-cli-test".to_string(),
         client_name: "Agent-OS CLI Test".to_string(),
@@ -203,13 +215,14 @@ mod tests {
         let output = resume_from_app_client(
             &mut client,
             &ResumeOptions {
-                state_db: PathBuf::from("state.sqlite"),
+                state_db: Some(PathBuf::from("state.sqlite")),
                 thread_id: "thread_1".to_string(),
                 workspace,
                 bundle_output: None,
                 model_command: PathBuf::from("model.exe"),
                 model_args: Vec::new(),
             },
+            &PathBuf::from("state.sqlite"),
         )
         .unwrap();
 
@@ -241,13 +254,14 @@ mod tests {
         let output = resume_from_app_client(
             &mut client,
             &ResumeOptions {
-                state_db: PathBuf::from("state.sqlite"),
+                state_db: Some(PathBuf::from("state.sqlite")),
                 thread_id: "thread_1".to_string(),
                 workspace: workspace.clone(),
                 bundle_output: Some(PathBuf::from("bundle/resume.json")),
                 model_command: PathBuf::from("model.exe"),
                 model_args: Vec::new(),
             },
+            &PathBuf::from("state.sqlite"),
         )
         .unwrap();
 
@@ -272,7 +286,7 @@ mod tests {
     #[test]
     fn run_resume_rejects_bundle_output_path_escape() {
         let error = run_resume(&ResumeOptions {
-            state_db: PathBuf::from("state.sqlite"),
+            state_db: Some(PathBuf::from("state.sqlite")),
             thread_id: "thread_1".to_string(),
             workspace: PathBuf::from("."),
             bundle_output: Some(PathBuf::from("../resume-bundle.json")),
@@ -320,7 +334,7 @@ mod tests {
         let agent = kernel
             .spawn_agent(SpawnAgentInput {
                 task_id: task.task_id,
-                role_profile_id: "role_worker".to_string(),
+                role_profile_id: "role_producer".to_string(),
                 owner: "agent-os-cli-test".to_string(),
                 goal: "Resume".to_string(),
                 success_criteria: Vec::new(),
@@ -331,7 +345,7 @@ mod tests {
             .unwrap();
         kernel.start_turn(&agent.thread_id).unwrap();
 
-        let body = resume_thread_recovery_from_daemon(&state_db, &agent.thread_id).unwrap();
+        let body = resume_thread_recovery_from_host(&state_db, &agent.thread_id).unwrap();
         assert_eq!(body["previous_thread_status"], json!("Running"));
         assert_eq!(body["thread"]["status"], json!("Ready"));
         let _ = std::fs::remove_file(state_db);
@@ -405,7 +419,7 @@ mod tests {
                     assert_eq!(client_thread_id, "thread_1");
                     Ok(json!({
                         "bundle": {
-                            "abi_version": "0.2.0",
+                            "abi_version": "0.3.0",
                             "bundle_kind": "task",
                             "exported_at": "2026-06-30T00:00:00Z",
                             "root_task_id": "task_1",

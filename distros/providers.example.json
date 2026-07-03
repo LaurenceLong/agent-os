@@ -1,17 +1,47 @@
 {
-  "default_provider": "default",
-  "providers": {
-    "default": {
+  "model": "openai/gpt-4o",
+  "small_model": "openai/gpt-4o-mini",
+  "provider": {
+    "openai": {
       "api_key": "replace-with-your-api-key",
-      "base_url": "https://api.openai.com/v1",
-      "model": "gpt-4o",
-      "api_style": "openai-compatible"
+      "api_style": "openai-compatible",
+      "options": {
+        "base_url": "https://api.openai.com/v1",
+        "timeout_ms": 120000
+      },
+      "models": {
+        "gpt-4o": {
+          "name": "gpt-4o",
+          "limit": {
+            "context": 128000,
+            "output": 16384
+          }
+        },
+        "gpt-4o-mini": {
+          "name": "gpt-4o-mini",
+          "limit": {
+            "context": 128000,
+            "output": 16384
+          }
+        }
+      }
     },
     "anthropic": {
       "api_key": "replace-with-your-api-key",
-      "base_url": "https://api.anthropic.com",
-      "model": "claude-sonnet-4-20250514",
-      "api_style": "anthropic-compatible"
+      "api_style": "anthropic-compatible",
+      "options": {
+        "base_url": "https://api.anthropic.com",
+        "timeout_ms": 120000
+      },
+      "models": {
+        "claude-sonnet-4-20250514": {
+          "name": "claude-sonnet-4-20250514",
+          "limit": {
+            "context": 200000,
+            "output": 8192
+          }
+        }
+      }
     }
   }
 }

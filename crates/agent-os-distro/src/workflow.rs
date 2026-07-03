@@ -1,5 +1,5 @@
-use super::distro::SoftwareEngineeringDistro;
-use super::types::{
+use crate::distro::SoftwareEngineeringDistro;
+use crate::types::{
     SoftwareCodeTask, SoftwareWorkflowPrompt, SoftwareWorkflowRequest, SoftwareWorkflowStep,
 };
 use agent_os_sys::{AgentOsError, AgentOsResult};
@@ -52,18 +52,18 @@ fn workflow_steps() -> Vec<SoftwareWorkflowStep> {
     vec![
         SoftwareWorkflowStep {
             label: "explore".to_string(),
-            core_role: "WorkerAgent".to_string(),
+            core_role: "ProducerAgent".to_string(),
             objective: "Inspect only the context needed to make a scoped plan.".to_string(),
         },
         SoftwareWorkflowStep {
             label: "implement".to_string(),
-            core_role: "WorkerAgent".to_string(),
+            core_role: "ProducerAgent".to_string(),
             objective: "Apply the smallest coherent workspace change through apply_patch."
                 .to_string(),
         },
         SoftwareWorkflowStep {
             label: "validate".to_string(),
-            core_role: "WorkerAgent".to_string(),
+            core_role: "ProducerAgent".to_string(),
             objective: "Run focused commands and attach command evidence.".to_string(),
         },
         SoftwareWorkflowStep {
@@ -123,8 +123,8 @@ fn render_prompt(
     lines.push("### SupervisorAgent".to_string());
     lines.push(distro.supervisor_prompt.trim().to_string());
     lines.push(String::new());
-    lines.push("### WorkerAgent".to_string());
-    lines.push(distro.worker_prompt.trim().to_string());
+    lines.push("### ProducerAgent".to_string());
+    lines.push(distro.producer_prompt.trim().to_string());
     lines.push(String::new());
     lines.push("### ReviewerAgent".to_string());
     lines.push(distro.reviewer_prompt.trim().to_string());
@@ -132,13 +132,13 @@ fn render_prompt(
     lines.push("## Flexible Workflow Policy".to_string());
     lines.push(String::new());
     lines.push(
-        "The Supervisor decides the workflow at runtime. Do not assume a fixed Explorer -> Coder -> Tester -> Reviewer -> Verifier sequence.".to_string(),
+        "The Supervisor decides the workflow at runtime. Do not assume a fixed Explorer -> Coder -> Tester -> Reviewer sequence.".to_string(),
     );
     lines.push(
         "Use workflow labels only as prompt-level planning concepts; every delegated action must still map to a core Agent-OS role.".to_string(),
     );
     lines.push(
-        "A simple low-risk edit may use a compact explore/implement/validate/finalize path. A riskier change may add review, revision, or parallel workers.".to_string(),
+        "A simple low-risk edit may use a compact explore/implement/validate/finalize path. A riskier change may add review, revision, or parallel producers.".to_string(),
     );
     lines.push(
         "Use apply_patch for workspace mutations, run_command for validation, record evidence for claims, and submit_final as the last action.".to_string(),

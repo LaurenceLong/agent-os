@@ -31,13 +31,13 @@ pub(crate) struct CodeOptions {
 
 #[derive(Debug, Clone)]
 pub(crate) struct StatusOptions {
-    pub(crate) state_db: PathBuf,
+    pub(crate) state_db: Option<PathBuf>,
     pub(crate) thread_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResumeOptions {
-    pub(crate) state_db: PathBuf,
+    pub(crate) state_db: Option<PathBuf>,
     pub(crate) thread_id: String,
     pub(crate) workspace: PathBuf,
     pub(crate) bundle_output: Option<PathBuf>,
@@ -50,7 +50,7 @@ pub(crate) struct ChatOptions {
     pub(crate) workspace: PathBuf,
     pub(crate) task: Option<String>,
     pub(crate) task_file: Option<PathBuf>,
-    pub(crate) provider: Option<String>,
+    pub(crate) model: Option<String>,
     pub(crate) max_steps: u32,
     pub(crate) runtime_timeout_seconds: u64,
     pub(crate) max_tokens: Option<u64>,
@@ -270,9 +270,7 @@ impl StatusOptions {
             index += 1;
         }
         Ok(Self {
-            state_db: state_db.ok_or_else(|| {
-                AgentOsError::Validation("--state-db is required for status".to_string())
-            })?,
+            state_db,
             thread_id,
         })
     }
@@ -329,9 +327,7 @@ impl ResumeOptions {
             index += 1;
         }
         Ok(Self {
-            state_db: state_db.ok_or_else(|| {
-                AgentOsError::Validation("--state-db is required for resume".to_string())
-            })?,
+            state_db,
             thread_id: thread_id.ok_or_else(|| {
                 AgentOsError::Validation("--thread-id is required for resume".to_string())
             })?,
@@ -375,7 +371,7 @@ impl ChatOptions {
         let mut workspace = PathBuf::from(".");
         let mut task = None;
         let mut task_file = None;
-        let mut provider = None;
+        let mut model = None;
         let mut max_steps = 32u32;
         let mut runtime_timeout_seconds = 120u64;
         let mut max_tokens = None;
@@ -399,9 +395,9 @@ impl ChatOptions {
                     index += 1;
                     task_file = Some(PathBuf::from(required_arg(args, index, "--task-file")?));
                 }
-                "--provider" | "-p" => {
+                "--model" | "-m" => {
                     index += 1;
-                    provider = Some(required_arg(args, index, "--provider")?.to_string());
+                    model = Some(required_arg(args, index, "--model")?.to_string());
                 }
                 "--max-steps" => {
                     index += 1;
@@ -477,7 +473,7 @@ impl ChatOptions {
             workspace,
             task,
             task_file,
-            provider,
+            model,
             max_steps,
             runtime_timeout_seconds,
             max_tokens,
@@ -491,7 +487,7 @@ impl ChatOptions {
 pub(crate) fn usage_json() -> Value {
     json!({
         "commands": {
-            "chat": "Interactive coding agent powered by a real LLM. (v0.1 primary entrypoint)",
+            "chat": "Interactive coding agent powered by a configured provider model.",
             "demo": "Run the kernel lifecycle demo.",
             "run": "Run a deterministic end-to-end Agent-OS task.",
             "code": "Apply an exact repository edit and run a test command through Agent-OS.",
@@ -502,7 +498,7 @@ pub(crate) fn usage_json() -> Value {
             "--workspace, -w": "Workspace directory. Default: .",
             "--task, -t": "Initial batch task to run before exiting.",
             "--task-file": "Read initial batch task text from a UTF-8 file before exiting.",
-            "--provider, -p": "Provider name from the global Agent-OS provider config. Defaults to default_provider.",
+            "--model, -m": "Model id in provider/model form. Defaults to the global/project Agent-OS config model.",
             "--max-steps": "Maximum agent steps per task. Default: 32",
             "--runtime-timeout-seconds": "Maximum wall-clock seconds to wait for the runtime job. Default: 120",
             "--max-tokens": "Maximum output tokens per model call.",
@@ -534,11 +530,11 @@ pub(crate) fn usage_json() -> Value {
             "--model-arg": "One argument for the external model action process. Repeatable."
         },
         "status_options": {
-            "--state-db": "Required SQLite event store path.",
+            "--state-db": "Optional SQLite event store path. Defaults to the global Agent-OS state store.",
             "--thread-id": "Optional thread id to inspect."
         },
         "resume_options": {
-            "--state-db": "Required SQLite event store path.",
+            "--state-db": "Optional SQLite event store path. Defaults to the global Agent-OS state store.",
             "--thread-id": "Required thread id to resume.",
             "--workspace": "Workspace directory for resumed tool execution. Default: .",
             "--bundle-output": "Optional relative path for selected task bundle JSON inside workspace.",
@@ -574,11 +570,17 @@ mod tests {
 
     #[test]
     fn chat_positional_task_collects_adjacent_words_until_next_option() {
-        let options =
-            ChatOptions::parse(&argv(&["Backend", "smoke", "task", "--provider", "mify"])).unwrap();
+        let options = ChatOptions::parse(&argv(&[
+            "Backend",
+            "smoke",
+            "task",
+            "--model",
+            "mify/coder",
+        ]))
+        .unwrap();
 
         assert_eq!(options.task.as_deref(), Some("Backend smoke task"));
-        assert_eq!(options.provider.as_deref(), Some("mify"));
+        assert_eq!(options.model.as_deref(), Some("mify/coder"));
     }
 
     #[test]

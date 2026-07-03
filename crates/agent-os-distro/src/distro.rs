@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 pub(super) struct SoftwareEngineeringDistro {
     pub(super) manifest: PackageManifest,
     pub(super) supervisor_prompt: String,
-    pub(super) worker_prompt: String,
+    pub(super) producer_prompt: String,
     pub(super) reviewer_prompt: String,
     pub(super) review_policy: Value,
     pub(super) final_answer_policy: Value,
@@ -41,9 +41,11 @@ impl SoftwareEngineeringDistro {
                     AgentOsError::Validation(format!("failed to read supervisor prompt: {error}"))
                 },
             )?,
-            worker_prompt: fs::read_to_string(root.join("prompts/worker.md")).map_err(|error| {
-                AgentOsError::Validation(format!("failed to read worker prompt: {error}"))
-            })?,
+            producer_prompt: fs::read_to_string(root.join("prompts/producer.md")).map_err(
+                |error| {
+                    AgentOsError::Validation(format!("failed to read producer prompt: {error}"))
+                },
+            )?,
             reviewer_prompt: fs::read_to_string(root.join("prompts/reviewer.md")).map_err(
                 |error| {
                     AgentOsError::Validation(format!("failed to read reviewer prompt: {error}"))

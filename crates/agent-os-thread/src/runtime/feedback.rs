@@ -4,7 +4,8 @@ use serde_json::{json, Value};
 
 pub(super) const RUNTIME_FEEDBACK_TOOL: &str = "runtime_feedback";
 pub(super) const MAX_CONSECUTIVE_NO_ACTION_TURNS: u32 = 2;
-pub(super) const MAX_CONSECUTIVE_IDENTICAL_TOOL_CALLS: u32 = 2;
+pub(super) const DUPLICATE_TOOL_WARNING_COUNT: u32 = 2;
+pub(super) const MAX_CONSECUTIVE_IDENTICAL_TOOL_CALLS: u32 = 5;
 const PRE_PATCH_FEEDBACK_TOOL_RESULTS: usize = 16;
 pub(super) const PRE_PATCH_HARD_GATE_TOOL_RESULTS: usize = 24;
 
@@ -56,6 +57,17 @@ pub(super) fn duplicate_tool_feedback_record(
     consecutive_identical_tool_calls: u32,
     action: &ToolAction,
 ) -> ToolExecutionRecord {
+    let is_blocking = consecutive_identical_tool_calls >= MAX_CONSECUTIVE_IDENTICAL_TOOL_CALLS;
+    let severity = if is_blocking { "error" } else { "warning" };
+    let message = if is_blocking {
+        format!(
+            "The model repeated an identical tool call {consecutive_identical_tool_calls} consecutive times. The runtime is blocking the task because the previous identical result was already available and the model did not choose a different action."
+        )
+    } else {
+        format!(
+            "Warning: the model repeated an identical tool call {consecutive_identical_tool_calls} consecutive times. The runtime rejected this duplicate without executing it because the previous identical result is already available in context. Choose a different focused tool call, apply the fix, or call submit_final if the task is complete or blocked with evidence."
+        )
+    };
     ToolExecutionRecord {
         call_id: new_id("feedback_"),
         tool_name: RUNTIME_FEEDBACK_TOOL.to_string(),
@@ -67,7 +79,9 @@ pub(super) fn duplicate_tool_feedback_record(
             "tool_input": action.input,
         })),
         output: Some(json!({
-            "message": "The model repeated an identical tool call. The runtime did not execute it again because the previous identical result is already available in context. Choose a different focused tool call, apply the fix, or call submit_final if the task is complete or blocked with evidence.",
+            "message": message,
+            "severity": severity,
+            "duplicate_tool_warning_count": DUPLICATE_TOOL_WARNING_COUNT,
             "max_consecutive_identical_tool_calls": MAX_CONSECUTIVE_IDENTICAL_TOOL_CALLS,
         })),
         evidence_ids: Vec::new(),
@@ -263,6 +277,26 @@ pub(super) fn pre_patch_resolution_gate_feedback_record(
         })),
         evidence_ids: Vec::new(),
         evidence_claim: None,
+    }
+}
+
+pub(super) fn unsupported_image_input_tool_record(
+    step_index: u32,
+    action: &ToolAction,
+) -> ToolExecutionRecord {
+    ToolExecutionRecord {
+        call_id: new_id("feedback_"),
+        tool_name: action.tool_name.clone(),
+        status: ToolCallStatus::Failed,
+        input: Some(action.input.clone()),
+        output: Some(json!({
+            "status": "failed",
+            "stage": "model_capability",
+            "error": "read_image requires a model with image_input capability",
+            "step_index": step_index,
+        })),
+        evidence_ids: Vec::new(),
+        evidence_claim: action.evidence_claim.clone(),
     }
 }
 

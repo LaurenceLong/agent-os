@@ -41,7 +41,7 @@ pub(in crate::tools) fn run_agent_control(
             let role_profile_id = payload
                 .get("role_profile_id")
                 .and_then(Value::as_str)
-                .unwrap_or("role_worker")
+                .unwrap_or("role_producer")
                 .to_string();
             let task_id = payload
                 .get("task_id")

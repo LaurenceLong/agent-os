@@ -1,7 +1,7 @@
 use crate::args::RunOptions;
 use crate::support::{
-    ensure_safe_relative_workspace_path, io_result, write_task_bundle_from_app_response,
-    StdioKerneldAppClient, StdioKerneldConfig,
+    default_state_db_for_workspace, ensure_safe_relative_workspace_path, io_result,
+    write_task_bundle_from_app_response, StdioHostAppClient, StdioHostConfig,
 };
 use agent_os_sys::*;
 use serde_json::{json, Value};
@@ -29,11 +29,12 @@ pub(crate) fn run_e2e_task(options: &RunOptions) -> AgentOsResult<Value> {
     let state_db = options
         .state_db
         .clone()
-        .unwrap_or_else(|| options.workspace.join(".agent-os").join("state.sqlite"));
-    let mut config = StdioKerneldConfig::state_db(state_db.clone());
+        .map(Ok)
+        .unwrap_or_else(|| default_state_db_for_workspace(&options.workspace))?;
+    let mut config = StdioHostConfig::state_db(state_db.clone());
     config.model_command = Some(model_command.clone());
     config.model_args = options.model_args.clone();
-    let mut app_client = StdioKerneldAppClient::open(&config)?;
+    let mut app_client = StdioHostAppClient::open(&config)?;
     let task_prompt = format!(
         "{}\nRequested workspace output path: {}",
         options.task,
@@ -49,9 +50,9 @@ trait RunAppClient {
     fn request(&mut self, request: AppRequest) -> AgentOsResult<Value>;
 }
 
-impl RunAppClient for StdioKerneldAppClient {
+impl RunAppClient for StdioHostAppClient {
     fn request(&mut self, request: AppRequest) -> AgentOsResult<Value> {
-        StdioKerneldAppClient::request(self, request)
+        StdioHostAppClient::request(self, request)
     }
 }
 
@@ -142,6 +143,12 @@ fn wait_for_runtime_job(
                 return Err(AgentOsError::Validation(format!(
                     "runtime job {runtime_job_id} failed: {}",
                     job["last_error"].as_str().unwrap_or("unknown error")
+                )))
+            }
+            Some("blocked") => {
+                return Err(AgentOsError::Validation(format!(
+                    "runtime job {runtime_job_id} blocked: {}",
+                    job["last_error"].as_str().unwrap_or("unknown reason")
                 )))
             }
             Some("interrupted" | "cancelled") => {

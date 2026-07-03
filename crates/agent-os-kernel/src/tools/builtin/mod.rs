@@ -11,6 +11,7 @@ mod ask_human;
 mod load_skill;
 mod post_blackboard;
 pub(super) mod read_file;
+pub(super) mod read_image;
 mod read_skill_resource;
 mod record_evidence;
 mod report_supervisor;
@@ -52,6 +53,7 @@ fn all_tools() -> Vec<BuiltinTool> {
     vec![
         apply_patch::tool(),
         read_file::tool(),
+        read_image::tool(),
         run_command::tool(),
         set_goal::tool(),
         accomplish_goal::tool(),
@@ -99,6 +101,25 @@ mod tests {
                     "{} example expected_result must be present",
                     descriptor.name
                 );
+            }
+            if let Some(model_input_schema) = &descriptor.model_input_schema {
+                let required_fields = model_input_schema
+                    .pointer("/required")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str);
+                for field in required_fields {
+                    assert!(
+                        descriptor
+                            .examples
+                            .iter()
+                            .any(|example| example.parameters.get(field).is_some()),
+                        "{} required model_input_schema field `{}` must appear in at least one example",
+                        descriptor.name,
+                        field
+                    );
+                }
             }
         }
     }

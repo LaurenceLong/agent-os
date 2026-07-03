@@ -1,8 +1,12 @@
 # Agent-OS Documentation Index
 
-This directory turns the manifesto and collaboration theory into a development contract.
+This directory turns the manifesto, collaboration theory, implementation
+snapshot, and decision records into a development contract.
 
-The documentation is intentionally split into foundation, kernel design, implementation, and decision records. Future code should be reviewed against these documents before accepting new subsystems, dependencies, or runtime behavior.
+The documentation is intentionally split into foundation, research, kernel
+design, implementation, and decision records. Current code and future changes
+should be reviewed against these documents before accepting new subsystems,
+dependencies, or runtime behavior.
 
 ## Directory Structure
 
@@ -14,6 +18,8 @@ docs/
     architecture-principles.md
   05-research/
     agent-thread-source-study.md
+    agent-optimization-statistics-study.md
+    long-running-kernel-app-server-gap-study.md
   10-kernel-design/
     system-architecture.md
     overall-architecture-mermaid.md
@@ -32,6 +38,7 @@ docs/
   20-implementation/
     production-roadmap.md
     conformance-and-quality.md
+    swe-bench-lite-private-benchmark.md
   30-decisions/
     ADR-0001-agent-os-is-a-microkernel-runtime.md
     ADR-0002-postgresql-is-a-storage-driver.md
@@ -64,11 +71,15 @@ Agent-OS kernel: The runtime control plane that owns Agent Control Blocks, sched
 
 Agent Thread: The kernel-managed execution unit. It contains LLM cognition, but is not defined by the LLM or by a third-party agent loop.
 
-Agent Control Block: The durable control structure for an Agent Thread. The v0.1 field-level form is the Agent Thread Control Block (ATCB) defined in `docs/10-kernel-design/agent-thread-core-module.md`.
+Agent Control Block: The durable control structure for an Agent Thread. The current field-level form is the Agent Thread Control Block (ATCB) defined in `docs/10-kernel-design/agent-thread-core-module.md`.
 
 Provider System: The unified system-level module that resolves provider profiles, routing, model aliases, credentials, and normalized LLM streams for all Agent Threads.
 
-Role Profile: The kernel-owned definition of an Agent Thread's semantic job, default policies, allowed delegation targets, and conformance family. The v0.1 core roles are Supervisor, Worker, and Reviewer; distributions may add aliases.
+Role Profile: The kernel-owned definition of an Agent Thread's semantic job, default policies, allowed delegation targets, and conformance family. The current core roles are Supervisor, Producer, and Reviewer; distributions may add aliases.
+
+App Server: The JSONL protocol gate that exposes thread start/read/list/archive, turn start/steer/interrupt, stats, notifications, automation, and task bundle export over typed `AppRequest` envelopes. It owns app-facing response shapes such as the `thread/read` projection.
+
+Host Layer: The `agent-os-host` service boundary. It opens the SQLite-backed kernel store, combines kernel/store/runtime/app-server components, owns runtime job records and background workers, and starts configured Agent Thread Runtime jobs through the `agent-os-hostd` process.
 
 Execution Environment: A kernel-managed runtime instance with explicit mounts, toolchain, network policy, secret projection, and backend identity.
 
@@ -90,7 +101,7 @@ Syscall: A typed request from an Agent Thread to the kernel or to kernel-mediate
 
 Tool Broker: The only path from Agent Threads to external tools, shell commands, MCP servers, APIs, browsers, or file mutation.
 
-Model-Visible Tool: The function surface shown to a model inside a turn. v0.2 tools are grouped by domain: Host OS (`read_file`, `apply_patch`, `run_command`), work state, communication, agent supervision, privileged administration, and session lifecycle (`submit_final`).
+Model-Visible Tool: The function surface shown to a model inside a turn. v0.3 tools are grouped by domain: Host OS (`read_file`, `read_image`, `apply_patch`, `run_command`), ecosystem (`load_skill`, `read_skill_resource`), work state, communication, agent supervision, privileged administration, and session lifecycle (`submit_final`).
 
 Agent Hook: A kernel-scheduled control-plane action, such as periodic progress-report prompt injection into a child agent with the response routed back to Supervisor.
 
@@ -98,7 +109,7 @@ Typed Blackboard: The shared structured state for goals, tasks, facts, hypothese
 
 Evidence: A verifiable record that supports a claim, artifact, test result, review, or final answer.
 
-Distribution: A packaged Agent-OS environment for a domain, such as software engineering, research, office automation, or SRE.
+Distribution: A packaged Agent-OS environment for a domain, such as software engineering, research, office automation, or SRE. In Rust, `agent-os-distro` owns distribution prompt and workflow builders; `agent-os-thread` consumes prepared runtime inputs.
 
 ## Change Policy
 

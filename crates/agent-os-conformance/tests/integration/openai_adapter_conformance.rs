@@ -49,7 +49,7 @@ fn openai_adapter_pattern_drives_full_integration_task() {
     let agent = kernel
         .spawn_agent(common::SpawnAgentInput {
             task_id: task.task_id,
-            role_profile_id: "role_worker".to_string(),
+            role_profile_id: "role_producer".to_string(),
             owner: "conformance".to_string(),
             goal: "Change the add function to multiply".to_string(),
             success_criteria: vec!["function returns product".to_string()],
@@ -147,7 +147,7 @@ fn openai_adapter_workspace_root_injection_pattern() {
     let agent = kernel
         .spawn_agent(common::SpawnAgentInput {
             task_id: task.task_id,
-            role_profile_id: "role_worker".to_string(),
+            role_profile_id: "role_producer".to_string(),
             owner: "conformance".to_string(),
             goal: "Write hello.txt".to_string(),
             success_criteria: vec!["hello.txt exists".to_string()],
@@ -244,7 +244,7 @@ fn openai_adapter_command_execution_and_evidence() {
     let agent = kernel
         .spawn_agent(common::SpawnAgentInput {
             task_id: task.task_id,
-            role_profile_id: "role_worker".to_string(),
+            role_profile_id: "role_producer".to_string(),
             owner: "conformance".to_string(),
             goal: "Read data.txt and run echo to verify".to_string(),
             success_criteria: vec!["command executed".to_string()],
@@ -278,7 +278,8 @@ fn openai_adapter_command_execution_and_evidence() {
         common::DeterministicStep::ToolCall(agent_os_thread::ToolAction::new(
             "run_command",
             common::json!({
-                "program": current_exe.to_string_lossy(),
+                "mode": "exec",
+                "command": current_exe.to_string_lossy(),
                 "args": ["--help"],
                 "cwd": ws
             }),

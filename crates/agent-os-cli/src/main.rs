@@ -2,7 +2,6 @@ mod args;
 mod chat;
 mod code;
 mod demo;
-mod provider_config;
 mod resume;
 mod run;
 mod status;

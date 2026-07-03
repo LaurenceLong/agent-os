@@ -16,7 +16,7 @@ This keeps worker agents useful without allowing noisy, unsafe, or authority-esc
 
 Communication is a kernel-mediated capability.
 
-An Agent Thread cannot directly write to another Agent Thread, the blackboard, a broadcast channel, or a human-facing surface. It must request a communication syscall. In v0.1, worker-to-worker coordination is Supervisor-routed. The Communication Kernel validates the request against:
+An Agent Thread cannot directly write to another Agent Thread, the blackboard, a broadcast channel, or a human-facing surface. It must request a communication syscall. In v0.1, producer-to-producer coordination is Supervisor-routed. The Communication Kernel validates the request against:
 
 - thread role
 - task binding
@@ -98,7 +98,7 @@ Use cases:
 
 Supervisor direct communication SHOULD be allowed for most workers, but rate-limited. Parent and Supervisor are the same authority concept in v0.1: a worker reports to the Supervisor that invoked it. The top-level Supervisor is `S0`; delegated Supervisors are `S1`, `S2`, and so on.
 
-Direct worker-to-worker messaging is intentionally absent from the v0.1 core. If Worker A needs Worker B to do something, Worker A reports to Supervisor, and Supervisor decides whether to assign or wake Worker B. This prevents unbounded chat meshes and keeps responsibility in the invocation graph.
+Direct producer-to-producer messaging is intentionally absent from the v0.1 core. If Producer A needs Producer B to do something, Producer A reports to Supervisor, and Supervisor decides whether to assign or wake Producer B. This prevents unbounded chat meshes and keeps responsibility in the invocation graph.
 
 ### 5.2 Blackboard Channel
 
@@ -212,7 +212,7 @@ Example:
 
 ```yaml
 agent.spawn_child:
-  role: WorkerAgent
+  role: ProducerAgent
   goal: "Inspect replay invariants."
   communication_profile:
     supervisor:
@@ -290,7 +290,7 @@ Rules:
 2. Communication cannot override role restrictions.
 3. Blackboard posts are not facts until accepted by blackboard policy.
 4. Human messages must respect human attention budgets.
-5. Direct worker-to-worker messages are not a v0.1 core route.
+5. Direct producer-to-producer messages are not a v0.1 core route.
 6. Global broadcasts require explicit capability.
 7. A worker cannot create new communication routes for itself.
 8. Failed delivery must be visible to the sender as an event.
@@ -300,12 +300,12 @@ Rules:
 
 Minimum tests:
 
-1. Worker without Supervisor route cannot send Supervisor direct message.
-2. Worker with Supervisor route can send only allowed message types.
-3. Worker without blackboard route cannot post to blackboard.
-4. Worker with task-scope blackboard route cannot post global broadcast.
+1. Producer without Supervisor route cannot send Supervisor direct message.
+2. Producer with Supervisor route can send only allowed message types.
+3. Producer without blackboard route cannot post to blackboard.
+4. Producer with task-scope blackboard route cannot post global broadcast.
 5. Blackboard post carries source thread, task, and evidence provenance.
-6. Worker without human route cannot message human.
+6. Producer without human route cannot message human.
 7. Human route can require Supervisor approval.
 8. Communication profile cannot be expanded by the worker.
 9. Rejected message emits audit and delivery event.

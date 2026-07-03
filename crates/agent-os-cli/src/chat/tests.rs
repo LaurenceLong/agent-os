@@ -21,7 +21,7 @@ fn chat_session_process_task_uses_app_client_projection_contract() {
         workspace: workspace.clone(),
         task: None,
         task_file: None,
-        provider: None,
+        model: None,
         max_steps: 4,
         runtime_timeout_seconds: 120,
         max_tokens: None,
@@ -61,7 +61,7 @@ fn chat_session_exports_bundle_when_requested() {
         workspace: workspace.clone(),
         task: None,
         task_file: None,
-        provider: None,
+        model: None,
         max_steps: 4,
         runtime_timeout_seconds: 120,
         max_tokens: None,
@@ -167,7 +167,7 @@ impl ChatAppClient for FakeChatClient {
                                 "status": "Completed",
                                 "output": {
                                     "exit_code": 0,
-                                    "input": {"program": "agent-os"}
+                                    "input": {"command": "agent-os"}
                                 }
                             }
                         }
@@ -189,7 +189,7 @@ impl ChatAppClient for FakeChatClient {
                 assert_eq!(client_thread_id, "thread_1");
                 Ok(json!({
                     "bundle": {
-                        "abi_version": "0.2.0",
+                        "abi_version": "0.3.0",
                         "bundle_kind": "task",
                         "exported_at": "2026-06-30T00:00:00Z",
                         "root_task_id": "task_1",
@@ -230,40 +230,40 @@ fn chat_options_with_initial_task_run_in_batch_mode() {
 
 #[test]
 fn format_tool_summary_shows_read_file_path() {
-    let record = agent_os_thread::ToolExecutionRecord {
-        call_id: "c1".to_string(),
-        tool_name: "read_file".to_string(),
-        status: ToolCallStatus::Completed,
-        input: None,
-        output: Some(json!({
+    let record = json!({
+        "call_id": "c1",
+        "tool_name": "read_file",
+        "status": "Completed",
+        "input": null,
+        "output": {
             "path": "src/main.rs",
             "content": "fn main() {}",
-            "bytes_read": 13,
-        })),
-        evidence_ids: vec![],
-        evidence_claim: None,
-    };
-    let summary = format_tool_summary(&record);
+            "bytes_read": 13
+        },
+        "evidence_ids": [],
+        "evidence_claim": null
+    });
+    let summary = format_tool_summary_value(&record);
     assert!(summary.contains("read"));
     assert!(summary.contains("src/main.rs"));
 }
 
 #[test]
 fn format_tool_summary_shows_apply_patch_operation() {
-    let record = agent_os_thread::ToolExecutionRecord {
-        call_id: "c2".to_string(),
-        tool_name: "apply_patch".to_string(),
-        status: ToolCallStatus::Completed,
-        input: None,
-        output: Some(json!({
+    let record = json!({
+        "call_id": "c2",
+        "tool_name": "apply_patch",
+        "status": "Completed",
+        "input": null,
+        "output": {
             "operation": "update",
             "path": "lib.rs",
-            "changed_path": "lib.rs",
-        })),
-        evidence_ids: vec![],
-        evidence_claim: None,
-    };
-    let summary = format_tool_summary(&record);
+            "changed_path": "lib.rs"
+        },
+        "evidence_ids": [],
+        "evidence_claim": null
+    });
+    let summary = format_tool_summary_value(&record);
     assert!(summary.contains("patch"));
     assert!(summary.contains("update"));
     assert!(summary.contains("lib.rs"));
@@ -271,21 +271,21 @@ fn format_tool_summary_shows_apply_patch_operation() {
 
 #[test]
 fn format_tool_summary_shows_process_exit_code() {
-    let record = agent_os_thread::ToolExecutionRecord {
-        call_id: "c3".to_string(),
-        tool_name: "run_command".to_string(),
-        status: ToolCallStatus::Completed,
-        input: None,
-        output: Some(json!({
+    let record = json!({
+        "call_id": "c3",
+        "tool_name": "run_command",
+        "status": "Completed",
+        "input": null,
+        "output": {
             "exit_code": 0,
             "stdout": "all good",
             "stderr": "",
-            "input": {"program": "cargo", "args": ["test"]},
-        })),
-        evidence_ids: vec![],
-        evidence_claim: None,
-    };
-    let summary = format_tool_summary(&record);
+            "input": {"command": "cargo test"}
+        },
+        "evidence_ids": [],
+        "evidence_claim": null
+    });
+    let summary = format_tool_summary_value(&record);
     assert!(summary.contains("run"));
     assert!(summary.contains("cargo"));
     assert!(summary.contains("exit 0"));
@@ -293,21 +293,21 @@ fn format_tool_summary_shows_process_exit_code() {
 
 #[test]
 fn format_tool_summary_shows_apply_patch_delete_path() {
-    let record = agent_os_thread::ToolExecutionRecord {
-        call_id: "c4".to_string(),
-        tool_name: "apply_patch".to_string(),
-        status: ToolCallStatus::Completed,
-        input: None,
-        output: Some(json!({
+    let record = json!({
+        "call_id": "c4",
+        "tool_name": "apply_patch",
+        "status": "Completed",
+        "input": null,
+        "output": {
             "operation": "delete",
             "path": "old.txt",
             "deleted_path": "old.txt",
-            "deleted_bytes": 12,
-        })),
-        evidence_ids: vec![],
-        evidence_claim: None,
-    };
-    let summary = format_tool_summary(&record);
+            "deleted_bytes": 12
+        },
+        "evidence_ids": [],
+        "evidence_claim": null
+    });
+    let summary = format_tool_summary_value(&record);
     assert!(summary.contains("patch"));
     assert!(summary.contains("delete"));
     assert!(summary.contains("old.txt"));

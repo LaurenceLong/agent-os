@@ -16,6 +16,11 @@ fn goal_driven_runtime_integration_covers_tools_and_agent_control_actions() {
     let fx = runtime_fixture("agent-os-runtime-integration-all-tools");
     let workspace_root = fx.workspace.to_string_lossy().to_string();
     fs::write(fx.workspace.join("read.txt"), "read me\n").unwrap();
+    fs::write(
+        fx.workspace.join("shot.png"),
+        [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
+    )
+    .unwrap();
     fs::write(fx.workspace.join("edit.txt"), "alpha old beta\n").unwrap();
     fs::write(fx.workspace.join("delete.txt"), "remove me\n").unwrap();
 
@@ -23,6 +28,11 @@ fn goal_driven_runtime_integration_covers_tools_and_agent_control_actions() {
         tool(
             "read_file",
             json!({"workspace_root": workspace_root.clone(), "path": "read.txt"}),
+            1,
+        ),
+        tool(
+            "read_image",
+            json!({"workspace_root": workspace_root.clone(), "path": "shot.png"}),
             1,
         ),
         tool(
@@ -52,7 +62,8 @@ fn goal_driven_runtime_integration_covers_tools_and_agent_control_actions() {
         tool(
             "run_command",
             json!({
-                "program": std::env::current_exe().unwrap().to_string_lossy(),
+                "mode": "exec",
+                "command": std::env::current_exe().unwrap().to_string_lossy(),
                 "args": ["--help"],
                 "cwd": workspace_root.clone()
             }),
@@ -189,7 +200,7 @@ fn goal_driven_runtime_integration_covers_tools_and_agent_control_actions() {
 
     assert_eq!(report.status, ThreadStatus::Completed);
     assert!(report.final_submitted);
-    assert_eq!(report.tool_results.len(), 24);
+    assert_eq!(report.tool_results.len(), 25);
     assert_eq!(
         fs::read_to_string(fx.workspace.join("created.txt")).unwrap(),
         "created through goal-driven integration\n"
@@ -213,6 +224,7 @@ fn goal_driven_runtime_integration_covers_tools_and_agent_control_actions() {
             "ask_human",
             "post_blackboard",
             "read_file",
+            "read_image",
             "record_evidence",
             "report_supervisor",
             "run_command",
@@ -389,7 +401,8 @@ fn goal_driven_runtime_integration_rejects_understated_privileged_agent_control_
                         ToolAction::new(
                             "run_command",
                             json!({
-                                "program": self.current_exe.clone(),
+                                "mode": "exec",
+                                "command": self.current_exe.clone(),
                                 "args": ["--help"],
                                 "cwd": self.workspace_root.clone()
                             }),
@@ -661,7 +674,7 @@ fn child_agent(
     kernel
         .spawn_agent(SpawnAgentInput {
             task_id: task_id.to_string(),
-            role_profile_id: "role_worker".to_string(),
+            role_profile_id: "role_producer".to_string(),
             owner: supervisor.agent_id.clone(),
             goal: goal.to_string(),
             success_criteria: vec!["target action is observable".to_string()],

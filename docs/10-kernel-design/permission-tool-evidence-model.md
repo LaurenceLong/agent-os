@@ -2,7 +2,7 @@
 
 Status: normative
 
-Last updated: 2026-06-29
+Last updated: 2026-07-03
 
 ## 1. Purpose
 
@@ -111,7 +111,7 @@ Human attention is modeled as scarce control-plane state through budget ledgers 
 
 All tool calls MUST go through Tool Broker.
 
-The v0.1 model-visible tool surface is typed by domain.
+The current v0.3.0 model-visible tool surface is typed by domain.
 
 Core and dynamically imported model-visible tools MUST project descriptions and
 model input schemas from registered kernel `ToolDescriptor` records. Provider
@@ -127,6 +127,7 @@ Host OS substrate tools are exactly:
 
 ```text
 read_file
+read_image
 apply_patch
 run_command
 ```
@@ -183,6 +184,14 @@ These tools return `total_lines`, `returned_lines`, `next_offset`,
 `truncated`, and `omitted_lines` so the model can continue reading without
 pulling large files into context.
 
+`read_image` is the read-only filesystem image tool. It accepts a
+workspace-relative path to supported raster image formats, returns MIME type,
+byte count, base64 encoding, and a `data_url`, and attaches `source_ref`
+evidence. Provider adapters project successful `read_image` results as image
+inputs only when the selected model alias has `image_input=true`; text-only
+models do not see the tool, and forced calls fail through the runtime
+capability guard. SVG remains a text file concern for `read_file`.
+
 `load_skill` and `read_skill_resource` are ecosystem tools. `load_skill`
 returns the imported `SKILL.md` body for a named skill. `read_skill_resource`
 reads a skill-root-relative resource path and MUST reject absolute paths,
@@ -200,7 +209,7 @@ uses driver class `mcp`. MCP authorization is controlled by driver class and
 resource scope, especially `mcp:<server>:<tool>`, because the exact model tool
 names are discovered at runtime.
 
-`set_goal` and `agent_control` require `security_level <= 1` and explicit tool authority. S2+ agents MUST NOT gain these tools through permission grants. `request_permissions` remains available to lower-level child agents when their permission set allows it; it records a durable parent-directed request and does not execute the requested operation. `accomplish_goal` is visible to execution agents and marks the caller's local goal accomplished before final submission. `submit_final` is a model-visible lifecycle action, not a filesystem driver, and MUST execute through the Tool Broker as the last tool call in a session. Privileged `agent_control` actions require explicit Supervisor permission and MUST NOT appear in normal WorkerAgent tool views.
+`set_goal` and `agent_control` require `security_level <= 1` and explicit tool authority. S2+ agents MUST NOT gain these tools through permission grants. `request_permissions` remains available to lower-level child agents when their permission set allows it; it records a durable parent-directed request and does not execute the requested operation. `accomplish_goal` is visible to execution agents and marks the caller's local goal accomplished before final submission. `submit_final` is a model-visible lifecycle action, not a filesystem driver, and MUST execute through the Tool Broker as the last tool call in a session. Privileged `agent_control` actions require explicit Supervisor permission and MUST NOT appear in normal ProducerAgent tool views.
 
 `wait_agent` is not a core tool. Agent progress is handled through status reads, output windows, lifecycle events, and `agent_control(action=set_hook)`.
 
@@ -290,7 +299,7 @@ output_handle: string
 Example `start` payload:
 
 ```yaml
-role_profile_id: role_worker
+role_profile_id: role_producer
 goal: "Inspect storage replay gaps and report findings."
 workdir: "/repo"
 model_hint: "coding-primary"
@@ -483,7 +492,7 @@ The kernel SHOULD reject final submission when required verification is missing.
 
 ## 13. Final Output Contract
 
-A final answer submitted through `final.submit` MUST include:
+A final answer submitted through `submit_final` MUST include:
 
 ```yaml
 summary: string

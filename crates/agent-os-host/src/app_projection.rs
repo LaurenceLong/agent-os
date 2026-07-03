@@ -1,8 +1,8 @@
-use crate::KernelDaemon;
+use crate::AgentOsHost;
+use agent_os_app_server::{thread_read_response, ThreadReadProjection};
 use agent_os_sys::{AgentOsResult, AppResponse};
-use serde_json::json;
 
-impl KernelDaemon {
+impl AgentOsHost {
     pub(crate) fn thread_read_projection(
         &self,
         client_thread_id: &str,
@@ -54,15 +54,15 @@ impl KernelDaemon {
             .into_iter()
             .filter(|run| run.target_thread_id.as_deref() == Some(client_thread_id))
             .collect::<Vec<_>>();
-        Ok(AppResponse::Accepted(json!({
-            "thread": thread,
-            "turns": turns,
-            "timeline": timeline,
-            "runtime_jobs": runtime_jobs,
-            "artifacts": artifacts,
-            "evidence": evidence,
-            "resources": resources,
-            "automation_runs": automation_runs,
-        })))
+        thread_read_response(ThreadReadProjection {
+            thread,
+            turns,
+            timeline,
+            runtime_jobs,
+            artifacts,
+            evidence,
+            resources,
+            automation_runs,
+        })
     }
 }

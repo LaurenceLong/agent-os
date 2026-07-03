@@ -1,11 +1,14 @@
-use super::audit::{append_jsonl, truncate};
+use super::api_error::ProviderApiError;
+use super::audit::append_jsonl;
 use super::messages::{build_anthropic_messages, build_messages};
 use super::parser::{parse_anthropic_response, parse_response};
 use super::prompt::default_system_prompt;
 use super::tools::{anthropic_tool_definitions_for_request, tool_definitions_for_request};
 use crate::{ModelClient, ModelTurnRequest, ModelTurnResponse};
+use agent_os_sys::LlmApiStyle;
 use agent_os_sys::*;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -13,45 +16,14 @@ const DEFAULT_API_BASE: &str = "https://api.openai.com/v1";
 const DEFAULT_MAX_TOKENS: u64 = 4096;
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LlmApiStyle {
-    OpenAiCompatible,
-    AnthropicCompatible,
-}
-
-impl LlmApiStyle {
-    pub fn from_value(value: &str) -> AgentOsResult<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "openai" | "openai-compatible" | "openai_compatible" | "chat-completions"
-            | "chat_completions" => Ok(Self::OpenAiCompatible),
-            "anthropic" | "anthropic-compatible" | "anthropic_compatible" | "messages" => {
-                Ok(Self::AnthropicCompatible)
-            }
-            other => Err(AgentOsError::Validation(format!(
-                "unsupported api_style {other}; expected openai-compatible or anthropic-compatible"
-            ))),
-        }
-    }
-
-    pub fn from_base_url(api_base: &str) -> Self {
-        if api_base
-            .trim_end_matches('/')
-            .to_ascii_lowercase()
-            .ends_with("/anthropic")
-        {
-            return Self::AnthropicCompatible;
-        }
-        Self::OpenAiCompatible
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct OpenAiModelClient {
     api_base: String,
     api_key: String,
     model: String,
     max_tokens: u64,
-    temperature: f64,
+    temperature: Option<f64>,
+    model_options: BTreeMap<String, Value>,
     request_timeout: Duration,
     system_prompt_override: Option<String>,
     api_style: LlmApiStyle,
@@ -65,7 +37,8 @@ impl OpenAiModelClient {
             api_key: api_key.into(),
             model: model.into(),
             max_tokens: DEFAULT_MAX_TOKENS,
-            temperature: 0.0,
+            temperature: None,
+            model_options: BTreeMap::new(),
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
             system_prompt_override: None,
             api_style: LlmApiStyle::OpenAiCompatible,
@@ -90,7 +63,12 @@ impl OpenAiModelClient {
     }
 
     pub fn with_temperature(mut self, temperature: f64) -> Self {
-        self.temperature = temperature;
+        self.temperature = Some(temperature);
+        self
+    }
+
+    pub fn with_model_options(mut self, options: BTreeMap<String, Value>) -> Self {
+        self.model_options = options;
         self
     }
 
@@ -136,14 +114,16 @@ impl OpenAiModelClient {
         let messages = build_messages(request, &workspace_root, &self.system_prompt_override);
         let tools = tool_definitions_for_request(request);
 
-        let body = json!({
-            "model": self.model,
-            "messages": messages,
-            "tools": tools,
-            "tool_choice": "auto",
-            "max_tokens": self.max_tokens,
-            "temperature": self.temperature,
-        });
+        let mut body = self.model_options_body();
+        body.insert("model".to_string(), json!(self.model.clone()));
+        body.insert("messages".to_string(), Value::Array(messages));
+        body.insert("tools".to_string(), Value::Array(tools));
+        body.insert("tool_choice".to_string(), json!("auto"));
+        body.insert("max_tokens".to_string(), json!(self.max_tokens));
+        if let Some(temperature) = self.temperature {
+            body.insert("temperature".to_string(), json!(temperature));
+        }
+        let body = Value::Object(body);
 
         let url = format!("{}/chat/completions", self.api_base.trim_end_matches('/'));
         let bearer = format!("Bearer {}", self.api_key);
@@ -164,16 +144,23 @@ impl OpenAiModelClient {
                 AgentOsError::Validation(format!("failed to parse API response: {e}"))
             })?,
             Err(ureq::Error::Status(code, response)) => {
+                let retry_after_ms = response.header("retry-after-ms").map(str::to_string);
+                let retry_after = response.header("retry-after").map(str::to_string);
                 let error_text = response.into_string().unwrap_or_default();
-                let truncated = truncate(&error_text, 2048);
-                return Err(AgentOsError::Validation(format!(
-                    "OpenAI API error (HTTP {code}): {truncated}"
-                )));
+                let error = ProviderApiError::from_status(
+                    "openai-compatible",
+                    code,
+                    error_text,
+                    retry_after_ms.as_deref(),
+                    retry_after.as_deref(),
+                );
+                self.audit_provider_event(error.to_audit_event())?;
+                return Err(error.into_agent_error());
             }
             Err(e) => {
-                return Err(AgentOsError::Validation(format!(
-                    "OpenAI API request failed: {e}"
-                )));
+                let error = ProviderApiError::from_transport("openai-compatible", &e);
+                self.audit_provider_event(error.to_audit_event())?;
+                return Err(error.into_agent_error());
             }
         };
 
@@ -196,17 +183,29 @@ impl OpenAiModelClient {
         request: &ModelTurnRequest,
     ) -> AgentOsResult<ModelTurnResponse> {
         let workspace_root = request.workspace_root.to_string_lossy().to_string();
-        let body = json!({
-            "model": self.model,
-            "system": self.system_prompt_override
+        let mut body = self.model_options_body();
+        body.insert("model".to_string(), json!(self.model.clone()));
+        body.insert(
+            "system".to_string(),
+            json!(self
+                .system_prompt_override
                 .clone()
-                .unwrap_or_else(|| default_system_prompt(request, &workspace_root)),
-            "messages": build_anthropic_messages(request, &workspace_root),
-            "tools": anthropic_tool_definitions_for_request(request),
-            "tool_choice": {"type": "auto"},
-            "max_tokens": self.max_tokens,
-            "temperature": self.temperature,
-        });
+                .unwrap_or_else(|| default_system_prompt(request, &workspace_root))),
+        );
+        body.insert(
+            "messages".to_string(),
+            Value::Array(build_anthropic_messages(request, &workspace_root)),
+        );
+        body.insert(
+            "tools".to_string(),
+            Value::Array(anthropic_tool_definitions_for_request(request)),
+        );
+        body.insert("tool_choice".to_string(), json!({"type": "auto"}));
+        body.insert("max_tokens".to_string(), json!(self.max_tokens));
+        if let Some(temperature) = self.temperature {
+            body.insert("temperature".to_string(), json!(temperature));
+        }
+        let body = Value::Object(body);
 
         let url = format!("{}/v1/messages", self.api_base.trim_end_matches('/'));
         let bearer = format!("Bearer {}", self.api_key);
@@ -228,16 +227,23 @@ impl OpenAiModelClient {
                 AgentOsError::Validation(format!("failed to parse API response: {e}"))
             })?,
             Err(ureq::Error::Status(code, response)) => {
+                let retry_after_ms = response.header("retry-after-ms").map(str::to_string);
+                let retry_after = response.header("retry-after").map(str::to_string);
                 let error_text = response.into_string().unwrap_or_default();
-                let truncated = truncate(&error_text, 2048);
-                return Err(AgentOsError::Validation(format!(
-                    "Anthropic-compatible API error (HTTP {code}): {truncated}"
-                )));
+                let error = ProviderApiError::from_status(
+                    "anthropic-compatible",
+                    code,
+                    error_text,
+                    retry_after_ms.as_deref(),
+                    retry_after.as_deref(),
+                );
+                self.audit_provider_event(error.to_audit_event())?;
+                return Err(error.into_agent_error());
             }
             Err(e) => {
-                return Err(AgentOsError::Validation(format!(
-                    "Anthropic-compatible API request failed: {e}"
-                )));
+                let error = ProviderApiError::from_transport("anthropic-compatible", &e);
+                self.audit_provider_event(error.to_audit_event())?;
+                return Err(error.into_agent_error());
             }
         };
 
@@ -261,6 +267,13 @@ impl OpenAiModelClient {
         };
         append_jsonl(path, &entry)
     }
+
+    fn model_options_body(&self) -> Map<String, Value> {
+        self.model_options
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -275,5 +288,19 @@ mod tests {
         let client = OpenAiModelClient::new("test-key", "test-model")
             .with_request_timeout(Duration::from_secs(30));
         assert_eq!(client.request_timeout, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn model_options_seed_request_body_without_overriding_runtime_fields() {
+        let client =
+            OpenAiModelClient::new("test-key", "wire-model").with_model_options(BTreeMap::from([
+                ("reasoningEffort".to_string(), json!("high")),
+                ("max_tokens".to_string(), json!(999999)),
+            ]));
+
+        let body = client.model_options_body();
+
+        assert_eq!(body["reasoningEffort"], json!("high"));
+        assert_eq!(body["max_tokens"], json!(999999));
     }
 }

@@ -172,7 +172,7 @@ pub struct ChecklistItem {
 pub enum AgentInvocationRelationship {
     RootSupervisor,
     SupervisorDelegation,
-    WorkerAssignment,
+    ProducerAssignment,
     ReviewRequest,
     HumanEscalation,
 }

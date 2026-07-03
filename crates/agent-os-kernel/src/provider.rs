@@ -281,6 +281,7 @@ impl Kernel {
             selected_model_alias: alias.alias.clone(),
             provider_id: alias.provider_id.clone(),
             provider_model_name: alias.provider_model_name.clone(),
+            model_capabilities: alias.capabilities,
             credential_ref_id: profile.credential_ref.credential_ref_id.clone(),
             resolved_at: now_rfc3339(),
         })
@@ -291,7 +292,8 @@ impl Kernel {
         alias: &str,
         provider_id: &str,
         provider_model_name: &str,
-        capabilities: Value,
+        capabilities: ModelCapabilities,
+        limit: ModelLimit,
         provider_profile_id: &str,
     ) -> AgentOsResult<()> {
         let now = now_rfc3339();
@@ -302,10 +304,7 @@ impl Kernel {
             provider_id: provider_id.to_string(),
             provider_model_name: provider_model_name.to_string(),
             capabilities,
-            limits: json!({
-                "context_window": 128000,
-                "max_output_tokens": 16000
-            }),
+            limit,
             cost: json!({
                 "input_per_1m": null,
                 "output_per_1m": null
@@ -345,18 +344,12 @@ fn active_streaming_alias(
         .ok_or_else(|| {
             AgentOsError::PermissionDenied("model alias is not active or allowed".to_string())
         })?;
-    if alias.capabilities.get("streaming").and_then(Value::as_bool) != Some(true) {
+    if !alias.capabilities.streaming {
         return Err(AgentOsError::PermissionDenied(
             "model alias does not support streaming".to_string(),
         ));
     }
-    if output_schema.is_some()
-        && alias
-            .capabilities
-            .get("structured_output")
-            .and_then(Value::as_bool)
-            != Some(true)
-    {
+    if output_schema.is_some() && !alias.capabilities.structured_output {
         return Err(AgentOsError::PermissionDenied(
             "model alias does not support structured output".to_string(),
         ));

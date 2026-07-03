@@ -7,7 +7,7 @@ fn context_load_creates_immutable_snapshots_and_replays_staleness() {
         .kernel
         .spawn_agent(SpawnAgentInput {
             task_id: fx.task.task_id.clone(),
-            role_profile_id: "role_worker".to_string(),
+            role_profile_id: "role_producer".to_string(),
             owner: "tester".to_string(),
             goal: "inspect scoped context".to_string(),
             success_criteria: Vec::new(),

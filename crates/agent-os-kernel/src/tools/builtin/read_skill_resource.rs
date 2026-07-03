@@ -28,13 +28,13 @@ fn descriptor(now: &str) -> ToolDescriptor {
                 json!({
                     "name": {"type": "string", "description": "Imported skill name."},
                     "path": {"type": "string", "description": "Skill-root-relative resource path."},
-                    "offset": {"type": "integer", "minimum": 0, "description": "Zero-based line offset. Defaults to 0."},
+                    "offset": {"type": "integer", "minimum": 1, "description": "One-based starting line offset. Defaults to 1, which starts before the first line and includes line 1."},
                     "limit": {"type": "integer", "minimum": 1, "maximum": read_file::MAX_LIMIT, "description": "Maximum lines to return. Defaults to 200 and is capped at 1000."}
                 }),
             ),
             examples: vec![schema::example(
                 "Read a bounded page from a loaded skill resource.",
-                json!({"name": "frontend-design", "path": "references/layout.md", "offset": 0, "limit": 120}),
+                json!({"name": "frontend-design", "path": "references/layout.md", "offset": 1, "limit": 120}),
                 "Returns the resource page with pagination and path-boundary metadata.",
             )],
             output_schema: schema::object(
@@ -87,7 +87,7 @@ fn input_schema() -> Value {
         json!({
             "name": {"type": "string"},
             "path": {"type": "string"},
-            "offset": {"type": "integer", "minimum": 0},
+            "offset": {"type": "integer", "minimum": 1},
             "limit": {"type": "integer", "minimum": 1, "maximum": read_file::MAX_LIMIT}
         }),
     )

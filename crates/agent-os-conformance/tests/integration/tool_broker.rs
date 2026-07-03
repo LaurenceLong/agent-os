@@ -8,6 +8,11 @@ fn tool_broker_integration_runs_all_model_visible_tool_families() {
     let workspace = temp_workspace("agent-os-integration-tool-broker");
     fs::create_dir_all(&workspace).unwrap();
     fs::write(workspace.join("read.txt"), "read me\n").unwrap();
+    fs::write(
+        workspace.join("shot.png"),
+        [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
+    )
+    .unwrap();
     fs::write(workspace.join("edit.txt"), "alpha old beta\n").unwrap();
     fs::write(workspace.join("delete.txt"), "remove me\n").unwrap();
 
@@ -52,6 +57,15 @@ fn tool_broker_integration_runs_all_model_visible_tool_families() {
         }),
         Some("source file was inspected"),
     );
+    let image = tools.invoke(
+        1,
+        "read_image",
+        json!({
+            "workspace_root": workspace.to_string_lossy(),
+            "path": "shot.png"
+        }),
+        Some("source image was inspected"),
+    );
     tools.invoke(
         4,
         "apply_patch",
@@ -83,11 +97,10 @@ fn tool_broker_integration_runs_all_model_visible_tool_families() {
         4,
         "run_command",
         json!({
-            "program": if cfg!(windows) { "cmd" } else { "sh" },
-            "args": if cfg!(windows) {
-                json!(["/C", "echo %AGENT_OS_RUN_COMMAND_ENV_TEST%"])
+            "command": if cfg!(windows) {
+                "Write-Output $env:AGENT_OS_RUN_COMMAND_ENV_TEST"
             } else {
-                json!(["-c", "printf %s \"$AGENT_OS_RUN_COMMAND_ENV_TEST\""])
+                "printf %s \"$AGENT_OS_RUN_COMMAND_ENV_TEST\""
             },
             "cwd": workspace.to_string_lossy(),
             "env": {"AGENT_OS_RUN_COMMAND_ENV_TEST": "env-visible"}
@@ -231,6 +244,7 @@ fn tool_broker_integration_runs_all_model_visible_tool_families() {
             "ask_human",
             "post_blackboard",
             "read_file",
+            "read_image",
             "record_evidence",
             "request_permissions",
             "report_supervisor",
@@ -246,6 +260,8 @@ fn tool_broker_integration_runs_all_model_visible_tool_families() {
             .as_str()
             .unwrap()
     ));
+    assert_eq!(image.status, ToolCallStatus::Completed);
+    assert_eq!(image.output.as_ref().unwrap()["mime_type"], "image/png");
     assert_eq!(state.blackboard_entries.len(), 1);
     assert_eq!(state.final_submissions.len(), 1);
     assert!(state.agent_control_commands.values().any(|command| {

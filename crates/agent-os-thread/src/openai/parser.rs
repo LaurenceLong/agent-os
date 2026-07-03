@@ -202,6 +202,7 @@ fn inject_runtime_fields(
 fn evidence_claim_for_tool(tool_name: &str) -> String {
     match tool_name {
         "read_file" => "file contents were read from the workspace".to_string(),
+        "read_image" => "image contents were read from the workspace".to_string(),
         "apply_patch" => "workspace file patch was applied".to_string(),
         "run_command" => "command was executed and output captured".to_string(),
         "set_goal" => "agent goal was updated in Agent-OS work state".to_string(),

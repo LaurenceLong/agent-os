@@ -43,7 +43,7 @@ impl SoftwareCodeTask {
         test_program: impl Into<PathBuf>,
         test_args: Vec<String>,
     ) -> AgentOsResult<Self> {
-        super::planner::plan_from_task(workspace_root, task, scoped_file, test_program, test_args)
+        crate::planner::plan_from_task(workspace_root, task, scoped_file, test_program, test_args)
     }
 }
 

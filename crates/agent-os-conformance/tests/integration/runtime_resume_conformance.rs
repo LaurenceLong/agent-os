@@ -42,7 +42,7 @@ fn agent_thread_resumes_after_process_restart_with_persisted_tool_state() {
     let agent = first_kernel
         .spawn_agent(SpawnAgentInput {
             task_id: task.task_id.clone(),
-            role_profile_id: "role_worker".to_string(),
+            role_profile_id: "role_producer".to_string(),
             owner: "conformance".to_string(),
             goal: "write result".to_string(),
             success_criteria: vec!["result is written".to_string()],

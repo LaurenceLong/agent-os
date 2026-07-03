@@ -35,8 +35,21 @@ fn capability_cannot_exceed_permission_profile() {
 }
 
 #[test]
-fn reviewer_cannot_write_workspace_files() {
+fn reviewer_and_producer_have_equivalent_baseline_permissions() {
     let fx = fixture();
+    let producer = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_producer".to_string(),
+            owner: "tester".to_string(),
+            goal: "produce".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: Vec::new(),
+        })
+        .unwrap();
     let reviewer = fx
         .kernel
         .spawn_agent(SpawnAgentInput {
@@ -50,18 +63,26 @@ fn reviewer_cannot_write_workspace_files() {
             workspace_roots: Vec::new(),
         })
         .unwrap();
-    let err = fx
-        .kernel
-        .grant_capability(
-            &reviewer.agent_id,
-            &fx.task.task_id,
-            vec!["artifact.commit".to_string()],
-            vec!["workspace:*".to_string()],
-            3,
-            None,
-        )
-        .unwrap_err();
-    assert!(matches!(err, AgentOsError::PermissionDenied(_)));
+    assert_eq!(
+        producer.effective_permissions_snapshot,
+        reviewer.effective_permissions_snapshot
+    );
+    assert!(reviewer
+        .effective_permissions_snapshot
+        .allowed_tool_names
+        .contains(&"apply_patch".to_string()));
+    assert!(reviewer
+        .effective_permissions_snapshot
+        .allowed_tool_names
+        .contains(&"run_command".to_string()));
+    assert!(!reviewer
+        .effective_permissions_snapshot
+        .allowed_tool_names
+        .contains(&"agent_control".to_string()));
+    assert!(!reviewer
+        .effective_permissions_snapshot
+        .allowed_tool_names
+        .contains(&"set_goal".to_string()));
 }
 
 #[test]
@@ -130,7 +151,8 @@ fn denied_tool_call_is_audited_and_replayable() {
             ToolInvokeInput {
                 tool_name: "run_command".to_string(),
                 input: json!({
-                    "program": "cargo",
+                    "mode": "exec",
+                    "command": "cargo",
                     "args": ["test"],
                     "cwd": "."
                 }),
@@ -279,7 +301,7 @@ fn high_risk_capability_requires_active_bounded_approval() {
         6,
         serde_json::to_value(SpawnAgentInput {
             task_id: fx.task.task_id.clone(),
-            role_profile_id: "role_worker".to_string(),
+            role_profile_id: "role_producer".to_string(),
             owner: "tester".to_string(),
             goal: "inspect".to_string(),
             success_criteria: Vec::new(),
@@ -661,18 +683,50 @@ fn supervisor_and_reviewer_child(
             workspace_roots: vec![workspace.to_string_lossy().to_string()],
         })
         .unwrap();
+    let supervisor_cap = fx
+        .kernel
+        .grant_capability(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            4,
+            None,
+        )
+        .unwrap();
+    let child_start = fx
+        .kernel
+        .invoke_tool(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            &supervisor.session_id,
+            supervisor_cap.capability_id,
+            4,
+            ToolInvokeInput {
+                tool_name: "agent_control".to_string(),
+                input: json!({
+                    "action": "start",
+                    "payload": {
+                        "goal": "request write permission",
+                        "role_profile_id": "role_reviewer",
+                        "workspace_roots": [workspace.to_string_lossy()],
+                        "permissions": restricted_permission_requester_permission()
+                    }
+                }),
+                evidence_claim: None,
+            },
+        )
+        .unwrap();
+    let child_thread_id = child_start.output.as_ref().unwrap()["thread_id"]
+        .as_str()
+        .unwrap();
     let child = fx
         .kernel
-        .spawn_agent(SpawnAgentInput {
-            task_id: fx.task.task_id.clone(),
-            role_profile_id: "role_reviewer".to_string(),
-            owner: supervisor.agent_id.clone(),
-            goal: "request write permission".to_string(),
-            success_criteria: Vec::new(),
-            failure_criteria: Vec::new(),
-            parent_thread_id: Some(supervisor.thread_id.clone()),
-            workspace_roots: vec![workspace.to_string_lossy().to_string()],
-        })
+        .state_snapshot()
+        .unwrap()
+        .threads
+        .get(child_thread_id)
+        .cloned()
         .unwrap();
     (supervisor, child)
 }
@@ -784,6 +838,18 @@ fn apply_patch_permission() -> serde_json::Value {
         "allowed_tool_names": ["apply_patch"],
         "allowed_tool_driver_classes": ["filesystem"],
         "approval_required_above": 4,
+        "requires_evidence_for": []
+    })
+}
+
+fn restricted_permission_requester_permission() -> serde_json::Value {
+    json!({
+        "max_risk_level": 1,
+        "allowed_syscalls": ["tool.invoke"],
+        "resource_scopes": ["tool:*"],
+        "allowed_tool_names": ["request_permissions"],
+        "allowed_tool_driver_classes": ["kernel_builtin"],
+        "approval_required_above": 1,
         "requires_evidence_for": []
     })
 }

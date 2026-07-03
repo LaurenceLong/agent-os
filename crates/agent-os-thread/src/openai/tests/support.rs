@@ -5,10 +5,21 @@ pub(super) fn make_request(workspace: &std::path::Path) -> ModelTurnRequest {
     request
 }
 
+pub(super) fn image_capable_model() -> ModelCapabilities {
+    ModelCapabilities {
+        streaming: true,
+        tool_calling: true,
+        reasoning: true,
+        temperature: true,
+        image_input: true,
+        structured_output: true,
+    }
+}
+
 pub(super) fn make_kernel_request(workspace: &std::path::Path) -> (Kernel, ModelTurnRequest) {
     make_kernel_request_for_role(
         workspace,
-        "role_worker",
+        "role_producer",
         "Write hello world to file",
         vec!["output file exists".to_string()],
     )
@@ -120,6 +131,7 @@ pub(super) fn make_kernel_request_for_role_on_kernel_with_requirements(
         thread: agent,
         workspace_root: workspace.to_path_buf(),
         step_index: 0,
+        model_capabilities: image_capable_model(),
         context: ModelContextProjection::default(),
     };
     refresh_tool_descriptors(&kernel, &mut request);
@@ -230,6 +242,7 @@ pub(super) fn assert_core_tool_mock_effects(
     for expected in [
         "apply_patch",
         "read_file",
+        "read_image",
         "run_command",
         "set_goal",
         "accomplish_goal",
@@ -256,6 +269,8 @@ pub(super) fn assert_core_tool_mock_effects(
         output_for("set_goal")["goal"],
         "complete provider-neutral all-tool mock adapter coverage"
     );
+    assert_eq!(output_for("read_image")["mime_type"], "image/png");
+    assert_eq!(output_for("read_image")["bytes_read"], 8);
     assert_eq!(output_for("accomplish_goal")["goal_accomplished"], true);
     assert_eq!(
         output_for("update_checklist")["items"][0]["status"],

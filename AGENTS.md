@@ -70,6 +70,16 @@ forward-only system design.
 - Do not introduce a new framework or runtime dependency for core Agent-OS
   behavior without an ADR.
 
+## Cross-Platform Contract
+
+- Agent-OS must provide a consistent developer and runtime experience on macOS,
+  Linux, and Windows.
+- Path, config, storage, process, and shell behavior must be designed and tested
+  with all three platforms in mind instead of relying on one host's defaults.
+- Prefer platform-standard roots such as XDG paths on Unix-like systems and
+  APPDATA/LOCALAPPDATA on Windows while keeping the logical Agent-OS contract
+  identical across platforms.
+
 ## Storage And Migration Rules
 
 - Schema changes must be versioned, deterministic, and tested when a physical

@@ -8,13 +8,13 @@ The central execution unit is the Agent Thread. An Agent Thread is not an arbitr
 
 ## Design Baseline
 
-Current baseline: `v0.1-design + Rust single-node runtime skeleton`
+Current baseline: `v0.3-design + Rust single-node host/runtime`
 
-This repository contains the design contract and an initial Rust implementation that follows it. Implementation work should not start by adopting LangGraph, AutoGen, CrewAI, OpenHands, or any other agent framework as the core runtime. Those projects can be studied, wrapped, or hosted as compatibility guests, but the Agent-OS kernel and Agent Thread Runtime must be owned by this project.
+This repository contains the design contract and a Rust implementation that follows it. Implementation work should not start by adopting LangGraph, AutoGen, CrewAI, OpenHands, or any other agent framework as the core runtime. Those projects can be studied, wrapped, or hosted as compatibility guests, but the Agent-OS kernel and Agent Thread Runtime must be owned by this project.
 
 ## Rust Workspace
 
-The initial implementation is contract-first and single-node:
+The implementation is contract-first and single-node:
 
 ```text
 crates/
@@ -22,15 +22,20 @@ crates/
   agent-os-store/        # append-only store traits and in-memory driver
   agent-os-store-sqlite/ # SQLite event/idempotency store driver
   agent-os-kernel/       # single-node microkernel services
-  agent-os-thread/       # Agent Thread Runtime loop, model adapters, and workflow prompt builders
+  agent-os-config/       # global config, project overrides, path resolution
+  agent-os-ecosystem/    # global/project skills, rules, commands, MCP discovery
+  agent-os-thread/       # Agent Thread Runtime loop and model adapters
+  agent-os-distro/       # distribution prompt and workflow builders
+  agent-os-app-server/   # JSONL app protocol and app-facing projection shape
+  agent-os-host/         # thin host for persisted kernel state and runtime jobs
   agent-os-conformance/  # conformance tests for the normative docs
-  agent-os-cli/          # lifecycle demo and deterministic e2e task runner
+  agent-os-cli/          # demo, run, code, chat, status, and resume entrypoints
 ```
 
 Implemented kernel surfaces include:
 
 - versioned syscall and event envelopes
-- Phase 0 ABI/data schemas, including blackboard, context, memory, locks, package manifests, profiles, leases, artifacts, evidence, review, verification, and final submissions
+- ABI/data schemas, including blackboard, context, memory, locks, package manifests, profiles, leases, artifacts, evidence, review, verification, and final submissions
 - ATCB lifecycle and transition validation
 - core role, permission, sandbox, scheduler, provider, and communication profiles
 - capability intersection with permission profile ceilings
@@ -47,23 +52,30 @@ Implemented kernel surfaces include:
 - review independence, verification independence, and final evidence-map checks
 - provider stream sessions, usage accounting, override policy checks, and durable failover events
 - deterministic CLI e2e task execution that writes a workspace output file and closes with evidence, artifact, replay, and final submission
+- host-backed interactive `chat` execution through `agent-os-hostd --stdio`, the app-server JSONL protocol, SQLite-backed runtime job records, and user-level provider configuration
 - Agent Thread Runtime loop that consumes provider-neutral model actions, records provider stream events, bounds provider requests with a hard client timeout, executes tool proposals through Tool Broker, yields on background-running tools, bounds pre-patch investigation loops, auto-commits patch artifacts from diff evidence, blocks nonzero process checks, submits evidence-backed final output through the broker, checkpoints, and replays
 - external process model adapter for `ModelTurnRequest` JSON over stdin and `ModelTurnResponse` JSON over stdout, so real provider wrappers can drive the same runtime without linking provider SDKs into the kernel
-- a converged v0.2 Host OS tool surface of `read_file`, `apply_patch`, and `run_command`, with each built-in tool owned by its own kernel Rust module and descriptor
+- a converged v0.3 Host OS tool surface of `read_file`, `read_image`, `apply_patch`, and `run_command`, with each built-in tool owned by its own kernel Rust module and descriptor
 - Agent-OS control-plane tools for objective/checklist state, Supervisor communication, scoped blackboard posts, human asks, evidence records, supervised child agents, and final session submission
+- app-server-owned `thread/read` response projection shape, with host providing raw read models and runtime job state
+- conformance coverage for workspace crate dependency boundaries so production crates cannot drift back into cross-layer dependencies
 - a Supervisor-led workflow model where concrete distributions provide prompts, examples, and policy packs instead of hard-coded kernel pipelines
 - Supervisor hierarchy semantics: the top Supervisor is `S0`, delegated Supervisors increment the level (`S1`, `S2`, ...), and every delegation records a durable invocation edge for replay and audit
 - a runtime handle that can start turns, steer, interrupt, checkpoint, and expose status
 
 ## Core Surface
 
-Agent-OS v0.2.0 separates three surfaces that must not be conflated:
+Agent-OS v0.3.0 separates these surfaces that must not be conflated:
 
 ```text
 Host OS tools:
   read_file
+  read_image
   apply_patch
   run_command
+
+Ecosystem tools:
+  load_skill, read_skill_resource
 
 Agent-OS control-plane tools:
   set_goal, accomplish_goal, update_checklist, record_evidence
@@ -78,7 +90,7 @@ distribution workflow:
   Supervisor-authored prompts, examples, policy packs, and optional role aliases
 ```
 
-The core roles are `SupervisorAgent`, `WorkerAgent`, and `ReviewerAgent`. Testing is a worker responsibility that produces command evidence. Verification is primarily a kernel gate over final submissions and evidence maps; a distribution may add a verifier-style worker, but the kernel does not require one.
+The core roles are `SupervisorAgent`, `ProducerAgent`, and `ReviewerAgent`. Testing is a producer responsibility that produces command evidence. Verification is primarily a kernel gate over final submissions and evidence maps; a distribution may add a verifier-style workflow step, but the kernel does not require a dedicated verifier role.
 
 Security levels are part of the control plane. Human authority is implicit `S0`; every persisted root agent starts at `S1`, and each nested child increments the parent level. The kernel records each delegation as an invocation edge with caller, callee, security level, child goal, task/goal scope, and capability/profile snapshots. `agent_control` and `set_goal` require `security_level <= 1` plus matching tool permission.
 
@@ -91,36 +103,82 @@ The runtime also narrows the model-visible tool surface when the loop has enough
 ## Provider Configuration
 
 The interactive `chat` entrypoint reads provider configuration from the user's
-global Agent-OS config, not from repository-local environment files. This keeps
-runtime provider settings stable across checkout replacement and Agent-OS
-upgrades.
+global Agent-OS config, with optional project overrides from
+`.agent-os/config.json`. Runtime state, blob storage, logs, provider audit
+records, and caches default to global Agent-OS roots rather than the workspace.
+Workspace `.agent-os` is reserved for user-maintained project configuration and
+ecosystem resources.
 
-Global provider config path:
+Global config paths:
 
 ```text
-Windows: %APPDATA%\agent-os\providers.json
-Unix:    $XDG_CONFIG_HOME/agent-os/providers.json
+Windows config: %APPDATA%\agent-os\config.json
+Windows state/data/cache/log: %LOCALAPPDATA%\agent-os\...
+macOS/Linux config: ${XDG_CONFIG_HOME:-$HOME/.config}/agent-os/config.json
+macOS/Linux data:   ${XDG_DATA_HOME:-$HOME/.local/share}/agent-os
+macOS/Linux state:  ${XDG_STATE_HOME:-$HOME/.local/state}/agent-os
+macOS/Linux cache:  ${XDG_CACHE_HOME:-$HOME/.cache}/agent-os
 ```
 
 Config shape:
 
 ```json
 {
-  "default_provider": "default",
-  "providers": {
-    "default": {
+  "model": "openai/gpt-4o",
+  "small_model": "openai/gpt-4o-mini",
+  "provider": {
+    "openai": {
       "api_key": "replace-with-your-api-key",
-      "base_url": "https://api.openai.com/v1",
-      "model": "gpt-4o",
-      "api_style": "openai-compatible"
+      "api_style": "openai-compatible",
+      "options": {
+        "base_url": "https://api.openai.com/v1",
+        "timeout_ms": 120000
+      },
+      "models": {
+        "gpt-4o": {
+          "name": "gpt-4o",
+          "limit": {"context": 128000, "output": 16384},
+          "capabilities": {
+            "streaming": true,
+            "tool_calling": true,
+            "reasoning": true,
+            "temperature": true,
+            "image_input": true,
+            "structured_output": true
+          }
+        },
+        "gpt-4o-mini": {
+          "name": "gpt-4o-mini",
+          "limit": {"context": 128000, "output": 16384},
+          "capabilities": {
+            "streaming": true,
+            "tool_calling": true,
+            "reasoning": true,
+            "temperature": true,
+            "image_input": true,
+            "structured_output": true
+          }
+        }
+      }
     }
   }
 }
 ```
 
+`model` is the selected runtime model in `provider_id/model_id` form. Each
+provider owns its credential, `api_style`, endpoint options, and model catalog.
 `api_style` is required and supports `openai-compatible` and
-`anthropic-compatible`. Use `agent-os chat --provider <name>` to select a
-non-default provider from the global config.
+`anthropic-compatible`. Use `agent-os chat --model <provider/model>` to select
+a non-default model from the merged global/project config. Each model entry
+must explicitly define `name`, `limit.context`, and `limit.output`;
+`limit.input` is optional.
+Model `options` is an object merged into the provider request body before
+runtime-controlled fields, so reasoning controls such as `reasoningEffort`,
+`reasoningSummary`, or provider-native `thinking` settings belong there.
+Project `.agent-os/config.json` may override `model`, `small_model`, provider
+`options`, and model metadata, but it must not contain provider `api_key` or
+`api_style` values. Tests and isolated local runs may set `AGENT_OS_HOME` to
+place all Agent-OS roots under one temporary directory.
 
 Run the current conformance suite with:
 
@@ -167,26 +225,26 @@ cargo run -p agent-os-cli -- run \
   --workspace . \
   --task "Write a task report" \
   --output agent-os-task-result.md \
-  --state-db .agent-os/state.sqlite \
   --bundle-output agent-os-task-bundle.json
 ```
 
 The command records the task through the kernel lifecycle, attaches a writable environment lease, writes the output file through Tool Broker, records diff and command evidence from tool invocations, commits a patch artifact, submits the final evidence map, verifies replay, and can export a selected task bundle for offline audit or conformance replay.
 
-`--state-db` stores the append-only event log in SQLite and replays it into kernel projections when the CLI starts, so later invocations can inspect or continue from the same durable control-plane state.
+By default the CLI stores the append-only event log in the global Agent-OS state
+database and replays it into kernel projections when the CLI starts, so later
+invocations can inspect or continue from the same durable control-plane state.
+`--state-db` remains available as an explicit test/debug override.
 
 Inspect persisted state:
 
 ```sh
-cargo run -p agent-os-cli -- status \
-  --state-db .agent-os/state.sqlite
+cargo run -p agent-os-cli -- status
 ```
 
 Resume an interrupted Agent Thread with an external model action process:
 
 ```sh
 cargo run -p agent-os-cli -- resume \
-  --state-db .agent-os/state.sqlite \
   --thread-id thread_000000000000000a \
   --workspace . \
   --bundle-output agent-os-resumed-bundle.json \
@@ -202,7 +260,6 @@ cargo run -p agent-os-cli -- run \
   --workspace . \
   --task "Write a task report" \
   --output agent-os-task-result.md \
-  --state-db .agent-os/state.sqlite \
   --bundle-output agent-os-task-bundle.json \
   --model-command path/to/model-action-wrapper \
   --model-arg --profile \
@@ -217,13 +274,12 @@ Run a repository edit and test command through the same control plane:
 cargo run -p agent-os-cli -- code \
   --workspace . \
   --task "Change answer from one to two" \
-  --state-db .agent-os/state.sqlite \
   --bundle-output agent-os-code-bundle.json \
   --test-program cargo \
   --test-arg test
 ```
 
-The `code` command is an implementation helper that builds a software-engineering distro prompt and then runs the normal Agent Thread Runtime loop through `agent-os-kerneld`. In task-only mode it derives one safe exact edit from phrasing like `from X to Y`; if it cannot prove a single edit, it fails closed and requires `--file`, `--old`, and `--new`. The distro prompt gives the Supervisor flexible workflow labels mapped onto core Agent-OS roles rather than a mandatory built-in pipeline. `--bundle-output` exports the task subtree, including child tasks, artifacts, evidence, reviews, verifications, finals, profile snapshots, and replay events.
+The `code` command is an implementation helper that builds a software-engineering distro prompt and then runs the normal Agent Thread Runtime loop through the `agent-os-hostd` process. In task-only mode it derives one safe exact edit from phrasing like `from X to Y`; if it cannot prove a single edit, it fails closed and requires `--file`, `--old`, and `--new`. The distro prompt gives the Supervisor flexible workflow labels mapped onto core Agent-OS roles rather than a mandatory built-in pipeline. `--bundle-output` exports the task subtree, including child tasks, artifacts, evidence, reviews, verifications, finals, profile snapshots, and replay events.
 
 Exact edit mode is still available:
 
@@ -249,20 +305,23 @@ Read in this order:
 5. [System Architecture](docs/10-kernel-design/system-architecture.md)
 6. [Overall Architecture Mermaid](docs/10-kernel-design/overall-architecture-mermaid.md)
 7. [Agent Thread Source Study](docs/05-research/agent-thread-source-study.md)
-8. [Agent Thread Runtime](docs/10-kernel-design/agent-thread-runtime.md)
-9. [Agent Thread Core Module](docs/10-kernel-design/agent-thread-core-module.md)
-10. [Role and Profile System](docs/10-kernel-design/role-and-profile-system.md)
-11. [Execution Environment System](docs/10-kernel-design/execution-environment-system.md)
-12. [Scheduler and Resource Arbitration](docs/10-kernel-design/scheduler-and-resource-arbitration.md)
-13. [Provider System](docs/10-kernel-design/provider-system.md)
-14. [Agent Thread Communication](docs/10-kernel-design/agent-thread-communication.md)
-15. [Memento Fragments](docs/10-kernel-design/memento-fragments.md)
-16. [Kernel Data Model](docs/10-kernel-design/kernel-data-model.md)
-17. [Kernel ABI and Syscalls](docs/10-kernel-design/kernel-abi-and-syscalls.md)
-18. [State, Storage, and Replay](docs/10-kernel-design/state-storage-and-replay.md)
-19. [Permission, Tool, and Evidence Model](docs/10-kernel-design/permission-tool-evidence-model.md)
-20. [Production Roadmap](docs/20-implementation/production-roadmap.md)
-21. [Conformance and Quality Gates](docs/20-implementation/conformance-and-quality.md)
+8. [Agent Optimization Statistics Study](docs/05-research/agent-optimization-statistics-study.md)
+9. [Long-Running Kernel/App-Server Gap Study](docs/05-research/long-running-kernel-app-server-gap-study.md)
+10. [Agent Thread Runtime](docs/10-kernel-design/agent-thread-runtime.md)
+11. [Agent Thread Core Module](docs/10-kernel-design/agent-thread-core-module.md)
+12. [Role and Profile System](docs/10-kernel-design/role-and-profile-system.md)
+13. [Execution Environment System](docs/10-kernel-design/execution-environment-system.md)
+14. [Scheduler and Resource Arbitration](docs/10-kernel-design/scheduler-and-resource-arbitration.md)
+15. [Provider System](docs/10-kernel-design/provider-system.md)
+16. [Agent Thread Communication](docs/10-kernel-design/agent-thread-communication.md)
+17. [Memento Fragments](docs/10-kernel-design/memento-fragments.md)
+18. [Kernel Data Model](docs/10-kernel-design/kernel-data-model.md)
+19. [Kernel ABI and Syscalls](docs/10-kernel-design/kernel-abi-and-syscalls.md)
+20. [State, Storage, and Replay](docs/10-kernel-design/state-storage-and-replay.md)
+21. [Permission, Tool, and Evidence Model](docs/10-kernel-design/permission-tool-evidence-model.md)
+22. [Production Roadmap](docs/20-implementation/production-roadmap.md)
+23. [Conformance and Quality Gates](docs/20-implementation/conformance-and-quality.md)
+24. [SWE-bench Lite Private Benchmark](docs/20-implementation/swe-bench-lite-private-benchmark.md)
 
 Architecture decision records:
 
@@ -274,6 +333,7 @@ Architecture decision records:
 - [ADR-0006: Agent Thread communication is capability-scoped](docs/30-decisions/ADR-0006-agent-thread-communication-is-capability-scoped.md)
 - [ADR-0007: Provider System is global control-plane infrastructure](docs/30-decisions/ADR-0007-provider-system-is-global-control-plane.md)
 - [ADR-0008: Thread-adjacent concerns are kernel subsystems](docs/30-decisions/ADR-0008-thread-adjacent-concerns-are-kernel-subsystems.md)
+- [ADR-0009: v0.1 core surface is minimal tools, supervised collaboration, and scoped blackboards](docs/30-decisions/ADR-0009-v0-1-core-surface-convergence.md)
 
 ## Development Rules
 

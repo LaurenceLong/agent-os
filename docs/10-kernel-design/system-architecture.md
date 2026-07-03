@@ -2,17 +2,20 @@
 
 Status: normative
 
-Last updated: 2026-06-25
+Last updated: 2026-07-03
 
 ## 1. Architecture Summary
 
 Agent-OS is structured as a microkernel-style runtime with dedicated Agent Threads.
 
 ```text
-Human / API / UI
+Human / API / CLI
       |
       v
-Agent-OS API Server
+Agent-OS App Server
+      |
+      v
+Agent-OS Host
       |
       v
 Agent-OS Kernel
@@ -40,7 +43,7 @@ Agent-OS Kernel
 Agent Thread Runtime
       |
       +-- SupervisorAgent
-      +-- WorkerAgent
+      +-- ProducerAgent
       +-- ReviewerAgent
       |
       v
@@ -58,37 +61,22 @@ Drivers and Services
 
 ## 2. Core Packages
 
-Initial repository package layout SHOULD be:
+Current Rust workspace package layout is:
 
 ```text
 crates/
-  agent-os-kernel/
-  agent-os-runtime/
-  agent-os-thread/
-  agent-os-thread-protocol/
-  agent-os-agent-control/
-  agent-os-role/
-  agent-os-execution-env/
-  agent-os-scheduler/
-  agent-os-communication/
-  agent-os-provider/
-  agent-os-provider-adapters/
-  agent-os-model-catalog/
-  agent-os-thread-store/
   agent-os-sys/
   agent-os-store/
   agent-os-store-sqlite/
-  agent-os-store-postgres/
-  agent-os-tool-broker/
-  agent-os-policy/
-  agent-os-evidence/
-  agent-os-artifacts/
+  agent-os-kernel/
+  agent-os-thread/
+  agent-os-config/
+  agent-os-ecosystem/
+  agent-os-distro/
+  agent-os-app-server/
+  agent-os-host/
+  agent-os-cli/
   agent-os-conformance/
-
-sdk/
-  typescript/
-  python/
-  rust/
 
 distros/
   software-engineering/
@@ -96,7 +84,7 @@ distros/
 docs/
 ```
 
-The first implementation language for kernel crates SHOULD be Rust.
+The first implementation language for kernel crates is Rust.
 
 TypeScript and Python SHOULD be SDK and distribution languages, not kernel implementation languages.
 

@@ -1,8 +1,9 @@
 use agent_os_app_server::JsonlAppClient;
+use agent_os_config::AgentOsPaths;
+#[cfg(test)]
+use agent_os_host::AgentOsHost;
 #[cfg(test)]
 use agent_os_kernel::Kernel;
-#[cfg(test)]
-use agent_os_kerneld::KernelDaemon;
 #[cfg(test)]
 use agent_os_store::LocalBlobStore;
 #[cfg(test)]
@@ -15,6 +16,8 @@ use std::fs;
 use std::io::{self, BufReader};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+#[cfg(test)]
+use std::sync::OnceLock;
 
 pub(crate) fn ensure_safe_relative_workspace_path(path: &Path, flag: &str) -> AgentOsResult<()> {
     if path.is_absolute()
@@ -31,6 +34,16 @@ pub(crate) fn ensure_safe_relative_workspace_path(path: &Path, flag: &str) -> Ag
 
 pub(crate) fn io_result<T>(result: io::Result<T>, context: &str) -> AgentOsResult<T> {
     result.map_err(|error| AgentOsError::Validation(format!("{context}: {error}")))
+}
+
+pub(crate) fn default_state_db() -> AgentOsResult<PathBuf> {
+    Ok(AgentOsPaths::resolve()?.default_state_db())
+}
+
+pub(crate) fn default_state_db_for_workspace(workspace: &Path) -> AgentOsResult<PathBuf> {
+    Ok(AgentOsPaths::resolve()?
+        .project_runtime_paths(workspace)?
+        .state_db)
 }
 
 pub(crate) fn write_task_bundle_from_app_response(
@@ -52,24 +65,24 @@ pub(crate) fn write_task_bundle_from_app_response(
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct StdioKerneldConfig {
+pub(crate) struct StdioHostConfig {
     pub(crate) state_db: PathBuf,
     pub(crate) model_command: Option<PathBuf>,
     pub(crate) model_args: Vec<String>,
-    pub(crate) provider: Option<String>,
+    pub(crate) model: Option<String>,
     pub(crate) provider_config: Option<PathBuf>,
     pub(crate) max_steps: Option<u32>,
     pub(crate) max_tokens: Option<u64>,
     pub(crate) temperature: Option<String>,
 }
 
-impl StdioKerneldConfig {
+impl StdioHostConfig {
     pub(crate) fn state_db(state_db: impl Into<PathBuf>) -> Self {
         Self {
             state_db: state_db.into(),
             model_command: None,
             model_args: Vec::new(),
-            provider: None,
+            model: None,
             provider_config: None,
             max_steps: None,
             max_tokens: None,
@@ -78,20 +91,20 @@ impl StdioKerneldConfig {
     }
 }
 
-pub(crate) struct StdioKerneldAppClient {
+pub(crate) struct StdioHostAppClient {
     client: JsonlAppClient<BufReader<ChildStdout>, ChildStdin>,
     child: Child,
 }
 
-impl StdioKerneldAppClient {
-    pub(crate) fn open(config: &StdioKerneldConfig) -> AgentOsResult<Self> {
+impl StdioHostAppClient {
+    pub(crate) fn open(config: &StdioHostConfig) -> AgentOsResult<Self> {
         if let Some(parent) = config.state_db.parent() {
             if !parent.as_os_str().is_empty() {
                 io_result(fs::create_dir_all(parent), "create state database parent")?;
             }
         }
-        let kerneld = resolve_kerneld_executable()?;
-        let mut command = Command::new(&kerneld);
+        let hostd = resolve_hostd_executable()?;
+        let mut command = Command::new(&hostd);
         command
             .arg("--stdio")
             .arg("--state-db")
@@ -102,8 +115,8 @@ impl StdioKerneldAppClient {
                 command.arg("--model-arg").arg(arg);
             }
         }
-        if let Some(provider) = &config.provider {
-            command.arg("--provider").arg(provider);
+        if let Some(model) = &config.model {
+            command.arg("--model").arg(model);
         }
         if let Some(provider_config) = &config.provider_config {
             command.arg("--provider-config").arg(provider_config);
@@ -124,18 +137,18 @@ impl StdioKerneldAppClient {
             .spawn()
             .map_err(|error| {
                 AgentOsError::Validation(format!(
-                    "spawn kerneld {}: {error}",
-                    kerneld.to_string_lossy()
+                    "spawn hostd {}: {error}",
+                    hostd.to_string_lossy()
                 ))
             })?;
         let stdin = child
             .stdin
             .take()
-            .ok_or_else(|| AgentOsError::Validation("kerneld stdin was not piped".to_string()))?;
+            .ok_or_else(|| AgentOsError::Validation("hostd stdin was not piped".to_string()))?;
         let stdout = child
             .stdout
             .take()
-            .ok_or_else(|| AgentOsError::Validation("kerneld stdout was not piped".to_string()))?;
+            .ok_or_else(|| AgentOsError::Validation("hostd stdout was not piped".to_string()))?;
         Ok(Self {
             client: JsonlAppClient::new(cli_client(), BufReader::new(stdout), stdin),
             child,
@@ -153,7 +166,7 @@ impl StdioKerneldAppClient {
     }
 }
 
-impl Drop for StdioKerneldAppClient {
+impl Drop for StdioHostAppClient {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
@@ -170,7 +183,10 @@ pub(crate) fn cli_client() -> ClientConnection {
     }
 }
 
-pub(crate) fn resolve_kerneld_executable() -> AgentOsResult<PathBuf> {
+pub(crate) fn resolve_hostd_executable() -> AgentOsResult<PathBuf> {
+    #[cfg(test)]
+    ensure_cargo_test_hostd_executable()?;
+
     let current_exe = std::env::current_exe().map_err(|error| {
         AgentOsError::Validation(format!("resolve current executable: {error}"))
     })?;
@@ -180,14 +196,14 @@ pub(crate) fn resolve_kerneld_executable() -> AgentOsResult<PathBuf> {
             current_exe.to_string_lossy()
         ))
     })?;
-    let direct = current_dir.join(kerneld_executable_file_name());
+    let direct = current_dir.join(hostd_executable_file_name());
     if direct.exists() {
         return Ok(direct);
     }
     let cargo_test = if current_dir.file_name().and_then(|name| name.to_str()) == Some("deps") {
         current_dir
             .parent()
-            .map(|parent| parent.join(kerneld_executable_file_name()))
+            .map(|parent| parent.join(hostd_executable_file_name()))
     } else {
         None
     };
@@ -197,22 +213,66 @@ pub(crate) fn resolve_kerneld_executable() -> AgentOsResult<PathBuf> {
         }
     }
     Err(AgentOsError::Validation(format!(
-        "kerneld executable not found next to {}; expected {}",
+        "hostd executable not found next to {}; expected {}",
         current_exe.to_string_lossy(),
-        kerneld_executable_file_name().display()
+        hostd_executable_file_name().display()
     )))
 }
 
-fn kerneld_executable_file_name() -> &'static Path {
+#[cfg(test)]
+fn ensure_cargo_test_hostd_executable() -> AgentOsResult<()> {
+    static HOSTD_BUILD: OnceLock<Result<(), String>> = OnceLock::new();
+    match HOSTD_BUILD
+        .get_or_init(|| build_cargo_test_hostd_executable().map_err(|error| error.to_string()))
+    {
+        Ok(()) => Ok(()),
+        Err(message) => Err(AgentOsError::Validation(message.clone())),
+    }
+}
+
+#[cfg(test)]
+fn build_cargo_test_hostd_executable() -> AgentOsResult<()> {
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = manifest_dir
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| {
+            AgentOsError::Validation(format!(
+                "resolve workspace root from {}",
+                manifest_dir.to_string_lossy()
+            ))
+        })?;
+    let output = Command::new(cargo)
+        .arg("build")
+        .arg("-p")
+        .arg("agent-os-host")
+        .arg("--bin")
+        .arg("agent-os-hostd")
+        .current_dir(workspace_root)
+        .output()
+        .map_err(|error| AgentOsError::Validation(format!("build hostd for CLI tests: {error}")))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(AgentOsError::Validation(format!(
+        "build hostd for CLI tests failed with status {}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )))
+}
+
+fn hostd_executable_file_name() -> &'static Path {
     Path::new(if cfg!(windows) {
-        "agent-os-kerneld.exe"
+        "agent-os-hostd.exe"
     } else {
-        "agent-os-kerneld"
+        "agent-os-hostd"
     })
 }
 
 #[cfg(test)]
-pub(crate) fn open_daemon(state_db: &Option<PathBuf>) -> AgentOsResult<KernelDaemon> {
+pub(crate) fn open_host(state_db: &Option<PathBuf>) -> AgentOsResult<AgentOsHost> {
     let kernel = if let Some(path) = state_db {
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
@@ -224,7 +284,7 @@ pub(crate) fn open_daemon(state_db: &Option<PathBuf>) -> AgentOsResult<KernelDae
     } else {
         Kernel::new()
     };
-    attach_cli_blob_stores(kernel, state_db).and_then(KernelDaemon::try_new)
+    attach_cli_blob_stores(kernel, state_db).and_then(AgentOsHost::try_new)
 }
 
 #[cfg(test)]
@@ -235,9 +295,9 @@ fn attach_cli_blob_stores(kernel: Kernel, state_db: &Option<PathBuf>) -> AgentOs
             _ => std::env::current_dir()
                 .map_err(|error| AgentOsError::Validation(format!("resolve cwd: {error}")))?,
         },
-        None => std::env::current_dir()
-            .map_err(|error| AgentOsError::Validation(format!("resolve cwd: {error}")))?
-            .join(".agent-os"),
+        None => {
+            std::env::temp_dir().join(format!("agent-os-cli-test-blobs-{}", std::process::id()))
+        }
     };
     let blob_root = root.join("blobs");
     let artifact_blobs = LocalBlobStore::new(blob_root.join("artifacts"))?;
@@ -256,15 +316,15 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn opened_daemon_persists_inline_evidence_and_artifact_blobs() {
+    fn opened_host_persists_inline_evidence_and_artifact_blobs() {
         let root =
             std::env::temp_dir().join(format!("agent-os-cli-blob-store-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         let state_db = root.join("state.sqlite");
 
-        let daemon = open_daemon(&Some(state_db)).unwrap();
-        let kernel = daemon.kernel().clone();
+        let host = open_host(&Some(state_db)).unwrap();
+        let kernel = host.kernel().clone();
         let goal = kernel
             .register_goal(RegisterGoalInput {
                 namespace: "cli-test".to_string(),
@@ -293,7 +353,7 @@ mod tests {
         let agent = kernel
             .spawn_agent(SpawnAgentInput {
                 task_id: task.task_id.clone(),
-                role_profile_id: "role_worker".to_string(),
+                role_profile_id: "role_producer".to_string(),
                 owner: "test".to_string(),
                 goal: "Persist blobs".to_string(),
                 success_criteria: Vec::new(),

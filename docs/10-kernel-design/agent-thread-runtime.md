@@ -2,7 +2,7 @@
 
 Status: normative foundation
 
-Last updated: 2026-06-26
+Last updated: 2026-07-03
 
 Canonical v0.1 field schemas, event names, and `ThreadStatus` values are defined in [Agent Thread Core Module](agent-thread-core-module.md). This document defines the conceptual runtime contract and built-in role model.
 
@@ -204,15 +204,15 @@ Agent Threads MUST yield at these boundaries:
 
 Each yield SHOULD create or update a checkpoint.
 
-The kernel may suspend, resume, compact, replan, delete session state, purge current projection state, or terminate an Agent Thread only at yield boundaries in v0.2.0.
+The kernel may suspend, resume, compact, replan, delete session state, purge current projection state, or terminate an Agent Thread only at yield boundaries in v0.3.0.
 
 ## 6. Core Roles and Supervisor Levels
 
-Agent-OS v0.2.0 keeps the core role set small:
+Agent-OS v0.3.0 keeps the core role set small:
 
 ```text
 SupervisorAgent
-WorkerAgent
+ProducerAgent
 ReviewerAgent
 ```
 
@@ -220,7 +220,7 @@ Distribution prompts, examples, and policy packs MAY define workflow step labels
 
 Supervisors are hierarchical. The top Supervisor for a goal is `S0`. If `S0` delegates a sub-organization to another Supervisor, that Supervisor is `S1`. Further delegation increments the level (`S2`, `S3`, ...).
 
-The kernel MUST record every delegation, worker assignment, review request, and human escalation as an invocation edge. The invocation graph is the source of truth for responsibility tracing, cancellation, replay, audit, and permission boundary analysis.
+The kernel MUST record every delegation, producer assignment, review request, and human escalation as an invocation edge. The invocation graph is the source of truth for responsibility tracing, cancellation, replay, audit, and permission boundary analysis.
 
 ### 6.1 SupervisorAgent
 
@@ -243,7 +243,7 @@ Restrictions:
 - MUST NOT accept final output without required evidence
 - MUST NOT hide or rewrite invocation edges
 
-### 6.2 WorkerAgent
+### 6.2 ProducerAgent
 
 Responsibilities:
 
@@ -275,7 +275,7 @@ Restrictions:
 
 ### 6.4 Testing and Verification Are Responsibilities
 
-Testing is a WorkerAgent responsibility. A worker that runs tests or reproduces failures MUST attach command evidence.
+Testing is a ProducerAgent responsibility. A producer that runs tests or reproduces failures MUST attach command evidence.
 
 Verification is primarily a kernel gate over final submissions. The kernel checks:
 

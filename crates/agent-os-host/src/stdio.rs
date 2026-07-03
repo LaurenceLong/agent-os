@@ -1,23 +1,23 @@
 use crate::{
-    DaemonRuntimeModelConfig, ExternalRuntimeModelConfig, KernelDaemon, ProviderRuntimeModelConfig,
+    AgentOsHost, ExternalRuntimeModelConfig, HostRuntimeModelConfig, ProviderRuntimeModelConfig,
 };
 use agent_os_sys::{AgentOsError, AgentOsResult};
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct KerneldArgs {
+pub struct HostArgs {
     pub state_db: PathBuf,
-    pub runtime_model_config: Option<DaemonRuntimeModelConfig>,
+    pub runtime_model_config: Option<HostRuntimeModelConfig>,
 }
 
-impl KerneldArgs {
+impl HostArgs {
     pub fn parse(args: impl IntoIterator<Item = String>) -> AgentOsResult<Self> {
         let mut state_db = None;
         let mut stdio = false;
         let mut model_command = None;
         let mut model_args = Vec::new();
-        let mut provider = None;
+        let mut model = None;
         let mut provider_config = None;
         let mut max_steps = 16u32;
         let mut max_tokens = None;
@@ -43,9 +43,9 @@ impl KerneldArgs {
                         AgentOsError::Validation("--model-arg requires a value".to_string())
                     })?);
                 }
-                "--provider" => {
-                    provider = Some(args.next().ok_or_else(|| {
-                        AgentOsError::Validation("--provider requires a name".to_string())
+                "--model" => {
+                    model = Some(args.next().ok_or_else(|| {
+                        AgentOsError::Validation("--model requires a provider/model id".to_string())
                     })?);
                 }
                 "--provider-config" => {
@@ -77,39 +77,39 @@ impl KerneldArgs {
                 }
                 _ => {
                     return Err(AgentOsError::Validation(format!(
-                        "unknown kerneld argument {arg}"
+                        "unknown hostd argument {arg}"
                     )))
                 }
             }
         }
         if !stdio {
             return Err(AgentOsError::Validation(
-                "kerneld requires --stdio transport".to_string(),
+                "hostd requires --stdio transport".to_string(),
             ));
         }
         let state_db = state_db
-            .ok_or_else(|| AgentOsError::Validation("kerneld requires --state-db".to_string()))?;
-        if model_command.is_some() && (provider.is_some() || provider_config.is_some()) {
+            .ok_or_else(|| AgentOsError::Validation("hostd requires --state-db".to_string()))?;
+        if model_command.is_some() && (model.is_some() || provider_config.is_some()) {
             return Err(AgentOsError::Validation(
                 "--model-command cannot be combined with provider runtime config".to_string(),
             ));
         }
         let runtime_model_config = if let Some(program) = model_command {
-            Some(DaemonRuntimeModelConfig::External(
+            Some(HostRuntimeModelConfig::External(
                 ExternalRuntimeModelConfig {
                     program,
                     args: model_args,
                     max_steps,
                 },
             ))
-        } else if provider.is_some()
+        } else if model.is_some()
             || provider_config.is_some()
             || max_tokens.is_some()
             || temperature.is_some()
         {
-            Some(DaemonRuntimeModelConfig::Provider(
+            Some(HostRuntimeModelConfig::Provider(
                 ProviderRuntimeModelConfig {
-                    provider,
+                    model,
                     config_path: provider_config,
                     max_steps,
                     max_tokens,
@@ -126,19 +126,19 @@ impl KerneldArgs {
     }
 }
 
-pub fn run_stdio_daemon<I, R, W>(args: I, reader: R, writer: W) -> AgentOsResult<()>
+pub fn run_stdio_host<I, R, W>(args: I, reader: R, writer: W) -> AgentOsResult<()>
 where
     I: IntoIterator<Item = String>,
     R: BufRead,
     W: Write,
 {
-    let args = KerneldArgs::parse(args)?;
-    let daemon = match args.runtime_model_config {
-        Some(config) => KernelDaemon::open_sqlite(args.state_db)?.with_runtime_model_config(config),
-        None => KernelDaemon::open_sqlite(args.state_db)?,
+    let args = HostArgs::parse(args)?;
+    let host = match args.runtime_model_config {
+        Some(config) => AgentOsHost::open_sqlite(args.state_db)?.with_runtime_model_config(config),
+        None => AgentOsHost::open_sqlite(args.state_db)?,
     };
-    let serve_result = daemon.clone().serve_jsonl(reader, writer);
-    let shutdown_result = daemon.shutdown();
+    let serve_result = host.clone().serve_jsonl(reader, writer);
+    let shutdown_result = host.shutdown();
     serve_result?;
     shutdown_result?;
     Ok(())
@@ -154,13 +154,13 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn stdio_daemon_serves_jsonl_from_state_db() {
+    fn stdio_host_serves_jsonl_from_state_db() {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "agent-os-kerneld-stdio-{}-{unique}.sqlite",
+            "agent-os-host-stdio-{}-{unique}.sqlite",
             std::process::id()
         ));
         let input = format!(
@@ -180,7 +180,7 @@ mod tests {
         );
         let mut output = Vec::new();
 
-        run_stdio_daemon(
+        run_stdio_host(
             [
                 "--stdio".to_string(),
                 "--state-db".to_string(),
@@ -201,9 +201,9 @@ mod tests {
     }
 
     #[test]
-    fn stdio_daemon_autostarts_external_model_worker_from_args() {
+    fn stdio_host_autostarts_external_model_worker_from_args() {
         let root = std::env::temp_dir().join(format!(
-            "agent-os-kerneld-stdio-worker-{}-{}",
+            "agent-os-host-stdio-worker-{}-{}",
             std::process::id(),
             agent_os_sys::new_id("case_")
         ));
@@ -245,7 +245,7 @@ mod tests {
         );
         let mut output = Vec::new();
 
-        run_stdio_daemon(
+        run_stdio_host(
             [
                 "--stdio".to_string(),
                 "--state-db".to_string(),
@@ -260,7 +260,7 @@ mod tests {
 
         assert_eq!(
             std::fs::read_to_string(workspace.join("stdio-configured.md")).unwrap(),
-            "stdio configured daemon worker\n"
+            "stdio configured host worker\n"
         );
         let lines = String::from_utf8(output).unwrap();
         assert_eq!(lines.lines().count(), 2);
@@ -268,15 +268,15 @@ mod tests {
     }
 
     #[test]
-    fn kerneld_args_parse_provider_runtime_config() {
-        let args = KerneldArgs::parse([
+    fn hostd_args_parse_provider_runtime_config() {
+        let args = HostArgs::parse([
             "--stdio".to_string(),
             "--state-db".to_string(),
             "state.sqlite".to_string(),
-            "--provider".to_string(),
-            "mock".to_string(),
+            "--model".to_string(),
+            "mock/mock-provider-model".to_string(),
             "--provider-config".to_string(),
-            "providers.json".to_string(),
+            "config.json".to_string(),
             "--max-steps".to_string(),
             "9".to_string(),
             "--max-tokens".to_string(),
@@ -287,11 +287,11 @@ mod tests {
         .unwrap();
 
         match args.runtime_model_config.unwrap() {
-            DaemonRuntimeModelConfig::Provider(config) => {
-                assert_eq!(config.provider.as_deref(), Some("mock"));
+            HostRuntimeModelConfig::Provider(config) => {
+                assert_eq!(config.model.as_deref(), Some("mock/mock-provider-model"));
                 assert_eq!(
                     config.config_path.unwrap(),
-                    std::path::PathBuf::from("providers.json")
+                    std::path::PathBuf::from("config.json")
                 );
                 assert_eq!(config.max_steps, 9);
                 assert_eq!(config.max_tokens, Some(128));
@@ -302,8 +302,8 @@ mod tests {
     }
 
     #[test]
-    fn kerneld_args_parse_external_model_args() {
-        let args = KerneldArgs::parse([
+    fn hostd_args_parse_external_model_args() {
+        let args = HostArgs::parse([
             "--stdio".to_string(),
             "--state-db".to_string(),
             "state.sqlite".to_string(),
@@ -317,7 +317,7 @@ mod tests {
         .unwrap();
 
         match args.runtime_model_config.unwrap() {
-            DaemonRuntimeModelConfig::External(config) => {
+            HostRuntimeModelConfig::External(config) => {
                 assert_eq!(config.program, std::path::PathBuf::from("model.exe"));
                 assert_eq!(config.args, vec!["--flag".to_string(), "value".to_string()]);
             }
@@ -358,7 +358,7 @@ mod tests {
         kernel
             .spawn_agent(agent_os_kernel::SpawnAgentInput {
                 task_id: task.task_id,
-                role_profile_id: "role_worker".to_string(),
+                role_profile_id: "role_producer".to_string(),
                 owner: "test".to_string(),
                 goal: "stdio worker".to_string(),
                 success_criteria: Vec::new(),
@@ -385,14 +385,14 @@ fn main() {
         0 => {
             let workspace_root = json_string(&input, "workspace_root");
             print!(
-                "{{\"actions\":[{{\"type\":\"tool_call\",\"tool_name\":\"apply_patch\",\"input\":{{\"workspace_root\":\"{}\",\"patch\":\"*** Begin Patch\\n*** Add File: stdio-configured.md\\n+stdio configured daemon worker\\n*** End Patch\\n\"}},\"risk_level\":4,\"evidence_claim\":\"stdio configured worker wrote file through apply_patch\"}}],\"usage\":{{\"input_tokens\":1,\"output_tokens\":1,\"cost\":0.0}}}}",
+                "{{\"actions\":[{{\"type\":\"tool_call\",\"tool_name\":\"apply_patch\",\"input\":{{\"workspace_root\":\"{}\",\"patch\":\"*** Begin Patch\\n*** Add File: stdio-configured.md\\n+stdio configured host worker\\n*** End Patch\\n\"}},\"risk_level\":4,\"evidence_claim\":\"stdio configured worker wrote file through apply_patch\"}}],\"usage\":{{\"input_tokens\":1,\"output_tokens\":1,\"cost\":0.0}}}}",
                 workspace_root
             );
         }
         _ => {
             let evidence_id = first_evidence_id(&input);
             print!(
-                "{{\"actions\":[{{\"type\":\"final\",\"submission\":{{\"summary\":\"stdio configured daemon worker complete\",\"changed_artifacts\":[],\"evidence_map\":[{{\"claim\":\"stdio configured daemon worker wrote file\",\"evidence_refs\":[\"{}\"]}}],\"unverified_claims\":[],\"known_risks\":[],\"tests_run\":[],\"tests_not_run\":[],\"approvals\":[]}}}}],\"usage\":{{\"input_tokens\":1,\"output_tokens\":1,\"cost\":0.0}}}}",
+                "{{\"actions\":[{{\"type\":\"final\",\"submission\":{{\"summary\":\"stdio configured host worker complete\",\"changed_artifacts\":[],\"evidence_map\":[{{\"claim\":\"stdio configured host worker wrote file\",\"evidence_refs\":[\"{}\"]}}],\"unverified_claims\":[],\"known_risks\":[],\"tests_run\":[],\"tests_not_run\":[],\"approvals\":[]}}}}],\"usage\":{{\"input_tokens\":1,\"output_tokens\":1,\"cost\":0.0}}}}",
                 evidence_id
             );
         }
