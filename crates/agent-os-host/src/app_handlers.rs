@@ -2,17 +2,19 @@ use crate::AgentOsHost;
 use agent_os_app_server::AppKernelService;
 use agent_os_config::{ModelEntry, ProviderCatalog, ProviderEntry, ResolvedAgentOsConfig};
 use agent_os_kernel::{
-    CompactContextInput, ForkThreadInput, RecordApprovalInput, RegisterGoalInput,
+    CompactContextInput, ForkThreadInput, KernelState, RecordApprovalInput, RegisterGoalInput,
     RollbackThreadInput, SpawnAgentInput, SpawnTaskInput,
 };
 use agent_os_sys::{
     AgentOsError, AgentOsResult, AppConfigProjection, AppConfigRecoveryProjection,
     AppCredentialProjection, AppEcosystemProjection, AppEcosystemSourceProjection,
     AppModelProjection, AppNotificationEnvelope, AppProjectProjection,
-    AppProviderCapabilitiesProjection, AppProviderProjection, AppProviderUsageProjection,
-    AppRequest, AppResponse, ApprovalStatus, ClientConnection, CreateAutomationScheduleInput,
-    CredentialSource, EcosystemSource, OpenResourceSessionInput, PermissionProfile,
-    ProjectionCursor, ResourceSessionType, StatsQuery, ThreadStatus, TurnInputKind,
+    AppProviderCapabilitiesProjection, AppProviderOperationProjection, AppProviderProjection,
+    AppProviderUsageProjection, AppProviderUsageTotalsProjection, AppRequest, AppResponse,
+    ApprovalStatus, ClientConnection, CreateAutomationScheduleInput, CredentialSource,
+    EcosystemSource, OpenResourceSessionInput, PermissionProfile, ProjectionCursor,
+    ProviderStreamEventType, ProviderStreamSession, ProviderStreamStatus, ResourceSessionType,
+    StatsQuery, ThreadStatus, TurnInputKind,
 };
 use agent_os_thread::{RuntimeJob, RuntimeJobRecord};
 use serde::Serialize;
@@ -389,7 +391,17 @@ impl AgentOsHost {
 
     fn provider_usage_read(&self, query: StatsQuery) -> AgentOsResult<AppResponse> {
         let snapshot = self.kernel().store().stats_snapshot(query.clone())?;
-        accepted("usage", AppProviderUsageProjection { query, snapshot })
+        let (totals, operations) =
+            provider_usage_projection(self.kernel().state_snapshot()?, &query);
+        accepted(
+            "usage",
+            AppProviderUsageProjection {
+                query,
+                snapshot,
+                totals,
+                operations,
+            },
+        )
     }
 
     fn permission_profile_list(&self) -> AgentOsResult<AppResponse> {
@@ -665,6 +677,124 @@ fn accepted(key: &str, value: impl Serialize) -> AgentOsResult<AppResponse> {
     let mut body = serde_json::Map::new();
     body.insert(key.to_string(), serde_json::to_value(value)?);
     Ok(AppResponse::Accepted(Value::Object(body)))
+}
+
+fn provider_usage_projection(
+    state: KernelState,
+    query: &StatsQuery,
+) -> (
+    AppProviderUsageTotalsProjection,
+    Vec<AppProviderOperationProjection>,
+) {
+    let mut operations = state
+        .provider_stream_sessions
+        .values()
+        .filter(|session| provider_session_matches_query(&state, session, query))
+        .map(provider_operation_projection)
+        .collect::<Vec<_>>();
+    operations.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then_with(|| left.session_id.cmp(&right.session_id))
+    });
+    let mut totals = AppProviderUsageTotalsProjection {
+        sessions: operations.len() as u64,
+        ..AppProviderUsageTotalsProjection::default()
+    };
+    for operation in &operations {
+        match operation.status {
+            ProviderStreamStatus::Open => totals.open_sessions += 1,
+            ProviderStreamStatus::Completed => totals.completed_sessions += 1,
+            ProviderStreamStatus::Failed => totals.failed_sessions += 1,
+            ProviderStreamStatus::Cancelled => totals.cancelled_sessions += 1,
+        }
+        totals.input_tokens += operation.input_tokens;
+        totals.output_tokens += operation.output_tokens;
+        totals.cost += operation.cost;
+        totals.retry_events += operation.retry_events;
+        totals.warning_events += operation.warning_events;
+    }
+    (totals, operations)
+}
+
+fn provider_session_matches_query(
+    state: &KernelState,
+    session: &ProviderStreamSession,
+    query: &StatsQuery,
+) -> bool {
+    if query.tool_name.is_some() {
+        return false;
+    }
+    if query
+        .client_thread_id
+        .as_deref()
+        .is_some_and(|thread_id| session.request.thread_id != thread_id)
+    {
+        return false;
+    }
+    if query
+        .task_id
+        .as_deref()
+        .is_some_and(|task_id| session.request.task_id != task_id)
+    {
+        return false;
+    }
+    if query.agent_id.as_deref().is_some_and(|agent_id| {
+        state
+            .threads
+            .get(&session.request.thread_id)
+            .is_none_or(|thread| thread.agent_id != agent_id)
+    }) {
+        return false;
+    }
+    if query
+        .provider_id
+        .as_deref()
+        .is_some_and(|provider_id| session.route_decision.provider_id != provider_id)
+    {
+        return false;
+    }
+    if query.model.as_deref().is_some_and(|model| {
+        session.route_decision.selected_model_alias != model
+            && session.route_decision.provider_model_name != model
+    }) {
+        return false;
+    }
+    true
+}
+
+fn provider_operation_projection(
+    session: &ProviderStreamSession,
+) -> AppProviderOperationProjection {
+    let retry_events = session
+        .stream_events
+        .iter()
+        .filter(|event| event.event_type == ProviderStreamEventType::ProviderRetry)
+        .count() as u64;
+    let warning_events = session
+        .stream_events
+        .iter()
+        .filter(|event| event.event_type == ProviderStreamEventType::ProviderWarning)
+        .count() as u64;
+    AppProviderOperationProjection {
+        session_id: session.session_id.clone(),
+        thread_id: session.request.thread_id.clone(),
+        turn_id: session.request.turn_id.clone(),
+        task_id: session.request.task_id.clone(),
+        provider_profile_id: session.request.provider_profile_id.clone(),
+        provider_id: session.route_decision.provider_id.clone(),
+        selected_model_alias: session.route_decision.selected_model_alias.clone(),
+        provider_model_name: session.route_decision.provider_model_name.clone(),
+        status: session.status.clone(),
+        input_tokens: session.usage.input_tokens,
+        output_tokens: session.usage.output_tokens,
+        cost: session.usage.cost,
+        stream_events: session.stream_events.len() as u64,
+        retry_events,
+        warning_events,
+        created_at: session.created_at.clone(),
+        completed_at: session.completed_at.clone(),
+    }
 }
 
 #[derive(Debug, Serialize)]

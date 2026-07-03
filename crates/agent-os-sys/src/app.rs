@@ -1,7 +1,7 @@
 use crate::{
     AutomationScheduleKind, CredentialSource, EcosystemSourceKind, EcosystemSourceScope,
-    LlmApiStyle, ModelCapabilities, ModelLimit, ResourceSessionType, SecurityLevel, ThreadStatus,
-    TurnStatus,
+    LlmApiStyle, ModelCapabilities, ModelLimit, ProviderStreamStatus, ResourceSessionType,
+    SecurityLevel, ThreadStatus, TurnStatus,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -285,6 +285,43 @@ pub struct AppProviderCapabilitiesProjection {
 pub struct AppProviderUsageProjection {
     pub query: StatsQuery,
     pub snapshot: StatsSnapshot,
+    pub totals: AppProviderUsageTotalsProjection,
+    pub operations: Vec<AppProviderOperationProjection>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AppProviderUsageTotalsProjection {
+    pub sessions: u64,
+    pub open_sessions: u64,
+    pub completed_sessions: u64,
+    pub failed_sessions: u64,
+    pub cancelled_sessions: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cost: f64,
+    pub retry_events: u64,
+    pub warning_events: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AppProviderOperationProjection {
+    pub session_id: String,
+    pub thread_id: String,
+    pub turn_id: Option<String>,
+    pub task_id: String,
+    pub provider_profile_id: String,
+    pub provider_id: String,
+    pub selected_model_alias: String,
+    pub provider_model_name: String,
+    pub status: ProviderStreamStatus,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cost: f64,
+    pub stream_events: u64,
+    pub retry_events: u64,
+    pub warning_events: u64,
+    pub created_at: String,
+    pub completed_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

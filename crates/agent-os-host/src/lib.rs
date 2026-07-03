@@ -769,8 +769,9 @@ mod tests {
     use agent_os_app_server::{AppKernelService, AppServer};
     use agent_os_sys::{
         AppRequest, AppRequestEnvelope, AppResponse, AutomationScheduleKind, ClientConnection,
-        ClientKind, EvidenceMapEntry, FinalSubmission, ProjectionCursor, ProviderUsage,
-        ResourceSessionType, SecurityLevel, StatsQuery, StatsSnapshot, TurnStatus,
+        ClientKind, EvidenceMapEntry, FinalSubmission, ProjectionCursor, ProviderStreamEventType,
+        ProviderUsage, ResourceSessionType, SecurityLevel, StatsQuery, StatsSnapshot,
+        StreamRequest, TurnStatus,
     };
     use agent_os_thread::{
         ModelAction, ModelClient, ModelTurnRequest, ModelTurnResponse, ToolAction,
@@ -1801,21 +1802,95 @@ mod tests {
 
     #[test]
     fn app_server_reads_provider_usage_and_permission_profiles() {
-        let mut server = initialized_server();
+        let host = AgentOsHost::in_memory();
+        let mut server = initialized_server_with_host(host.clone());
+        let thread_id = start_thread(&mut server);
+        let thread = host
+            .kernel()
+            .state_snapshot()
+            .unwrap()
+            .threads
+            .get(&thread_id)
+            .unwrap()
+            .clone();
+        let stream = host
+            .kernel()
+            .open_stream_session(StreamRequest {
+                thread_id: thread_id.clone(),
+                turn_id: Some("turn_provider_usage".to_string()),
+                provider_profile_id: "prov_default".to_string(),
+                model_routing_policy_id: "route_default".to_string(),
+                requested_model_alias: None,
+                role: "ProducerAgent".to_string(),
+                task_id: thread.task.task_id.clone(),
+                reasoning_profile: None,
+                tool_visibility_profile: None,
+                output_schema: None,
+            })
+            .unwrap();
+        host.kernel()
+            .record_provider_usage(
+                &stream.session_id,
+                ProviderUsage {
+                    input_tokens: 21,
+                    output_tokens: 8,
+                    cost: 0.29,
+                },
+            )
+            .unwrap();
+        host.kernel()
+            .record_provider_stream_event(
+                &stream.session_id,
+                ProviderStreamEventType::ProviderRetry,
+                serde_json::json!({"attempt": 1, "retry_after_ms": 250}),
+            )
+            .unwrap();
+        host.kernel()
+            .complete_stream_session(&stream.session_id)
+            .unwrap();
 
         let usage = request(
             &mut server,
             "req_provider_usage",
             AppRequest::ProviderUsageRead {
                 query: StatsQuery {
-                    provider_id: Some("provider_default".to_string()),
+                    provider_id: Some("primary-provider".to_string()),
                     ..StatsQuery::default()
                 },
             },
         );
         let usage = accepted_body(usage);
-        assert_eq!(usage["usage"]["query"]["provider_id"], "provider_default");
-        assert_eq!(usage["usage"]["snapshot"]["provider_calls"], 0);
+        assert_eq!(usage["usage"]["query"]["provider_id"], "primary-provider");
+        assert_eq!(usage["usage"]["totals"]["sessions"], 1);
+        assert_eq!(usage["usage"]["totals"]["completed_sessions"], 1);
+        assert_eq!(usage["usage"]["totals"]["input_tokens"], 21);
+        assert_eq!(usage["usage"]["totals"]["output_tokens"], 8);
+        assert_eq!(usage["usage"]["totals"]["retry_events"], 1);
+        assert_eq!(
+            usage["usage"]["operations"][0]["session_id"],
+            stream.session_id
+        );
+        assert_eq!(
+            usage["usage"]["operations"][0]["selected_model_alias"],
+            "coding-primary"
+        );
+        assert_eq!(usage["usage"]["operations"][0]["status"], "Completed");
+
+        let model_miss = accepted_body(request(
+            &mut server,
+            "req_provider_usage_model_miss",
+            AppRequest::ProviderUsageRead {
+                query: StatsQuery {
+                    model: Some("missing-model".to_string()),
+                    ..StatsQuery::default()
+                },
+            },
+        ));
+        assert_eq!(model_miss["usage"]["totals"]["sessions"], 0);
+        assert_eq!(
+            model_miss["usage"]["operations"].as_array().unwrap().len(),
+            0
+        );
 
         let permissions = request(
             &mut server,
