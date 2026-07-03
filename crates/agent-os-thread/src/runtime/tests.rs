@@ -550,6 +550,120 @@ fn runtime_rejects_non_visible_tool_call_without_broker_invocation() {
     let _ = fs::remove_dir_all(workspace);
 }
 
+#[test]
+fn runtime_exposes_deferred_tool_after_tool_search_match() {
+    struct SearchesThenChecksDeferredTool {
+        calls: u32,
+    }
+
+    impl ModelClient for SearchesThenChecksDeferredTool {
+        fn next(&mut self, request: &ModelTurnRequest) -> AgentOsResult<ModelTurnResponse> {
+            self.calls += 1;
+            if self.calls == 1 {
+                assert!(request
+                    .context
+                    .tool_descriptors
+                    .iter()
+                    .any(|descriptor| descriptor.name == "tool_search"));
+                assert!(!request
+                    .context
+                    .tool_descriptors
+                    .iter()
+                    .any(|descriptor| descriptor.name == "mcp__echo__echo"));
+                return Ok(ModelTurnResponse::single(ModelAction::ToolCall(
+                    ToolAction::new(
+                        "tool_search",
+                        json!({"query": "echo", "limit": 5}),
+                        1,
+                        Some("deferred MCP echo was discovered".to_string()),
+                    ),
+                )));
+            }
+
+            let search_result = request
+                .context
+                .tool_results
+                .iter()
+                .find(|result| {
+                    result.tool_name == "tool_search" && result.status == ToolCallStatus::Completed
+                })
+                .ok_or_else(|| {
+                    AgentOsError::Validation("tool_search result missing".to_string())
+                })?;
+            assert!(request
+                .context
+                .tool_descriptors
+                .iter()
+                .any(|descriptor| descriptor.name == "mcp__echo__echo"));
+            Ok(ModelTurnResponse::single(ModelAction::Final {
+                submission: FinalSubmission {
+                    summary: "Deferred MCP tool became visible after tool_search.".to_string(),
+                    changed_artifacts: Vec::new(),
+                    evidence_map: vec![EvidenceMapEntry {
+                        claim: "tool_search exposed deferred MCP echo".to_string(),
+                        evidence_refs: search_result.evidence_ids.clone(),
+                    }],
+                    unverified_claims: Vec::new(),
+                    known_risks: Vec::new(),
+                    tests_run: Vec::new(),
+                    tests_not_run: Vec::new(),
+                    approvals: Vec::new(),
+                },
+            }))
+        }
+    }
+
+    let workspace = temp_workspace("runtime-tool-search-exposes-deferred");
+    let kernel = Kernel::new();
+    kernel
+        .register_tool_descriptor(ToolDescriptor {
+            tool_id: "tool_mcp__echo__echo".to_string(),
+            name: "mcp__echo__echo".to_string(),
+            description: "Echo one text field through MCP.".to_string(),
+            version: "0.3.0".to_string(),
+            driver_class: ToolDriverClass::Mcp,
+            risk_level: 3,
+            input_schema: json!({
+                "type": "object",
+                "required": ["text"],
+                "properties": {"text": {"type": "string"}},
+                "additionalProperties": false
+            }),
+            model_input_schema: Some(json!({
+                "type": "object",
+                "required": ["text"],
+                "properties": {"text": {"type": "string"}},
+                "additionalProperties": false
+            })),
+            output_schema: json!({"type": "object"}),
+            runtime_input_policy: ToolRuntimeInputPolicy {
+                required_resource_scopes: vec!["mcp:echo:echo".to_string()],
+                ..ToolRuntimeInputPolicy::default()
+            },
+            idempotency: IdempotencyMode::ToolNative,
+            evidence_type: Some(EvidenceType::ExternalReference),
+            created_at: now_rfc3339(),
+            ..ToolDescriptor::default()
+        })
+        .unwrap();
+    let agent = spawn_runtime_agent(&kernel, &workspace, "Expose deferred tool after search");
+    let mut runtime = ThreadRuntime::new(
+        kernel.clone(),
+        agent.thread_id,
+        SearchesThenChecksDeferredTool { calls: 0 },
+    );
+
+    let report = runtime
+        .run_to_completion(RuntimeConfig::workspace_write(&workspace))
+        .unwrap();
+
+    assert_eq!(report.status, ThreadStatus::Completed);
+    assert!(report.tool_results.iter().any(|result| {
+        result.tool_name == "tool_search" && result.status == ToolCallStatus::Completed
+    }));
+    let _ = fs::remove_dir_all(workspace);
+}
+
 fn temp_workspace(label: &str) -> std::path::PathBuf {
     let workspace = env::temp_dir().join(format!(
         "agent-os-thread-{label}-{}-{}",

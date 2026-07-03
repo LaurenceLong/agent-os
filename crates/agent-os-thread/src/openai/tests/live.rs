@@ -437,12 +437,14 @@ fn run_live_llm_goal_driven_ecosystem_e2e(
     let tmp = fresh_live_tmp("aos-live-goal-ecosystem", provider);
     let skill_name = "live-ecosystem-skill";
     let skill_marker = "LIVE_SKILL_MARKER_SKILL_AND_MCP_E2E";
+    let resource_marker = "LIVE_SKILL_RESOURCE_MARKER_E2E";
     let mcp_marker = "LIVE_MCP_MARKER_SKILL_AND_MCP_E2E";
     let kernel = live_kernel_with_blob_stores(&tmp);
-    let mcp_tool_name = import_live_ecosystem(&kernel, &tmp, skill_name, skill_marker)
-        .unwrap_or_else(|error| panic!("import live ecosystem: {error}"));
+    let mcp_tool_name =
+        import_live_ecosystem(&kernel, &tmp, skill_name, skill_marker, resource_marker)
+            .unwrap_or_else(|error| panic!("import live ecosystem: {error}"));
     let goal = format!(
-        "Produce a focused ecosystem evidence report. Load the skill named {skill_name}, follow its marker instruction, call the local MCP echo tool {mcp_tool_name} with text exactly {mcp_marker}, then submit_final with a summary containing both {skill_marker} and {mcp_marker}. The final submit_final call must include an evidence_map that cites evidence_ids from the completed load_skill and MCP tool results."
+        "Produce a focused ecosystem evidence report. Call load_skill for skill {skill_name} with offset 3 and limit 2; use that page to find the resource path references/context.txt and the skill marker {skill_marker}. Then call read_skill_resource with name {skill_name}, path references/context.txt, offset 2, and limit 1; use that page to find resource marker {resource_marker}. Then call tool_search with query exactly live echo, call the returned MCP echo tool with text exactly {mcp_marker}, and do not call any MCP tool before tool_search exposes it. Finally submit_final with a summary containing {skill_marker}, {resource_marker}, and {mcp_marker}. The final submit_final call must include an evidence_map that cites evidence_ids from the completed load_skill, read_skill_resource, and MCP tool results."
     );
     let audit_log_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../target/agent-os-audit")
@@ -471,6 +473,7 @@ fn run_live_llm_goal_driven_ecosystem_e2e(
             "model": model,
             "workspace": tmp,
             "skill_name": skill_name,
+            "resource_marker": resource_marker,
             "mcp_tool_name": mcp_tool_name,
             "task_goal": request.thread.task.goal,
         }),
@@ -478,7 +481,7 @@ fn run_live_llm_goal_driven_ecosystem_e2e(
     .unwrap();
 
     let mut runtime = ThreadRuntime::new(kernel.clone(), request.thread.thread_id.clone(), client);
-    let config = live_runtime_config(&tmp, 8);
+    let config = live_runtime_config(&tmp, 12);
     let report = runtime.run_to_completion(config).unwrap();
     assert!(report.final_submitted);
     assert_all_tool_calls_completed(&report);
@@ -487,9 +490,16 @@ fn run_live_llm_goal_driven_ecosystem_e2e(
         provider,
         "ecosystem",
         &report,
-        &["load_skill", &mcp_tool_name, "submit_final"],
+        &[
+            "load_skill",
+            "read_skill_resource",
+            "tool_search",
+            &mcp_tool_name,
+            "submit_final",
+        ],
     );
-    assert_ecosystem_final_summary(&report, skill_marker, mcp_marker);
+    assert_skill_context_parameters_observed(&report, skill_name, skill_marker, resource_marker);
+    assert_ecosystem_final_summary(&report, skill_marker, resource_marker, mcp_marker);
     let mcp_output = report
         .tool_results
         .iter()
@@ -710,17 +720,28 @@ fn import_live_ecosystem(
     workspace: &Path,
     skill_name: &str,
     skill_marker: &str,
+    resource_marker: &str,
 ) -> AgentOsResult<String> {
     let now = now_rfc3339();
     let skill_root = workspace.join(".agent-os/skills").join(skill_name);
     let skill_file = skill_root.join("SKILL.md");
+    let resource_dir = skill_root.join("references");
+    let resource_file = resource_dir.join("context.txt");
     std::fs::create_dir_all(&skill_root)
         .map_err(|error| AgentOsError::Validation(format!("create live skill root: {error}")))?;
+    std::fs::create_dir_all(&resource_dir).map_err(|error| {
+        AgentOsError::Validation(format!("create live skill resource root: {error}"))
+    })?;
     let skill_content = format!(
-        "# Live Ecosystem Skill\n\nWhen this skill is loaded, the final answer must include the exact marker `{skill_marker}`. Use the local MCP echo capability for the MCP marker and cite tool evidence.\n"
+        "# Live Ecosystem Skill\nThis first page line should be skipped by the live pagination goal.\nPaged skill marker: {skill_marker}\nResource path: references/context.txt\nUse the local MCP echo capability for the MCP marker and cite tool evidence.\n"
+    );
+    let resource_content = format!(
+        "Resource context intro line\nResource page marker: {resource_marker}\nResource trailing line should be skipped by the live pagination goal.\n"
     );
     std::fs::write(&skill_file, &skill_content)
         .map_err(|error| AgentOsError::Validation(format!("write live skill: {error}")))?;
+    std::fs::write(&resource_file, &resource_content)
+        .map_err(|error| AgentOsError::Validation(format!("write live skill resource: {error}")))?;
     let skill_source = EcosystemSource {
         source_kind: EcosystemSourceKind::AgentOs,
         source_scope: EcosystemSourceScope::Project,
@@ -836,7 +857,128 @@ fn main() {
     Ok(binary)
 }
 
-fn assert_ecosystem_final_summary(report: &RuntimeRunReport, skill_marker: &str, mcp_marker: &str) {
+fn assert_skill_context_parameters_observed(
+    report: &RuntimeRunReport,
+    skill_name: &str,
+    skill_marker: &str,
+    resource_marker: &str,
+) {
+    let skill_record = report
+        .tool_results
+        .iter()
+        .find(|record| {
+            record.tool_name == "load_skill"
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("name"))
+                    .and_then(Value::as_str)
+                    == Some(skill_name)
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("offset"))
+                    .and_then(Value::as_u64)
+                    == Some(3)
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("limit"))
+                    .and_then(Value::as_u64)
+                    == Some(2)
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "missing parameterized load_skill call: {:?}",
+                report.tool_results
+            )
+        });
+    let skill_output = skill_record
+        .output
+        .as_ref()
+        .unwrap_or_else(|| panic!("missing load_skill output: {skill_record:?}"));
+    assert_eq!(skill_output.get("offset").and_then(Value::as_u64), Some(3));
+    assert_eq!(skill_output.get("limit").and_then(Value::as_u64), Some(2));
+    assert_eq!(
+        skill_output.get("returned_lines").and_then(Value::as_u64),
+        Some(2)
+    );
+    let skill_content = skill_output
+        .get("content")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("missing load_skill content: {skill_record:?}"));
+    assert!(skill_content.contains(skill_marker));
+    assert!(skill_content.contains("references/context.txt"));
+    assert!(!skill_content.contains("# Live Ecosystem Skill"));
+
+    let resource_record = report
+        .tool_results
+        .iter()
+        .find(|record| {
+            record.tool_name == "read_skill_resource"
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("name"))
+                    .and_then(Value::as_str)
+                    == Some(skill_name)
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("path"))
+                    .and_then(Value::as_str)
+                    == Some("references/context.txt")
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("offset"))
+                    .and_then(Value::as_u64)
+                    == Some(2)
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("limit"))
+                    .and_then(Value::as_u64)
+                    == Some(1)
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "missing parameterized read_skill_resource call: {:?}",
+                report.tool_results
+            )
+        });
+    let resource_output = resource_record
+        .output
+        .as_ref()
+        .unwrap_or_else(|| panic!("missing read_skill_resource output: {resource_record:?}"));
+    assert_eq!(
+        resource_output.get("offset").and_then(Value::as_u64),
+        Some(2)
+    );
+    assert_eq!(
+        resource_output.get("limit").and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        resource_output
+            .get("returned_lines")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    let resource_content = resource_output
+        .get("content")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("missing read_skill_resource content: {resource_record:?}"));
+    assert!(resource_content.contains(resource_marker));
+    assert!(!resource_content.contains("Resource context intro line"));
+}
+
+fn assert_ecosystem_final_summary(
+    report: &RuntimeRunReport,
+    skill_marker: &str,
+    resource_marker: &str,
+    mcp_marker: &str,
+) {
     let summary = report
         .tool_results
         .iter()
@@ -849,6 +991,10 @@ fn assert_ecosystem_final_summary(report: &RuntimeRunReport, skill_marker: &str,
     assert!(
         summary.contains(skill_marker),
         "submit_final summary did not contain skill marker: {summary}"
+    );
+    assert!(
+        summary.contains(resource_marker),
+        "submit_final summary did not contain resource marker: {summary}"
     );
     assert!(
         summary.contains(mcp_marker),

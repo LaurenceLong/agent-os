@@ -272,6 +272,11 @@ Full tool surface:
   cargo test -p agent-os-thread live_anthropic_messages_llm_goal_driven_full_tool_surface_e2e -- --ignored --nocapture
   expected coverage: workspace tools, control-plane tools, agent_control action families, and parameter branches for read_file offset/limit, glob_files path/offset/limit, grep_files path/include/case_sensitive/offset/limit, and request_permissions scope plus complete PermissionSet fields
 
+Ecosystem context:
+  cargo test -p agent-os-thread live_openai_chat_completions_llm_goal_driven_ecosystem_e2e -- --ignored --nocapture
+  cargo test -p agent-os-thread live_anthropic_messages_llm_goal_driven_ecosystem_e2e -- --ignored --nocapture
+  expected coverage: load_skill name/offset/limit, read_skill_resource name/path/offset/limit, tool_search discovery of deferred local stdio MCP tools, MCP tool call, and final submission evidence citations
+
 Scoped context projection:
   cargo test -p agent-os-thread live_openai_chat_completions_llm_goal_driven_scoped_context_e2e -- --ignored --nocapture
   cargo test -p agent-os-thread live_anthropic_messages_llm_goal_driven_scoped_context_e2e -- --ignored --nocapture

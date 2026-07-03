@@ -260,11 +260,12 @@ impl<C: ModelClient> ThreadRuntime<C> {
             } else {
                 ToolPlanningMode::Normal
             };
-            let tool_plan = self.kernel.plan_tools_for_turn(
+            let mut tool_plan = self.kernel.plan_tools_for_turn(
                 &acb,
                 stream.route_decision.model_capabilities.clone(),
                 tool_planning_mode,
             )?;
+            expose_tool_search_matches(&mut tool_plan, &projected_tool_results);
             ecosystem_projection.tool_descriptors = tool_plan.direct_descriptors();
             let provider_profile = state
                 .provider_profiles
@@ -1045,6 +1046,32 @@ impl<C: ModelClient> ThreadRuntime<C> {
                 }
             })
             .collect())
+    }
+}
+
+fn expose_tool_search_matches(tool_plan: &mut ToolPlan, tool_results: &[ToolExecutionRecord]) {
+    let activated = tool_results
+        .iter()
+        .filter(|record| {
+            record.tool_name == "tool_search" && record.status == ToolCallStatus::Completed
+        })
+        .filter_map(|record| record.output.as_ref())
+        .filter_map(|output| output.get("matches"))
+        .filter_map(Value::as_array)
+        .flat_map(|matches| matches.iter())
+        .filter_map(|item| item.get("name"))
+        .filter_map(Value::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    if activated.is_empty() {
+        return;
+    }
+    for entry in &mut tool_plan.entries {
+        if entry.exposure == ToolExposure::Deferred
+            && activated.contains(entry.descriptor.name.as_str())
+        {
+            entry.exposure = ToolExposure::Direct;
+            entry.reason = Some("exposed after tool_search match".to_string());
+        }
     }
 }
 
