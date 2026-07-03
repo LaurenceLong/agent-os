@@ -1,11 +1,8 @@
 use crate::args::StatusOptions;
-use crate::support::default_state_db;
-use agent_os_app_server::JsonlAppClient;
+use crate::support::{default_state_db, StdioHostAppClient, StdioHostConfig};
 use agent_os_sys::*;
 use serde_json::{json, Value};
-use std::io::BufReader;
-use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::path::Path;
 
 pub(crate) fn run_status(options: &StatusOptions) -> AgentOsResult<Value> {
     let state_db = options
@@ -13,7 +10,7 @@ pub(crate) fn run_status(options: &StatusOptions) -> AgentOsResult<Value> {
         .clone()
         .map(Ok)
         .unwrap_or_else(default_state_db)?;
-    let mut app_client = StdioStatusClient::open(&state_db)?;
+    let mut app_client = StdioHostAppClient::open(&StdioHostConfig::state_db(state_db.clone()))?;
     status_from_app_client(&mut app_client, options, &state_db)
 }
 
@@ -63,110 +60,9 @@ fn app_request(client: &mut impl StatusAppClient, request: AppRequest) -> AgentO
     client.request(request)
 }
 
-struct StdioStatusClient {
-    client: JsonlAppClient<BufReader<ChildStdout>, ChildStdin>,
-    child: Child,
-}
-
-impl StdioStatusClient {
-    fn open(state_db: &Path) -> AgentOsResult<Self> {
-        let hostd = resolve_hostd_executable()?;
-        let mut child = Command::new(&hostd)
-            .arg("--stdio")
-            .arg("--state-db")
-            .arg(state_db)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .map_err(|error| {
-                AgentOsError::Validation(format!(
-                    "spawn hostd {}: {error}",
-                    hostd.to_string_lossy()
-                ))
-            })?;
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| AgentOsError::Validation("hostd stdin was not piped".to_string()))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| AgentOsError::Validation("hostd stdout was not piped".to_string()))?;
-        Ok(Self {
-            client: JsonlAppClient::new(cli_client(), BufReader::new(stdout), stdin),
-            child,
-        })
-    }
-}
-
-impl StatusAppClient for StdioStatusClient {
+impl StatusAppClient for StdioHostAppClient {
     fn request(&mut self, request: AppRequest) -> AgentOsResult<Value> {
-        let response = self.client.request(request)?;
-        match response.response {
-            AppResponse::Accepted(body) => Ok(body),
-            AppResponse::Rejected { code, message } => Err(AgentOsError::Validation(format!(
-                "app-server {code}: {message}"
-            ))),
-        }
-    }
-}
-
-impl Drop for StdioStatusClient {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-fn resolve_hostd_executable() -> AgentOsResult<PathBuf> {
-    let current_exe = std::env::current_exe().map_err(|error| {
-        AgentOsError::Validation(format!("resolve current executable: {error}"))
-    })?;
-    let current_dir = current_exe.parent().ok_or_else(|| {
-        AgentOsError::Validation(format!(
-            "current executable has no parent: {}",
-            current_exe.to_string_lossy()
-        ))
-    })?;
-    let direct = current_dir.join(hostd_executable_file_name());
-    if direct.exists() {
-        return Ok(direct);
-    }
-    let cargo_test = if current_dir.file_name().and_then(|name| name.to_str()) == Some("deps") {
-        current_dir
-            .parent()
-            .map(|parent| parent.join(hostd_executable_file_name()))
-    } else {
-        None
-    };
-    if let Some(candidate) = cargo_test {
-        if candidate.exists() {
-            return Ok(candidate);
-        }
-    }
-    Err(AgentOsError::Validation(format!(
-        "hostd executable not found next to {}; expected {}",
-        current_exe.to_string_lossy(),
-        hostd_executable_file_name().display()
-    )))
-}
-
-fn hostd_executable_file_name() -> &'static Path {
-    Path::new(if cfg!(windows) {
-        "agent-os-hostd.exe"
-    } else {
-        "agent-os-hostd"
-    })
-}
-
-fn cli_client() -> ClientConnection {
-    ClientConnection {
-        client_id: "agent-os-cli".to_string(),
-        client_name: "Agent-OS CLI".to_string(),
-        client_kind: ClientKind::TerminalUi,
-        authority: SecurityLevel::HUMAN_ROOT,
-        connected_at: now_rfc3339(),
+        StdioHostAppClient::request(self, request)
     }
 }
 

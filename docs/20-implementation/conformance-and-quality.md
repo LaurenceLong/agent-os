@@ -385,9 +385,10 @@ for JSONL app requests, runtime job persistence, configured provider workers,
 background runtime workers, requeued jobs after background tool waits, runtime
 job failure preservation, app projection resources, notifications, automation,
 and task bundle export. The interactive `chat` command depends on this path:
-`agent-os-cli` starts `agent-os-hostd --stdio`, sends typed app requests, and
-lets the host launch configured Agent Thread Runtime workers from the user's
-global provider config.
+`agent-os-cli` starts `agent-os-hostd --stdio`, sends typed app requests through
+the shared stdio app-server client used by `run`, `code`, `chat`, `resume`,
+`process`, and `status`, and lets the host launch configured Agent Thread
+Runtime workers from the user's global provider config.
 
 Workspace dependency boundaries are covered by a conformance test that runs
 `cargo metadata --format-version=1 --no-deps` and checks normal `agent-os-*`
