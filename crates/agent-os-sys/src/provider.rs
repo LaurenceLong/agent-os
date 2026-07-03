@@ -243,7 +243,7 @@ pub struct ProviderUsage {
     pub cost: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderStreamEvent {
     pub event_id: String,
     pub session_id: String,

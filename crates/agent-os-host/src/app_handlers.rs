@@ -21,6 +21,8 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
+const PROVIDER_OPERATION_EVENT_TIMELINE_LIMIT: usize = 50;
+
 impl AppKernelService for AgentOsHost {
     fn handle_app_request(
         &self,
@@ -793,6 +795,12 @@ fn provider_operation_projection(
         .iter()
         .filter(|event| event.event_type == ProviderStreamEventType::ProviderWarning)
         .count() as u64;
+    let event_timeline_start = session
+        .stream_events
+        .len()
+        .saturating_sub(PROVIDER_OPERATION_EVENT_TIMELINE_LIMIT);
+    let event_timeline = session.stream_events[event_timeline_start..].to_vec();
+    let event_timeline_omitted = event_timeline_start as u64;
     AppProviderOperationProjection {
         session_id: session.session_id.clone(),
         thread_id: session.request.thread_id.clone(),
@@ -809,6 +817,8 @@ fn provider_operation_projection(
         stream_events: session.stream_events.len() as u64,
         retry_events,
         warning_events,
+        event_timeline,
+        event_timeline_omitted,
         created_at: session.created_at.clone(),
         completed_at: session.completed_at.clone(),
     }

@@ -2014,6 +2014,13 @@ mod tests {
             )
             .unwrap();
         host.kernel()
+            .record_provider_stream_event(
+                &stream.session_id,
+                ProviderStreamEventType::ProviderWarning,
+                serde_json::json!({"code": "rate_limit_near", "remaining": 2}),
+            )
+            .unwrap();
+        host.kernel()
             .complete_stream_session(&stream.session_id)
             .unwrap();
 
@@ -2034,6 +2041,7 @@ mod tests {
         assert_eq!(usage["usage"]["totals"]["input_tokens"], 21);
         assert_eq!(usage["usage"]["totals"]["output_tokens"], 8);
         assert_eq!(usage["usage"]["totals"]["retry_events"], 1);
+        assert_eq!(usage["usage"]["totals"]["warning_events"], 1);
         assert_eq!(
             usage["usage"]["operations"][0]["session_id"],
             stream.session_id
@@ -2043,6 +2051,29 @@ mod tests {
             "coding-primary"
         );
         assert_eq!(usage["usage"]["operations"][0]["status"], "Completed");
+        assert_eq!(usage["usage"]["operations"][0]["stream_events"], 5);
+        assert_eq!(usage["usage"]["operations"][0]["event_timeline_omitted"], 0);
+        let event_timeline = usage["usage"]["operations"][0]["event_timeline"]
+            .as_array()
+            .unwrap();
+        let event_types = event_timeline
+            .iter()
+            .map(|event| event["event_type"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            event_types,
+            vec![
+                "StreamStarted",
+                "UsageUpdated",
+                "ProviderRetry",
+                "ProviderWarning",
+                "StreamCompleted"
+            ]
+        );
+        assert_eq!(event_timeline[2]["payload"]["attempt"], 1);
+        assert_eq!(event_timeline[2]["payload"]["retry_after_ms"], 250);
+        assert_eq!(event_timeline[3]["payload"]["code"], "rate_limit_near");
+        assert_eq!(event_timeline[3]["payload"]["remaining"], 2);
 
         let model_miss = accepted_body(request(
             &mut server,
@@ -2074,6 +2105,67 @@ mod tests {
                 .as_str()
                 .is_some_and(|id| id == "perm_producer")
         }));
+    }
+
+    #[test]
+    fn provider_usage_operation_timeline_is_bounded() {
+        let host = AgentOsHost::in_memory();
+        let mut server = initialized_server_with_host(host.clone());
+        let thread_id = start_thread(&mut server);
+        let thread = host
+            .kernel()
+            .state_snapshot()
+            .unwrap()
+            .threads
+            .get(&thread_id)
+            .unwrap()
+            .clone();
+        let stream = host
+            .kernel()
+            .open_stream_session(StreamRequest {
+                thread_id: thread_id.clone(),
+                turn_id: Some("turn_provider_timeline".to_string()),
+                provider_profile_id: "prov_default".to_string(),
+                model_routing_policy_id: "route_default".to_string(),
+                requested_model_alias: None,
+                role: "ProducerAgent".to_string(),
+                task_id: thread.task.task_id.clone(),
+                reasoning_profile: None,
+                tool_visibility_profile: None,
+                output_schema: None,
+            })
+            .unwrap();
+        for index in 0..55 {
+            host.kernel()
+                .record_provider_stream_event(
+                    &stream.session_id,
+                    ProviderStreamEventType::ProviderWarning,
+                    serde_json::json!({"index": index}),
+                )
+                .unwrap();
+        }
+        host.kernel()
+            .complete_stream_session(&stream.session_id)
+            .unwrap();
+
+        let usage = accepted_body(request(
+            &mut server,
+            "req_provider_timeline",
+            AppRequest::ProviderUsageRead {
+                query: StatsQuery {
+                    provider_id: Some("primary-provider".to_string()),
+                    ..StatsQuery::default()
+                },
+            },
+        ));
+        let operation = &usage["usage"]["operations"][0];
+        assert_eq!(operation["stream_events"], 57);
+        assert_eq!(operation["event_timeline_omitted"], 7);
+        let event_timeline = operation["event_timeline"].as_array().unwrap();
+        assert_eq!(event_timeline.len(), 50);
+        assert_eq!(event_timeline[0]["event_type"], "ProviderWarning");
+        assert_eq!(event_timeline[0]["payload"]["index"], 6);
+        assert_eq!(event_timeline[49]["event_type"], "StreamCompleted");
     }
 
     #[test]

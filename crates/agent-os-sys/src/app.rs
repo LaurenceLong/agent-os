@@ -1,7 +1,7 @@
 use crate::{
     AutomationScheduleKind, CredentialSource, EcosystemSourceKind, EcosystemSourceScope,
-    LlmApiStyle, ModelCapabilities, ModelLimit, ProcessLifecycleState, ProviderStreamStatus,
-    ResourceSessionType, SecurityLevel, ThreadStatus, TurnStatus,
+    LlmApiStyle, ModelCapabilities, ModelLimit, ProcessLifecycleState, ProviderStreamEvent,
+    ProviderStreamStatus, ResourceSessionType, SecurityLevel, ThreadStatus, TurnStatus,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -320,6 +320,8 @@ pub struct AppProviderOperationProjection {
     pub stream_events: u64,
     pub retry_events: u64,
     pub warning_events: u64,
+    pub event_timeline: Vec<ProviderStreamEvent>,
+    pub event_timeline_omitted: u64,
     pub created_at: String,
     pub completed_at: Option<String>,
 }
