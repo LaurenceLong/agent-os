@@ -19,8 +19,9 @@ use agent_os_store::LocalBlobStore;
 use agent_os_store_sqlite::SqliteStore;
 use agent_os_sys::{
     now_rfc3339, AgentOsError, AgentOsResult, AutomationRun, AutomationScheduleStatus,
-    ClientConnection, ClientKind, ClientThread, ModelCapabilities, ModelLimit, SecurityLevel,
-    StatsSnapshot, ThreadStatus, TurnInputKind, TurnRecord,
+    ClientConnection, ClientKind, ClientThread, EcosystemSource, ModelCapabilities, ModelLimit,
+    PackageContributionKind, PackageInstallProvenance, PackageInstallStatus, PackageManifestRecord,
+    SecurityLevel, StatsSnapshot, ThreadStatus, TurnInputKind, TurnRecord,
 };
 use agent_os_thread::{
     ModelClient, RuntimeConfig, RuntimeJob, RuntimeJobRecord, RuntimeRunReport, ThreadRuntime,
@@ -296,26 +297,183 @@ impl AgentOsHost {
         &self,
         catalog: &EcosystemCatalog,
     ) -> AgentOsResult<EcosystemImportReport> {
+        self.import_catalog_packages(&catalog.package_manifests)?;
         for document in &catalog.instruction_documents {
-            self.kernel.import_instruction_document(document.clone())?;
+            if self.catalog_source_enabled(&catalog.package_manifests, &document.source)? {
+                self.kernel.import_instruction_document(document.clone())?;
+                self.record_catalog_package_contribution(
+                    &catalog.package_manifests,
+                    PackageContributionKind::InstructionDocument,
+                    &document.instruction_id,
+                    &document.source.source_path,
+                    &document.source,
+                    Some(document.content_hash.as_str()),
+                )?;
+            }
         }
         for skill in &catalog.skill_definitions {
-            self.kernel.import_skill_definition(skill.clone())?;
+            if self.catalog_source_enabled(&catalog.package_manifests, &skill.source)? {
+                self.kernel.import_skill_definition(skill.clone())?;
+                self.record_catalog_package_contribution(
+                    &catalog.package_manifests,
+                    PackageContributionKind::SkillDefinition,
+                    &skill.skill_id,
+                    &skill.name,
+                    &skill.source,
+                    Some(skill.content_hash.as_str()),
+                )?;
+            }
         }
         for command in &catalog.command_definitions {
-            self.kernel.import_command_definition(command.clone())?;
+            if self.catalog_source_enabled(&catalog.package_manifests, &command.source)? {
+                self.kernel.import_command_definition(command.clone())?;
+                self.record_catalog_package_contribution(
+                    &catalog.package_manifests,
+                    PackageContributionKind::CommandDefinition,
+                    &command.command_id,
+                    &command.name,
+                    &command.source,
+                    Some(command.content_hash.as_str()),
+                )?;
+            }
         }
         for profile in &catalog.imported_agent_profiles {
-            self.kernel
-                .register_imported_agent_profile(profile.clone())?;
+            if self.catalog_source_enabled(&catalog.package_manifests, &profile.source)? {
+                self.kernel
+                    .register_imported_agent_profile(profile.clone())?;
+                self.record_catalog_package_contribution(
+                    &catalog.package_manifests,
+                    PackageContributionKind::ImportedAgentProfile,
+                    &profile.imported_agent_profile_id,
+                    &profile.name,
+                    &profile.source,
+                    Some(profile.content_hash.as_str()),
+                )?;
+            }
         }
         for server in &catalog.mcp_servers {
-            self.kernel.register_mcp_server_spec(server.clone())?;
+            if self.catalog_source_enabled(&catalog.package_manifests, &server.source)? {
+                self.kernel.register_mcp_server_spec(server.clone())?;
+                self.record_catalog_package_contribution(
+                    &catalog.package_manifests,
+                    PackageContributionKind::McpServer,
+                    &server.server_id,
+                    &server.name,
+                    &server.source,
+                    None,
+                )?;
+            }
         }
         for tool in &catalog.mcp_tools {
-            self.kernel.register_mcp_tool_definition(tool.clone())?;
+            if self.catalog_source_enabled(&catalog.package_manifests, &tool.source)? {
+                self.kernel.register_mcp_tool_definition(tool.clone())?;
+                self.record_catalog_package_contribution(
+                    &catalog.package_manifests,
+                    PackageContributionKind::McpTool,
+                    &tool.mcp_tool_id,
+                    &tool.model_tool_name,
+                    &tool.source,
+                    None,
+                )?;
+            }
         }
         Ok(catalog.import_report())
+    }
+
+    fn import_catalog_packages(&self, packages: &[PackageManifestRecord]) -> AgentOsResult<()> {
+        for package in packages {
+            let state = self.kernel.state_snapshot()?;
+            if let Some(installed) = state
+                .package_installs
+                .get(&package.manifest.package_name)
+                .cloned()
+            {
+                if installed.content_hash != package.content_hash {
+                    return Err(AgentOsError::Validation(format!(
+                        "package {} is already installed with a different manifest content hash",
+                        package.manifest.package_name
+                    )));
+                }
+                continue;
+            }
+            self.kernel.install_package_manifest(
+                package.clone(),
+                PackageInstallProvenance {
+                    installed_by: "agent-os-ecosystem".to_string(),
+                    reason: Some("workspace ecosystem import".to_string()),
+                },
+            )?;
+        }
+        Ok(())
+    }
+
+    fn catalog_source_enabled(
+        &self,
+        packages: &[PackageManifestRecord],
+        source: &EcosystemSource,
+    ) -> AgentOsResult<bool> {
+        let Some(package) = package_for_source(packages, source) else {
+            return Ok(true);
+        };
+        let state = self.kernel.state_snapshot()?;
+        let installed = state
+            .package_installs
+            .get(&package.manifest.package_name)
+            .ok_or_else(|| {
+                AgentOsError::NotFound(format!("package {}", package.manifest.package_name))
+            })?;
+        Ok(installed.status == PackageInstallStatus::Enabled)
+    }
+
+    fn record_catalog_package_contribution(
+        &self,
+        packages: &[PackageManifestRecord],
+        kind: PackageContributionKind,
+        contribution_id: &str,
+        contribution_name: &str,
+        source: &EcosystemSource,
+        content_hash: Option<&str>,
+    ) -> AgentOsResult<()> {
+        let Some(package) = package_for_source(packages, source) else {
+            return Ok(());
+        };
+        if self.catalog_package_contribution_exists(
+            &package.manifest.package_name,
+            kind,
+            contribution_id,
+            content_hash,
+        )? {
+            return Ok(());
+        }
+        self.kernel.register_package_contribution(
+            &package.manifest.package_name,
+            kind,
+            contribution_id.to_string(),
+            contribution_name.to_string(),
+            source.clone(),
+            content_hash.map(str::to_string),
+        )?;
+        Ok(())
+    }
+
+    fn catalog_package_contribution_exists(
+        &self,
+        package_name: &str,
+        kind: PackageContributionKind,
+        contribution_id: &str,
+        content_hash: Option<&str>,
+    ) -> AgentOsResult<bool> {
+        Ok(self
+            .kernel
+            .state_snapshot()?
+            .package_contributions
+            .values()
+            .any(|contribution| {
+                contribution.package_name == package_name
+                    && contribution.contribution_kind == kind
+                    && contribution.contribution_id == contribution_id
+                    && contribution.content_hash.as_deref() == content_hash
+            }))
     }
 
     pub fn spawn_runtime_job_worker<C>(
@@ -761,6 +919,16 @@ impl AgentOsHost {
         }
         Ok(interrupted)
     }
+}
+
+fn package_for_source<'a>(
+    packages: &'a [PackageManifestRecord],
+    source: &EcosystemSource,
+) -> Option<&'a PackageManifestRecord> {
+    let source_path = Path::new(&source.source_path);
+    packages
+        .iter()
+        .find(|package| source_path.starts_with(Path::new(&package.root_path)))
 }
 
 #[cfg(test)]

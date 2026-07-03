@@ -15,6 +15,7 @@ fn ecosystem_imports_project_sources_and_replays_kernel_events() {
     fs::create_dir_all(workspace.join(".agent-os/skills/review-skill/resources")).unwrap();
     fs::create_dir_all(workspace.join(".agent-os/commands/code")).unwrap();
     fs::create_dir_all(workspace.join(".agent-os/agents")).unwrap();
+    fs::create_dir_all(workspace.join(".agent-os/prompts")).unwrap();
     fs::write(workspace.join("AGENTS.md"), "Project rule: read first.\n").unwrap();
     fs::write(
         workspace.join(".agent-os/skills/review-skill/SKILL.md"),
@@ -36,9 +37,33 @@ fn ecosystem_imports_project_sources_and_replays_kernel_events() {
         "---\ndescription: Focused reviewer.\nmode: subagent\n---\nAct as a focused reviewer.\n",
     )
     .unwrap();
+    fs::write(
+        workspace.join(".agent-os/prompts/supervisor.md"),
+        "Supervisor prompt\n",
+    )
+    .unwrap();
+    fs::write(
+        workspace.join(".agent-os/manifest.json"),
+        r#"{
+  "manifest_version": "0.1",
+  "package_name": "project-ecosystem-package",
+  "package_type": "agent",
+  "version": "0.1.0",
+  "entrypoint": "prompts/supervisor.md",
+  "required_kernel_version": "0.3",
+  "capabilities_requested": ["tool.invoke"],
+  "roles_provided": ["ReviewerAgent"],
+  "tools_provided": [],
+  "schemas": [],
+  "signature": null
+}
+"#,
+    )
+    .unwrap();
 
     let kernel = Kernel::new();
     let report = import_workspace_ecosystem(&kernel, &workspace).unwrap();
+    assert_eq!(report.packages, 1);
     assert!(report.instructions >= 1);
     assert!(report.skills >= 1);
     assert!(report.commands >= 1);
@@ -52,9 +77,38 @@ fn ecosystem_imports_project_sources_and_replays_kernel_events() {
     assert!(state.skill_definitions.contains_key("review-skill"));
     assert!(state.command_definitions.contains_key("code/review"));
     assert!(state.imported_agent_profiles.contains_key("reviewer"));
+    let package = state
+        .package_installs
+        .get("project-ecosystem-package")
+        .expect("package manifest installed during import");
+    assert_eq!(package.status, PackageInstallStatus::Enabled);
+    assert_eq!(
+        package.install_provenance.installed_by,
+        "agent-os-ecosystem"
+    );
+    let contributions = state
+        .package_contributions
+        .values()
+        .map(|contribution| {
+            (
+                contribution.contribution_kind,
+                contribution.contribution_name.as_str(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(contributions.contains(&(PackageContributionKind::SkillDefinition, "review-skill")));
+    assert!(contributions.contains(&(PackageContributionKind::CommandDefinition, "code/review")));
+    assert!(contributions.contains(&(PackageContributionKind::ImportedAgentProfile, "reviewer")));
 
     let replayed = Kernel::from_events(&kernel.events().unwrap()).unwrap();
     let replayed_state = replayed.state_snapshot().unwrap();
+    assert!(replayed_state
+        .package_installs
+        .contains_key("project-ecosystem-package"));
+    assert_eq!(
+        replayed_state.package_contributions.len(),
+        state.package_contributions.len()
+    );
     assert_eq!(
         replayed_state.skill_definitions["review-skill"].content,
         state.skill_definitions["review-skill"].content
@@ -720,25 +774,140 @@ fn import_catalog(
     kernel: &Kernel,
     catalog: &EcosystemCatalog,
 ) -> AgentOsResult<EcosystemImportReport> {
+    for package in &catalog.package_manifests {
+        if !kernel
+            .state_snapshot()?
+            .package_installs
+            .contains_key(&package.manifest.package_name)
+        {
+            kernel.install_package_manifest(
+                package.clone(),
+                PackageInstallProvenance {
+                    installed_by: "agent-os-ecosystem".to_string(),
+                    reason: Some("workspace ecosystem import".to_string()),
+                },
+            )?;
+        }
+    }
     for document in &catalog.instruction_documents {
         kernel.import_instruction_document(document.clone())?;
+        register_catalog_contribution(
+            kernel,
+            &catalog.package_manifests,
+            PackageContributionKind::InstructionDocument,
+            &document.instruction_id,
+            &document.source.source_path,
+            &document.source,
+            Some(document.content_hash.as_str()),
+        )?;
     }
     for skill in &catalog.skill_definitions {
         kernel.import_skill_definition(skill.clone())?;
+        register_catalog_contribution(
+            kernel,
+            &catalog.package_manifests,
+            PackageContributionKind::SkillDefinition,
+            &skill.skill_id,
+            &skill.name,
+            &skill.source,
+            Some(skill.content_hash.as_str()),
+        )?;
     }
     for command in &catalog.command_definitions {
         kernel.import_command_definition(command.clone())?;
+        register_catalog_contribution(
+            kernel,
+            &catalog.package_manifests,
+            PackageContributionKind::CommandDefinition,
+            &command.command_id,
+            &command.name,
+            &command.source,
+            Some(command.content_hash.as_str()),
+        )?;
     }
     for profile in &catalog.imported_agent_profiles {
         kernel.register_imported_agent_profile(profile.clone())?;
+        register_catalog_contribution(
+            kernel,
+            &catalog.package_manifests,
+            PackageContributionKind::ImportedAgentProfile,
+            &profile.imported_agent_profile_id,
+            &profile.name,
+            &profile.source,
+            Some(profile.content_hash.as_str()),
+        )?;
     }
     for server in &catalog.mcp_servers {
         kernel.register_mcp_server_spec(server.clone())?;
+        register_catalog_contribution(
+            kernel,
+            &catalog.package_manifests,
+            PackageContributionKind::McpServer,
+            &server.server_id,
+            &server.name,
+            &server.source,
+            None,
+        )?;
     }
     for tool in &catalog.mcp_tools {
         kernel.register_mcp_tool_definition(tool.clone())?;
+        register_catalog_contribution(
+            kernel,
+            &catalog.package_manifests,
+            PackageContributionKind::McpTool,
+            &tool.mcp_tool_id,
+            &tool.model_tool_name,
+            &tool.source,
+            None,
+        )?;
     }
     Ok(catalog.import_report())
+}
+
+fn register_catalog_contribution(
+    kernel: &Kernel,
+    packages: &[PackageManifestRecord],
+    kind: PackageContributionKind,
+    contribution_id: &str,
+    contribution_name: &str,
+    source: &EcosystemSource,
+    content_hash: Option<&str>,
+) -> AgentOsResult<()> {
+    let Some(package) = package_for_source(packages, source) else {
+        return Ok(());
+    };
+    if kernel
+        .state_snapshot()?
+        .package_contributions
+        .values()
+        .any(|contribution| {
+            contribution.package_name == package.manifest.package_name
+                && contribution.contribution_kind == kind
+                && contribution.contribution_id == contribution_id
+                && contribution.content_hash.as_deref() == content_hash
+        })
+    {
+        return Ok(());
+    }
+    kernel.register_package_contribution(
+        &package.manifest.package_name,
+        kind,
+        contribution_id.to_string(),
+        contribution_name.to_string(),
+        source.clone(),
+        content_hash.map(str::to_string),
+    )?;
+    Ok(())
+}
+
+fn package_for_source<'a>(
+    packages: &'a [PackageManifestRecord],
+    source: &EcosystemSource,
+) -> Option<&'a PackageManifestRecord> {
+    let source_path = std::path::Path::new(&source.source_path);
+    packages
+        .iter()
+        .find(|package| source_path.starts_with(std::path::Path::new(&package.root_path)))
 }
 
 fn test_paths(workspace: &std::path::Path) -> AgentOsPaths {
