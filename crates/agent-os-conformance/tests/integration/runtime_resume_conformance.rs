@@ -129,3 +129,149 @@ fn agent_thread_resumes_after_process_restart_with_persisted_tool_state() {
     );
     let _ = fs::remove_dir_all(workspace);
 }
+
+#[test]
+fn thread_recovery_orphans_running_process_sessions_after_replay() {
+    let workspace = env::temp_dir().join(format!(
+        "agent-os-conformance-process-orphan-{}-{}",
+        std::process::id(),
+        new_id("case_")
+    ));
+    fs::create_dir_all(&workspace).unwrap();
+    let fx = fixture();
+    let env = fx
+        .kernel
+        .create_environment(
+            BackendType::IsolatedWorktree,
+            workspace.to_string_lossy(),
+            "sbox_workspace_write",
+            ReusePolicy::TaskScoped,
+        )
+        .unwrap();
+    fx.kernel
+        .attach_environment(
+            &env.environment_id,
+            &fx.worker.agent_id,
+            &fx.worker.thread_id,
+            &fx.task.task_id,
+            AttachMode::WorkspaceWrite,
+        )
+        .unwrap();
+    let cap = fx
+        .kernel
+        .grant_capability(
+            &fx.worker.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            4,
+            None,
+        )
+        .unwrap();
+    let slow_command = if cfg!(windows) {
+        "Write-Output before-orphan; Start-Sleep -Seconds 30; Write-Output after-orphan"
+    } else {
+        "echo before-orphan; sleep 30; echo after-orphan"
+    };
+    let command = fx
+        .kernel
+        .invoke_tool(
+            &fx.worker.agent_id,
+            &fx.task.task_id,
+            &fx.worker.session_id,
+            cap.capability_id,
+            4,
+            ToolInvokeInput {
+                tool_name: "run_command".to_string(),
+                input: json!({
+                    "command": slow_command,
+                    "cwd": workspace.to_string_lossy()
+                }),
+                evidence_claim: Some("background command started".to_string()),
+            },
+        )
+        .unwrap();
+    assert_eq!(command.status, ToolCallStatus::Running);
+    let process_id = command
+        .output
+        .as_ref()
+        .and_then(|output| output.get("process_id"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap()
+        .to_string();
+    wait_process_state(&fx.kernel, &process_id, ProcessLifecycleState::Running);
+
+    let replayed = Kernel::from_events(&fx.kernel.events().unwrap()).unwrap();
+    let reconciliation = replayed
+        .reconcile_thread_recovery(&fx.worker.thread_id)
+        .unwrap();
+    assert_eq!(reconciliation.orphan_tool_call_ids, vec![command.call_id]);
+    assert_eq!(reconciliation.orphan_process_ids, vec![process_id.clone()]);
+    let state = replayed.state_snapshot().unwrap();
+    let session = state.process_sessions.get(&process_id).unwrap();
+    assert_eq!(session.state, ProcessLifecycleState::Orphaned);
+    assert_eq!(
+        session.error.as_deref(),
+        Some("process session orphaned during recovery")
+    );
+    assert!(session.completed_at.is_some());
+    assert_eq!(
+        state
+            .tool_invocations
+            .get(&reconciliation.orphan_tool_call_ids[0])
+            .unwrap()
+            .status,
+        ToolCallStatus::Cancelled
+    );
+
+    let replayed_after_recovery = Kernel::from_events(&replayed.events().unwrap()).unwrap();
+    let recovered_state = replayed_after_recovery.state_snapshot().unwrap();
+    assert_eq!(
+        recovered_state
+            .process_sessions
+            .get(&process_id)
+            .unwrap()
+            .state,
+        ProcessLifecycleState::Orphaned
+    );
+    assert_eq!(
+        recovered_state
+            .reconciliation_reports
+            .get(&reconciliation.reconciliation_id)
+            .unwrap()
+            .orphan_process_ids,
+        vec![process_id.clone()]
+    );
+
+    let _ = fx
+        .kernel
+        .terminate_process_session(&process_id, "test cleanup");
+    let _ = fs::remove_dir_all(workspace);
+}
+
+fn wait_process_state(
+    kernel: &Kernel,
+    process_id: &str,
+    expected: ProcessLifecycleState,
+) -> ProcessSession {
+    let started = std::time::Instant::now();
+    loop {
+        let session = kernel
+            .state_snapshot()
+            .unwrap()
+            .process_sessions
+            .get(process_id)
+            .unwrap()
+            .clone();
+        if session.state == expected {
+            return session;
+        }
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "process {process_id} remained in {:?}, expected {:?}",
+            session.state,
+            expected
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}

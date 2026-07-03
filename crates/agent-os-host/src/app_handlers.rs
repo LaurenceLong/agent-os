@@ -425,6 +425,7 @@ impl AgentOsHost {
             "reconciliation": {
                 "reconciliation_id": reconciliation.reconciliation_id,
                 "orphan_tool_call_ids": reconciliation.orphan_tool_call_ids,
+                "orphan_process_ids": reconciliation.orphan_process_ids,
                 "workspace_diff_refs": reconciliation.workspace_diff_refs,
                 "reclaimed_resource_lease_ids": reconciliation.reclaimed_resource_lease_ids,
                 "reclaimed_environment_lease_ids": reconciliation.reclaimed_environment_lease_ids,

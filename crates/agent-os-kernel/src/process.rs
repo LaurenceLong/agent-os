@@ -297,6 +297,27 @@ impl Kernel {
         )
     }
 
+    pub(crate) fn orphan_process_session(
+        &self,
+        process_id: &str,
+        reason: &str,
+    ) -> AgentOsResult<ProcessSession> {
+        let mut session = self.process_session(process_id)?;
+        if session.state != ProcessLifecycleState::Running {
+            return Err(AgentOsError::Validation(format!(
+                "process orphan recovery requires running process, found {:?}",
+                session.state
+            )));
+        }
+        let now = now_rfc3339();
+        session.state = ProcessLifecycleState::Orphaned;
+        session.error = Some(reason.to_string());
+        session.updated_at = now.clone();
+        session.completed_at = Some(now);
+        self.emit_process_session("ProcessSessionOrphaned", &session)?;
+        Ok(session)
+    }
+
     pub(crate) fn process_session_by_tool_call_id(
         &self,
         tool_call_id: &str,

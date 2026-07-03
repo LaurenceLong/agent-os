@@ -1,10 +1,10 @@
 //! Recovery reconciliation.
 //!
 //! On restart the kernel must reconcile durable state that an Agent Thread
-//! may have left mid-flight: orphan tool calls still marked `Running`, and
-//! resource/environment leases whose expiry passed while the process was
-//! down. It also records patch artifacts that represent workspace diffs for
-//! the resumed task. The contract is documented in
+//! may have left mid-flight: orphan tool calls and process sessions still
+//! marked `Running`, and resource/environment leases whose expiry passed
+//! while the process was down. It also records patch artifacts that represent
+//! workspace diffs for the resumed task. The contract is documented in
 //! `docs/10-kernel-design/agent-thread-core-module.md:747-770` and
 //! `docs/10-kernel-design/state-storage-and-replay.md:224`.
 //!
@@ -24,6 +24,7 @@ pub struct ReconciliationReport {
     pub agent_id: String,
     pub task_id: String,
     pub orphan_tool_call_ids: Vec<String>,
+    pub orphan_process_ids: Vec<String>,
     pub workspace_diff_refs: Vec<String>,
     pub reclaimed_resource_lease_ids: Vec<String>,
     pub reclaimed_environment_lease_ids: Vec<String>,
@@ -34,10 +35,11 @@ impl Kernel {
     /// Reconcile durable state for a thread after a restart.
     ///
     /// Marks orphan `Running` tool invocations for the thread's task as
-    /// cancelled, reclaims expired resource and environment leases owned by
-    /// the thread, and records a durable `ReconciliationReport`. The thread
-    /// itself is not transitioned here; callers (the CLI resume path) own
-    /// the status transition. Returns the report so callers can surface it.
+    /// cancelled, marks orphan `Running` process sessions as orphaned,
+    /// reclaims expired resource and environment leases owned by the thread,
+    /// and records a durable `ReconciliationReport`. The thread itself is not
+    /// transitioned here; callers (the CLI resume path) own the status
+    /// transition. Returns the report so callers can surface it.
     pub fn reconcile_thread_recovery(
         &self,
         thread_id: &str,
@@ -56,6 +58,16 @@ impl Kernel {
                     && invocation.status == ToolCallStatus::Running
             })
             .map(|invocation| invocation.call_id.clone())
+            .collect();
+        let orphan_process_ids: Vec<String> = state
+            .process_sessions
+            .values()
+            .filter(|session| {
+                session.thread_id == thread_id
+                    && session.task_id == acb.task.task_id
+                    && session.state == ProcessLifecycleState::Running
+            })
+            .map(|session| session.process_id.clone())
             .collect();
         let reclaimed_resource_lease_ids: Vec<String> = state
             .resource_leases
@@ -91,6 +103,9 @@ impl Kernel {
         for call_id in &orphan_tool_call_ids {
             self.reconcile_orphan_tool_call(call_id)?;
         }
+        for process_id in &orphan_process_ids {
+            self.orphan_process_session(process_id, "process session orphaned during recovery")?;
+        }
         for lease_id in &reclaimed_resource_lease_ids {
             self.reclaim_expired_resource_lease(lease_id)?;
         }
@@ -104,6 +119,7 @@ impl Kernel {
             agent_id: acb.agent_id.clone(),
             task_id: acb.task.task_id.clone(),
             orphan_tool_call_ids,
+            orphan_process_ids,
             workspace_diff_refs,
             reclaimed_resource_lease_ids,
             reclaimed_environment_lease_ids,
