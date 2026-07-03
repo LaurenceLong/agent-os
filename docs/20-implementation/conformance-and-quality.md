@@ -143,6 +143,9 @@ Tool driver tests MUST verify:
 - `agent_control(action=status)` can inspect one process by `process_id` or
   list target process sessions with `payload.processes=true` and optional
   lifecycle `state` filtering
+- `thread/read` app-server projection includes kernel-owned
+  `process_sessions` for the requested thread, and CLI `status --thread-id`
+  relays that process lifecycle list
 - descriptor-declared evidence attachment for workspace, command, control-plane,
   and permission tools so final `evidence_map` entries can cite real evidence ids
 

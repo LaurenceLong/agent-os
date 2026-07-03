@@ -47,6 +47,7 @@ fn status_from_app_client(
             "turns": body["turns"],
             "timeline": body["timeline"],
             "runtime_jobs": body["runtime_jobs"],
+            "process_sessions": body["process_sessions"],
             "stats": stats,
         }));
     }
@@ -209,6 +210,7 @@ mod tests {
 
         assert_eq!(output["thread"]["client_thread_id"], "thread_1");
         assert!(!output["timeline"].as_array().unwrap().is_empty());
+        assert_eq!(output["process_sessions"][0]["process_id"], "proc_1");
     }
 
     #[test]
@@ -262,6 +264,7 @@ mod tests {
                         "turns": [],
                         "timeline": [{"item_id": "item_1"}],
                         "runtime_jobs": [],
+                        "process_sessions": [{"process_id": "proc_1"}],
                     }))
                 }
                 other => panic!("unexpected status request: {other:?}"),

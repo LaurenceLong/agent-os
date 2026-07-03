@@ -33,6 +33,7 @@ pub struct ThreadReadProjection<
     TTurns,
     TTimeline,
     TJobs,
+    TProcessSessions,
     TArtifacts,
     TEvidence,
     TResources,
@@ -42,6 +43,7 @@ pub struct ThreadReadProjection<
     pub turns: TTurns,
     pub timeline: TTimeline,
     pub runtime_jobs: TJobs,
+    pub process_sessions: TProcessSessions,
     pub artifacts: TArtifacts,
     pub evidence: TEvidence,
     pub resources: TResources,
@@ -53,6 +55,7 @@ pub fn thread_read_response<
     TTurns,
     TTimeline,
     TJobs,
+    TProcessSessions,
     TArtifacts,
     TEvidence,
     TResources,
@@ -63,6 +66,7 @@ pub fn thread_read_response<
         TTurns,
         TTimeline,
         TJobs,
+        TProcessSessions,
         TArtifacts,
         TEvidence,
         TResources,
@@ -74,6 +78,7 @@ where
     TTurns: Serialize,
     TTimeline: Serialize,
     TJobs: Serialize,
+    TProcessSessions: Serialize,
     TArtifacts: Serialize,
     TEvidence: Serialize,
     TResources: Serialize,
@@ -84,6 +89,7 @@ where
         "turns": projection.turns,
         "timeline": projection.timeline,
         "runtime_jobs": projection.runtime_jobs,
+        "process_sessions": projection.process_sessions,
         "artifacts": projection.artifacts,
         "evidence": projection.evidence,
         "resources": projection.resources,
@@ -452,6 +458,27 @@ mod tests {
                 }
             }))
         );
+    }
+
+    #[test]
+    fn thread_read_response_projects_process_sessions() {
+        let response = thread_read_response(ThreadReadProjection {
+            thread: json!({"client_thread_id": "thread_1"}),
+            turns: Vec::<Value>::new(),
+            timeline: Vec::<Value>::new(),
+            runtime_jobs: Vec::<Value>::new(),
+            process_sessions: vec![json!({"process_id": "proc_1"})],
+            artifacts: Vec::<Value>::new(),
+            evidence: Vec::<Value>::new(),
+            resources: Vec::<Value>::new(),
+            automation_runs: Vec::<Value>::new(),
+        })
+        .unwrap();
+
+        let AppResponse::Accepted(body) = response else {
+            panic!("thread/read response rejected");
+        };
+        assert_eq!(body["process_sessions"][0]["process_id"], "proc_1");
     }
 
     #[test]

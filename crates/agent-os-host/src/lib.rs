@@ -1246,6 +1246,12 @@ mod tests {
         );
         let body = accepted_body(read);
         assert_eq!(body["runtime_jobs"][0]["status"], "completed");
+        assert_eq!(body["process_sessions"].as_array().unwrap().len(), 1);
+        assert_eq!(body["process_sessions"][0]["state"], "exited");
+        assert_eq!(
+            body["process_sessions"][0]["args"],
+            serde_json::json!(["--help"])
+        );
         fs::remove_dir_all(workspace).unwrap();
     }
 

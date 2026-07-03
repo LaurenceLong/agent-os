@@ -20,6 +20,18 @@ impl AgentOsHost {
             .store()
             .timeline_items(Some(client_thread_id))?;
         let runtime_jobs = self.runtime_jobs_for_thread(client_thread_id)?;
+        let mut process_sessions = self
+            .kernel()
+            .state_snapshot()?
+            .process_sessions
+            .into_values()
+            .filter(|process| process.thread_id == client_thread_id)
+            .collect::<Vec<_>>();
+        process_sessions.sort_by(|left, right| {
+            left.started_at
+                .cmp(&right.started_at)
+                .then_with(|| left.process_id.cmp(&right.process_id))
+        });
         let artifacts = self
             .kernel()
             .store()
@@ -59,6 +71,7 @@ impl AgentOsHost {
             turns,
             timeline,
             runtime_jobs,
+            process_sessions,
             artifacts,
             evidence,
             resources,
