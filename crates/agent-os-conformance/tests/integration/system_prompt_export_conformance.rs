@@ -282,7 +282,7 @@ fn runtime_exports_real_system_prompt_review_bundle_for_core_roles() {
         let final_messages_markdown =
             fs::read_to_string(&canonical_request_steps[3].messages_md).unwrap();
         assert!(final_messages_markdown.contains("prompt-review-skill"));
-        assert!(final_messages_markdown.contains("context-visible"));
+        assert!(final_messages_markdown.contains("prompt_review"));
         assert!(final_messages_markdown.contains(PROMPT_REVIEW_MCP_TOOL));
         index_entries.push(IndexEntry {
             role_label: role.label,
@@ -441,7 +441,7 @@ fn prompt_export_workspace(role: &str) -> PathBuf {
     fs::create_dir_all(&workspace).unwrap();
     fs::write(
         workspace.join("task.md"),
-        "Review this task through the normal Agent-OS runtime prompt path. Load prompt-review-skill and echo context-visible through the prompt-review MCP tool.\n",
+        "Review this task through the normal Agent-OS runtime prompt path. Load prompt-review-skill and discover the prompt-review MCP echo tool through tool_search.\n",
     )
     .unwrap();
     fs::write(workspace.join("AGENTS.md"), PROMPT_REVIEW_INSTRUCTION).unwrap();
@@ -508,11 +508,11 @@ fn run_prompt_export_case(
             task_id: task.task_id,
             role_profile_id: role.role_profile_id.to_string(),
             owner: "conformance".to_string(),
-            goal: "Read task.md, load prompt-review-skill, call the prompt-review MCP echo tool, then submit a concise final result.".to_string(),
+            goal: "Read task.md, load prompt-review-skill, discover the prompt-review MCP echo tool through tool_search, then submit a concise final result.".to_string(),
             success_criteria: vec![
                 "task.md was read and cited".to_string(),
                 "prompt-review-skill was loaded".to_string(),
-                "prompt-review MCP echo was called".to_string(),
+                "prompt-review MCP echo was discovered through tool_search".to_string(),
             ],
             failure_criteria: Vec::new(),
             parent_thread_id: None,
@@ -541,7 +541,7 @@ fn run_prompt_export_case(
     assert!(report
         .tool_results
         .iter()
-        .any(|result| result.tool_name == PROMPT_REVIEW_MCP_TOOL));
+        .any(|result| result.tool_name == "tool_search"));
     assert_eq!(report.status, common::ThreadStatus::Completed);
     assert!(report.final_submitted);
     assert!(report
@@ -721,13 +721,13 @@ fn serve_prompt_export_endpoint(
         let response = match (provider, step_index) {
             (ProviderCase::OpenAiChatCompletions, 0) => openai_read_response(),
             (ProviderCase::OpenAiChatCompletions, 1) => openai_load_skill_response(),
-            (ProviderCase::OpenAiChatCompletions, 2) => openai_mcp_response(),
+            (ProviderCase::OpenAiChatCompletions, 2) => openai_tool_search_response(),
             (ProviderCase::OpenAiChatCompletions, _) => {
                 openai_final_response(evidence_refs_from_provider_request(&request, provider))
             }
             (ProviderCase::AnthropicMessages, 0) => anthropic_read_response(),
             (ProviderCase::AnthropicMessages, 1) => anthropic_load_skill_response(),
-            (ProviderCase::AnthropicMessages, 2) => anthropic_mcp_response(),
+            (ProviderCase::AnthropicMessages, 2) => anthropic_tool_search_response(),
             (ProviderCase::AnthropicMessages, _) => {
                 anthropic_final_response(evidence_refs_from_provider_request(&request, provider))
             }
@@ -802,18 +802,18 @@ fn openai_load_skill_response() -> Value {
     })
 }
 
-fn openai_mcp_response() -> Value {
+fn openai_tool_search_response() -> Value {
     json!({
         "choices": [{
             "message": {
                 "role": "assistant",
                 "content": null,
                 "tool_calls": [{
-                    "id": "call_prompt_review_mcp",
+                    "id": "call_tool_search",
                     "type": "function",
                     "function": {
-                        "name": PROMPT_REVIEW_MCP_TOOL,
-                        "arguments": "{\"text\":\"context-visible\"}"
+                        "name": "tool_search",
+                        "arguments": "{\"query\":\"prompt_review\",\"limit\":5}"
                     }
                 }]
             }
@@ -871,16 +871,16 @@ fn anthropic_load_skill_response() -> Value {
     })
 }
 
-fn anthropic_mcp_response() -> Value {
+fn anthropic_tool_search_response() -> Value {
     json!({
         "id": "msg_prompt_review_mcp",
         "type": "message",
         "role": "assistant",
         "content": [{
             "type": "tool_use",
-            "id": "toolu_prompt_review_mcp",
-            "name": PROMPT_REVIEW_MCP_TOOL,
-            "input": {"text": "context-visible"}
+            "id": "toolu_tool_search",
+            "name": "tool_search",
+            "input": {"query": "prompt_review", "limit": 5}
         }],
         "usage": {"input_tokens": 115, "output_tokens": 8}
     })

@@ -44,7 +44,7 @@ pub(crate) fn parse_response(
                 .map(parse_tool_arguments)
                 .unwrap_or_else(|| json!({}));
 
-            let (tool_name, input, risk_level) = map_function_call(name, arguments, request);
+            let (tool_name, input, risk_level) = map_function_call(name, arguments, request)?;
             let claim = evidence_claim_for_tool(&tool_name);
             actions.push(ModelAction::ToolCall(ToolAction::new(
                 tool_name,
@@ -115,7 +115,7 @@ pub(crate) fn parse_openai_responses_response(
                     .get("arguments")
                     .map(parse_tool_arguments)
                     .unwrap_or_else(|| json!({}));
-                let (tool_name, input, risk_level) = map_function_call(name, arguments, request);
+                let (tool_name, input, risk_level) = map_function_call(name, arguments, request)?;
                 let claim = evidence_claim_for_tool(&tool_name);
                 actions.push(ModelAction::ToolCall(ToolAction::new(
                     tool_name,
@@ -191,7 +191,7 @@ pub(crate) fn parse_anthropic_response(
                     .and_then(Value::as_str)
                     .ok_or_else(|| AgentOsError::Validation("tool_use missing name".to_string()))?;
                 let input = block.get("input").cloned().unwrap_or_else(|| json!({}));
-                let (tool_name, input, risk_level) = map_function_call(name, input, request);
+                let (tool_name, input, risk_level) = map_function_call(name, input, request)?;
                 let claim = evidence_claim_for_tool(&tool_name);
                 actions.push(ModelAction::ToolCall(ToolAction::new(
                     tool_name,
@@ -226,7 +226,7 @@ pub(crate) fn map_function_call(
     name: &str,
     mut arguments: Value,
     request: &ModelTurnRequest,
-) -> (String, Value, u8) {
+) -> AgentOsResult<(String, Value, u8)> {
     if let Some(descriptor) = request
         .context
         .tool_descriptors
@@ -239,9 +239,11 @@ pub(crate) fn map_function_call(
         } else {
             descriptor.risk_level
         };
-        return (name.to_string(), arguments, risk);
+        return Ok((name.to_string(), arguments, risk));
     }
-    (name.to_string(), arguments, 1)
+    Err(AgentOsError::Validation(format!(
+        "model called non-visible tool `{name}`"
+    )))
 }
 
 fn agent_control_risk(arguments: &Value) -> u8 {

@@ -1090,7 +1090,8 @@ fn map_function_call_injects_workspace_root() {
         "apply_patch",
         json!({"patch": "*** Begin Patch\n*** Add File: test.rs\n+fn main() {}\n*** End Patch\n"}),
         &request,
-    );
+    )
+    .unwrap();
     assert_eq!(tool_name, "apply_patch");
     assert_eq!(input["workspace_root"], tmp.to_string_lossy().to_string());
     assert_eq!(risk, 4);
@@ -1104,7 +1105,8 @@ fn map_function_call_keeps_apply_patch_delete_operation() {
         "apply_patch",
         json!({"patch": "*** Begin Patch\n*** Delete File: old.txt\n*** End Patch\n"}),
         &request,
-    );
+    )
+    .unwrap();
     assert_eq!(tool_name, "apply_patch");
     assert_eq!(input["workspace_root"], tmp.to_string_lossy().to_string());
     assert_eq!(risk, 4);
@@ -1132,7 +1134,8 @@ fn map_function_call_supports_agent_control_actions() {
             }
         }),
         &request,
-    );
+    )
+    .unwrap();
     assert_eq!(tool_name, "agent_control");
     assert_eq!(input["action"], "start");
     assert_eq!(risk, 4);
@@ -1144,16 +1147,44 @@ fn map_function_call_supports_skill_and_mcp_tools() {
     let mut request = make_request(&tmp);
     attach_mcp_echo_tool(&mut request);
     let (tool_name, input, risk) =
-        map_function_call("load_skill", json!({"name": "review-skill"}), &request);
+        map_function_call("load_skill", json!({"name": "review-skill"}), &request).unwrap();
     assert_eq!(tool_name, "load_skill");
     assert_eq!(input["name"], "review-skill");
     assert_eq!(risk, 1);
 
     let (tool_name, input, risk) =
-        map_function_call("mcp__echo__echo", json!({"text": "hello"}), &request);
+        map_function_call("mcp__echo__echo", json!({"text": "hello"}), &request).unwrap();
     assert_eq!(tool_name, "mcp__echo__echo");
     assert_eq!(input["text"], "hello");
     assert_eq!(risk, 3);
+}
+
+#[test]
+fn parse_response_rejects_non_visible_tool_call() {
+    let tmp = std::env::temp_dir().join(format!("aos-openai-hidden-tool-{}", new_id("t_")));
+    let request = make_request(&tmp);
+    let body = json!({
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [{
+                    "id": "call_hidden",
+                    "type": "function",
+                    "function": {
+                        "name": "mcp__echo__echo",
+                        "arguments": "{\"text\":\"hidden\"}"
+                    }
+                }]
+            }
+        }],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1}
+    });
+
+    let err = parse_response(&body, &request).unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("model called non-visible tool `mcp__echo__echo`"));
 }
 
 #[test]
