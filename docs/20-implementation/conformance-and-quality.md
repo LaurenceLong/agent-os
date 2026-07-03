@@ -370,7 +370,8 @@ message assertions for tool visibility and image payload projection. The
 deterministic system-prompt export conformance additionally writes
 `target/agent-os-audit/model-visible-context-review/` and asserts that scoped
 context snapshots and context compactions appear in provider-visible prompt
-content.
+content across Chat Completions, OpenAI Responses, and Anthropic Messages
+provider wire shapes.
 
 The 2026-06-30 long-running kernel refactor gate used the all-scenario command
 above from WSL with exported provider variables. The observed result was 10
