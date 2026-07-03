@@ -372,8 +372,14 @@ struct GitignoreRule {
     anchored: bool,
 }
 
-fn load_gitignore_rules_to_scope(root: &Path, scope: &Path) -> AgentOsResult<Vec<GitignoreRule>> {
-    let mut rules = load_gitignore_rules(root, root, &[])?;
+#[derive(Debug, Clone, Default)]
+struct IgnoreRules {
+    rules: Vec<GitignoreRule>,
+    has_gitignore: bool,
+}
+
+fn load_gitignore_rules_to_scope(root: &Path, scope: &Path) -> AgentOsResult<IgnoreRules> {
+    let mut rules = load_gitignore_rules(root, root, &IgnoreRules::default())?;
     let relative = scope.strip_prefix(root).unwrap_or(scope);
     let mut directory = root.to_path_buf();
     for component in relative.components() {
@@ -392,13 +398,14 @@ fn load_gitignore_rules_to_scope(root: &Path, scope: &Path) -> AgentOsResult<Vec
 fn load_gitignore_rules(
     root: &Path,
     directory: &Path,
-    inherited: &[GitignoreRule],
-) -> AgentOsResult<Vec<GitignoreRule>> {
-    let mut rules = inherited.to_vec();
+    inherited: &IgnoreRules,
+) -> AgentOsResult<IgnoreRules> {
+    let mut rules = inherited.clone();
     let gitignore = directory.join(".gitignore");
     if !gitignore.exists() {
         return Ok(rules);
     }
+    rules.has_gitignore = true;
     let content = fs::read_to_string(&gitignore)
         .map_err(|error| AgentOsError::Validation(format!("read .gitignore: {error}")))?;
     let base = workspace_relative_path(root, directory);
@@ -406,7 +413,7 @@ fn load_gitignore_rules(
         let Some(rule) = parse_gitignore_rule(&base, line) else {
             continue;
         };
-        rules.push(rule);
+        rules.rules.push(rule);
     }
     Ok(rules)
 }
@@ -440,18 +447,16 @@ fn parse_gitignore_rule(base: &str, line: &str) -> Option<GitignoreRule> {
     })
 }
 
-fn is_ignored_discovery_path(
-    root: &Path,
-    path: &Path,
-    is_dir: bool,
-    rules: &[GitignoreRule],
-) -> bool {
-    if is_dir && is_builtin_ignored_dir(path) {
+fn is_ignored_discovery_path(root: &Path, path: &Path, is_dir: bool, rules: &IgnoreRules) -> bool {
+    if is_dir && is_always_ignored_dir(path) {
+        return true;
+    }
+    if is_dir && !rules.has_gitignore && is_default_ignored_dir(path) {
         return true;
     }
     let relative = workspace_relative_path(root, path);
     let mut ignored = false;
-    for rule in rules {
+    for rule in &rules.rules {
         if gitignore_rule_matches(rule, &relative, is_dir) {
             ignored = !rule.negated;
         }
@@ -459,10 +464,16 @@ fn is_ignored_discovery_path(
     ignored
 }
 
-fn is_builtin_ignored_dir(path: &Path) -> bool {
+fn is_always_ignored_dir(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| matches!(name, ".git" | "target" | "node_modules"))
+        .is_some_and(|name| name == ".git")
+}
+
+fn is_default_ignored_dir(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| matches!(name, "target" | "node_modules"))
 }
 
 fn gitignore_rule_matches(rule: &GitignoreRule, relative: &str, is_dir: bool) -> bool {
@@ -807,6 +818,123 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(grep_paths, vec!["visible.txt", "generated/keep.txt"]);
         assert_eq!(grep_output["files_skipped"], 4);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn discovery_uses_target_and_node_modules_defaults_only_without_gitignore() {
+        let root = std::env::temp_dir().join(format!(
+            "agent-os-discovery-default-ignore-unit-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("target")).unwrap();
+        fs::create_dir_all(root.join("node_modules")).unwrap();
+        fs::write(root.join("visible.txt"), "needle visible\n").unwrap();
+        fs::write(root.join("target/generated.txt"), "needle target\n").unwrap();
+        fs::write(root.join("node_modules/package.txt"), "needle module\n").unwrap();
+
+        let glob = parse_glob_request(&json!({
+            "pattern": "**/*.txt",
+            "limit": 20
+        }))
+        .unwrap();
+        let glob_output = run_glob(
+            &ToolDescriptor {
+                tool_id: "test".to_string(),
+                name: "glob_files".to_string(),
+                ..ToolDescriptor::default()
+            },
+            &json!({}),
+            &root,
+            &root,
+            fs::metadata(&root).unwrap(),
+            glob,
+        )
+        .unwrap();
+        assert_eq!(glob_output["matches"][0]["path"], "visible.txt");
+        assert_eq!(glob_output["files_skipped"], 2);
+
+        let grep = parse_grep_request(&json!({
+            "pattern": "needle",
+            "include": "**/*.txt",
+            "limit": 20
+        }))
+        .unwrap();
+        let grep_output = run_grep(
+            &ToolDescriptor {
+                tool_id: "test".to_string(),
+                name: "grep_files".to_string(),
+                ..ToolDescriptor::default()
+            },
+            &json!({}),
+            &root,
+            &root,
+            fs::metadata(&root).unwrap(),
+            grep,
+        )
+        .unwrap();
+        assert_eq!(grep_output["matches"][0]["path"], "visible.txt");
+        assert_eq!(grep_output["files_skipped"], 2);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn discovery_lets_gitignore_configuration_own_target_and_node_modules() {
+        let root = std::env::temp_dir().join(format!(
+            "agent-os-discovery-configured-ignore-unit-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("target")).unwrap();
+        fs::create_dir_all(root.join("node_modules")).unwrap();
+        fs::write(root.join(".gitignore"), "").unwrap();
+        fs::write(root.join("visible.txt"), "needle visible\n").unwrap();
+        fs::write(root.join("target/generated.txt"), "needle target\n").unwrap();
+        fs::write(root.join("node_modules/package.txt"), "needle module\n").unwrap();
+
+        let glob = parse_glob_request(&json!({
+            "pattern": "**/*.txt",
+            "limit": 20
+        }))
+        .unwrap();
+        let glob_output = run_glob(
+            &ToolDescriptor {
+                tool_id: "test".to_string(),
+                name: "glob_files".to_string(),
+                ..ToolDescriptor::default()
+            },
+            &json!({}),
+            &root,
+            &root,
+            fs::metadata(&root).unwrap(),
+            glob,
+        )
+        .unwrap();
+        let mut glob_paths = glob_output["matches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["path"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        glob_paths.sort();
+        assert_eq!(
+            glob_paths,
+            vec![
+                "node_modules/package.txt",
+                "target/generated.txt",
+                "visible.txt"
+            ]
+        );
+        assert_eq!(glob_output["files_skipped"], 0);
 
         let _ = fs::remove_dir_all(root);
     }
