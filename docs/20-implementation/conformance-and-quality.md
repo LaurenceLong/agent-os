@@ -209,8 +209,9 @@ gate instead of treating the failure as a benchmark result.
 
 Ecosystem conformance tests MUST verify:
 
-- nearest project rule import and precedence
-- global and project instruction imports do not bypass kernel events
+- global, ancestor project, and nearest workspace rule import precedence
+- global and project instruction imports do not bypass kernel events and replay
+  into the same instruction projection
 - skill name/description extraction, Markdown fallback summaries, duplicate
   same-content coalescing, and duplicate different-content rejection
 - command frontmatter import, `$1`/`$ARGUMENTS` expansion, and shell

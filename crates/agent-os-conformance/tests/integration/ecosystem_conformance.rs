@@ -129,6 +129,70 @@ fn ecosystem_imports_project_sources_and_replays_kernel_events() {
 }
 
 #[test]
+fn ecosystem_imports_instruction_precedence_through_kernel_events() {
+    let root = temp_workspace("agent-os-instruction-precedence");
+    let project = root.join("repo");
+    let workspace = project.join("nested").join("crate");
+    let paths = test_paths(&workspace);
+    fs::create_dir_all(&workspace).unwrap();
+    fs::create_dir_all(&paths.config_dir).unwrap();
+    fs::write(paths.config_dir.join("AGENTS.md"), "global agents\n").unwrap();
+    fs::write(project.join("CLAUDE.md"), "parent claude\n").unwrap();
+    fs::write(project.join("AGENTS.md"), "parent agents\n").unwrap();
+    fs::write(workspace.join("CLAUDE.md"), "nearest claude\n").unwrap();
+    fs::write(workspace.join("AGENTS.md"), "nearest agents\n").unwrap();
+
+    let catalog = discover_ecosystem(&EcosystemDiscoverOptions {
+        workspace_root: workspace.clone(),
+        paths,
+    })
+    .unwrap();
+    assert_eq!(catalog.instruction_documents.len(), 5);
+
+    let kernel = Kernel::new();
+    import_catalog(&kernel, &catalog).unwrap();
+    let imported_events = kernel
+        .events()
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.event_type == "InstructionDocumentImported")
+        .collect::<Vec<_>>();
+    assert_eq!(imported_events.len(), 5);
+
+    let mut instructions = kernel
+        .state_snapshot()
+        .unwrap()
+        .instruction_documents
+        .values()
+        .map(|document| (document.precedence_rank, document.content.clone()))
+        .collect::<Vec<_>>();
+    instructions.sort_by_key(|(precedence, _)| *precedence);
+    assert_eq!(
+        instructions,
+        vec![
+            (0, "global agents\n".to_string()),
+            (1, "parent claude\n".to_string()),
+            (2, "parent agents\n".to_string()),
+            (3, "nearest claude\n".to_string()),
+            (4, "nearest agents\n".to_string()),
+        ]
+    );
+
+    let replayed = Kernel::from_events(&kernel.events().unwrap()).unwrap();
+    let mut replayed_instructions = replayed
+        .state_snapshot()
+        .unwrap()
+        .instruction_documents
+        .values()
+        .map(|document| (document.precedence_rank, document.content.clone()))
+        .collect::<Vec<_>>();
+    replayed_instructions.sort_by_key(|(precedence, _)| *precedence);
+    assert_eq!(replayed_instructions, instructions);
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn package_install_enable_disable_state_replays_from_kernel_events() {
     let workspace = temp_workspace("agent-os-package-install-state");
     fs::create_dir_all(workspace.join(".agent-os/skills/pkg-skill")).unwrap();
