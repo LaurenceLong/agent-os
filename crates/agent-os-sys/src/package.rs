@@ -85,6 +85,8 @@ pub enum PackageContributionKind {
     CommandDefinition,
     McpServer,
     McpTool,
+    McpResource,
+    McpResourceTemplate,
     ImportedAgentProfile,
 }
 

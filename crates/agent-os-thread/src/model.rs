@@ -29,6 +29,8 @@ pub struct ModelContextProjection {
     pub skill_definitions: Vec<SkillDefinition>,
     pub command_definitions: Vec<CommandDefinition>,
     pub mcp_tools: Vec<McpToolDefinition>,
+    pub mcp_resources: Vec<McpResourceDefinition>,
+    pub mcp_resource_templates: Vec<McpResourceTemplateDefinition>,
     pub imported_agent_profiles: Vec<ImportedAgentProfile>,
 }
 

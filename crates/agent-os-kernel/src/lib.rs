@@ -37,7 +37,10 @@ mod tools;
 mod util;
 mod verification;
 
-pub use ecosystem::{discover_mcp_tool_definitions, mcp_tool_descriptor};
+pub use ecosystem::{
+    discover_mcp_resource_definitions, discover_mcp_resource_template_definitions,
+    discover_mcp_tool_definitions, mcp_tool_descriptor,
+};
 pub use export::*;
 pub use inputs::*;
 pub use recovery::ReconciliationReport;

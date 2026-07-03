@@ -106,6 +106,30 @@ pub struct McpToolDefinition {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpResourceDefinition {
+    pub mcp_resource_id: String,
+    pub server_name: String,
+    pub uri: String,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub mime_type: Option<String>,
+    pub source: EcosystemSource,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpResourceTemplateDefinition {
+    pub mcp_resource_template_id: String,
+    pub server_name: String,
+    pub uri_template: String,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub mime_type: Option<String>,
+    pub source: EcosystemSource,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImportedAgentProfile {
     pub imported_agent_profile_id: String,
     pub name: String,

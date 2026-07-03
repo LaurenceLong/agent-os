@@ -212,6 +212,8 @@ pub struct AppEcosystemProjection {
     pub commands: usize,
     pub mcp_servers: usize,
     pub mcp_tools: usize,
+    pub mcp_resources: usize,
+    pub mcp_resource_templates: usize,
     pub agents: usize,
     pub sources: Vec<AppEcosystemSourceProjection>,
 }
@@ -227,6 +229,8 @@ pub struct AppEcosystemSourceProjection {
     pub commands: usize,
     pub mcp_servers: usize,
     pub mcp_tools: usize,
+    pub mcp_resources: usize,
+    pub mcp_resource_templates: usize,
     pub agents: usize,
 }
 

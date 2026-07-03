@@ -377,6 +377,34 @@ impl AgentOsHost {
                 )?;
             }
         }
+        for resource in &catalog.mcp_resources {
+            if self.catalog_source_enabled(&catalog.package_manifests, &resource.source)? {
+                self.kernel
+                    .register_mcp_resource_definition(resource.clone())?;
+                self.record_catalog_package_contribution(
+                    &catalog.package_manifests,
+                    PackageContributionKind::McpResource,
+                    &resource.mcp_resource_id,
+                    &resource.uri,
+                    &resource.source,
+                    None,
+                )?;
+            }
+        }
+        for template in &catalog.mcp_resource_templates {
+            if self.catalog_source_enabled(&catalog.package_manifests, &template.source)? {
+                self.kernel
+                    .register_mcp_resource_template_definition(template.clone())?;
+                self.record_catalog_package_contribution(
+                    &catalog.package_manifests,
+                    PackageContributionKind::McpResourceTemplate,
+                    &template.mcp_resource_template_id,
+                    &template.uri_template,
+                    &template.source,
+                    None,
+                )?;
+            }
+        }
         Ok(catalog.import_report())
     }
 

@@ -678,6 +678,16 @@ impl AgentOsHost {
             projection.mcp_tools += 1;
             source_projection_mut(&mut projection.sources, &tool.source, None).mcp_tools += 1;
         }
+        for resource in state.mcp_resources.values() {
+            projection.mcp_resources += 1;
+            source_projection_mut(&mut projection.sources, &resource.source, None).mcp_resources +=
+                1;
+        }
+        for template in state.mcp_resource_templates.values() {
+            projection.mcp_resource_templates += 1;
+            source_projection_mut(&mut projection.sources, &template.source, None)
+                .mcp_resource_templates += 1;
+        }
         for profile in state.imported_agent_profiles.values() {
             projection.agents += 1;
             source_projection_mut(&mut projection.sources, &profile.source, None).agents += 1;
@@ -917,6 +927,8 @@ fn source_projection_mut<'a>(
         commands: 0,
         mcp_servers: 0,
         mcp_tools: 0,
+        mcp_resources: 0,
+        mcp_resource_templates: 0,
         agents: 0,
     });
     let index = sources.len() - 1;

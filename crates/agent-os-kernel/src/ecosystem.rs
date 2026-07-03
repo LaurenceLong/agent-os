@@ -114,6 +114,62 @@ impl Kernel {
         Ok(tool)
     }
 
+    pub fn register_mcp_resource_definition(
+        &self,
+        resource: McpResourceDefinition,
+    ) -> AgentOsResult<McpResourceDefinition> {
+        validate_mcp_resource_definition(&resource)?;
+        if !self
+            .read_state()?
+            .mcp_servers
+            .contains_key(&resource.server_name)
+        {
+            return Err(AgentOsError::NotFound(format!(
+                "MCP server {}",
+                resource.server_name
+            )));
+        }
+        self.emit(
+            "McpResourceRegistered",
+            "mcp_resource",
+            &resource.mcp_resource_id,
+            None,
+            None,
+            None,
+            None,
+            &resource,
+        )?;
+        Ok(resource)
+    }
+
+    pub fn register_mcp_resource_template_definition(
+        &self,
+        template: McpResourceTemplateDefinition,
+    ) -> AgentOsResult<McpResourceTemplateDefinition> {
+        validate_mcp_resource_template_definition(&template)?;
+        if !self
+            .read_state()?
+            .mcp_servers
+            .contains_key(&template.server_name)
+        {
+            return Err(AgentOsError::NotFound(format!(
+                "MCP server {}",
+                template.server_name
+            )));
+        }
+        self.emit(
+            "McpResourceTemplateRegistered",
+            "mcp_resource_template",
+            &template.mcp_resource_template_id,
+            None,
+            None,
+            None,
+            None,
+            &template,
+        )?;
+        Ok(template)
+    }
+
     pub fn register_imported_agent_profile(
         &self,
         profile: ImportedAgentProfile,
@@ -182,7 +238,7 @@ pub fn discover_mcp_tool_definitions(
     source: EcosystemSource,
 ) -> AgentOsResult<Vec<McpToolDefinition>> {
     validate_mcp_server_spec(server)?;
-    let listed = mcp_list_tools(server)?;
+    let listed = mcp_list_capability(server, "tools/list", "tools")?;
     let now = now_rfc3339();
     let mut tools = Vec::new();
     for item in listed {
@@ -222,7 +278,63 @@ pub fn discover_mcp_tool_definitions(
     Ok(tools)
 }
 
-fn mcp_list_tools(server: &McpServerSpec) -> AgentOsResult<Vec<Value>> {
+pub fn discover_mcp_resource_definitions(
+    server: &McpServerSpec,
+    source: EcosystemSource,
+) -> AgentOsResult<Vec<McpResourceDefinition>> {
+    validate_mcp_server_spec(server)?;
+    let listed = mcp_list_capability(server, "resources/list", "resources")?;
+    let now = now_rfc3339();
+    let mut resources = Vec::new();
+    for item in listed {
+        let uri = required_json_string(&item, "uri", "MCP resource")?;
+        resources.push(McpResourceDefinition {
+            mcp_resource_id: stable_mcp_resource_id(&server.name, &uri),
+            server_name: server.name.clone(),
+            uri,
+            name: optional_json_string(&item, "name", "MCP resource")?,
+            description: optional_json_string(&item, "description", "MCP resource")?,
+            mime_type: optional_json_string(&item, "mimeType", "MCP resource")?
+                .or(optional_json_string(&item, "mime_type", "MCP resource")?),
+            source: source.clone(),
+            created_at: now.clone(),
+        });
+    }
+    Ok(resources)
+}
+
+pub fn discover_mcp_resource_template_definitions(
+    server: &McpServerSpec,
+    source: EcosystemSource,
+) -> AgentOsResult<Vec<McpResourceTemplateDefinition>> {
+    validate_mcp_server_spec(server)?;
+    let listed = mcp_list_capability(server, "resources/templates/list", "resourceTemplates")?;
+    let now = now_rfc3339();
+    let mut templates = Vec::new();
+    for item in listed {
+        let uri_template = required_json_string(&item, "uriTemplate", "MCP resource template")
+            .or_else(|_| required_json_string(&item, "uri_template", "MCP resource template"))?;
+        templates.push(McpResourceTemplateDefinition {
+            mcp_resource_template_id: stable_mcp_resource_template_id(&server.name, &uri_template),
+            server_name: server.name.clone(),
+            uri_template,
+            name: optional_json_string(&item, "name", "MCP resource template")?,
+            description: optional_json_string(&item, "description", "MCP resource template")?,
+            mime_type: optional_json_string(&item, "mimeType", "MCP resource template")?.or(
+                optional_json_string(&item, "mime_type", "MCP resource template")?,
+            ),
+            source: source.clone(),
+            created_at: now.clone(),
+        });
+    }
+    Ok(templates)
+}
+
+fn mcp_list_capability(
+    server: &McpServerSpec,
+    method: &str,
+    result_field: &str,
+) -> AgentOsResult<Vec<Value>> {
     let (program, args) = server
         .command
         .split_first()
@@ -242,13 +354,13 @@ fn mcp_list_tools(server: &McpServerSpec) -> AgentOsResult<Vec<Value>> {
             .ok_or_else(|| AgentOsError::Validation("MCP stdin unavailable".to_string()))?;
         writeln!(stdin, "{}", json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"agent-os","version":ABI_VERSION}}}))
             .and_then(|_| writeln!(stdin, "{}", json!({"jsonrpc":"2.0","method":"notifications/initialized","params":{}})))
-            .and_then(|_| writeln!(stdin, "{}", json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})))
-            .map_err(|error| AgentOsError::Validation(format!("write MCP tools/list: {error}")))?;
+            .and_then(|_| writeln!(stdin, "{}", json!({"jsonrpc":"2.0","id":2,"method":method,"params":{}})))
+            .map_err(|error| AgentOsError::Validation(format!("write MCP {method}: {error}")))?;
     }
-    let output = wait_mcp_child(child, server.timeout_ms, "tools/list")?;
+    let output = wait_mcp_child(child, server.timeout_ms, method)?;
     if !output.status.success() {
         return Err(AgentOsError::Validation(format!(
-            "MCP tools/list exited with status {}: {}",
+            "MCP {method} exited with status {}: {}",
             output.status,
             bounded_stderr(&output.stderr)
         )));
@@ -256,11 +368,11 @@ fn mcp_list_tools(server: &McpServerSpec) -> AgentOsResult<Vec<Value>> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let result = parse_json_rpc_result(&stdout, 2)?;
     result
-        .get("tools")
+        .get(result_field)
         .and_then(Value::as_array)
         .cloned()
         .ok_or_else(|| {
-            AgentOsError::Validation("MCP tools/list response missing tools".to_string())
+            AgentOsError::Validation(format!("MCP {method} response missing {result_field}"))
         })
 }
 
@@ -337,10 +449,31 @@ fn required_json_string(value: &Value, field: &str, label: &str) -> AgentOsResul
         .ok_or_else(|| AgentOsError::Validation(format!("{label} missing string field {field}")))
 }
 
+fn optional_json_string(value: &Value, field: &str, label: &str) -> AgentOsResult<Option<String>> {
+    let Some(item) = value.get(field) else {
+        return Ok(None);
+    };
+    item.as_str()
+        .map(|value| Some(value.to_string()))
+        .ok_or_else(|| AgentOsError::Validation(format!("{label} field {field} must be a string")))
+}
+
 fn stable_mcp_tool_id(server_name: &str, tool_name: &str) -> String {
     let digest = Sha256::digest(format!("{server_name}\n{tool_name}").as_bytes());
     let hash: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
     format!("mcptool_{}", &hash[..16])
+}
+
+fn stable_mcp_resource_id(server_name: &str, uri: &str) -> String {
+    let digest = Sha256::digest(format!("{server_name}\n{uri}").as_bytes());
+    let hash: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!("mcpres_{}", &hash[..16])
+}
+
+fn stable_mcp_resource_template_id(server_name: &str, uri_template: &str) -> String {
+    let digest = Sha256::digest(format!("{server_name}\n{uri_template}").as_bytes());
+    let hash: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!("mcprestpl_{}", &hash[..16])
 }
 
 fn bounded_stderr(stderr: &[u8]) -> String {
@@ -411,6 +544,32 @@ fn validate_mcp_tool_definition(tool: &McpToolDefinition) -> AgentOsResult<()> {
         &tool.input_schema,
         "mcp.input_schema",
     )?;
+    Ok(())
+}
+
+fn validate_mcp_resource_definition(resource: &McpResourceDefinition) -> AgentOsResult<()> {
+    if resource.mcp_resource_id.is_empty()
+        || resource.server_name.is_empty()
+        || resource.uri.trim().is_empty()
+    {
+        return Err(AgentOsError::Validation(
+            "MCP resource requires id, server, and uri".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_mcp_resource_template_definition(
+    template: &McpResourceTemplateDefinition,
+) -> AgentOsResult<()> {
+    if template.mcp_resource_template_id.is_empty()
+        || template.server_name.is_empty()
+        || template.uri_template.trim().is_empty()
+    {
+        return Err(AgentOsError::Validation(
+            "MCP resource template requires id, server, and uri_template".to_string(),
+        ));
+    }
     Ok(())
 }
 

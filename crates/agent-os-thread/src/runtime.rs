@@ -260,6 +260,8 @@ impl<C: ModelClient> ThreadRuntime<C> {
                 skill_definitions: ecosystem_projection.skill_definitions,
                 command_definitions: ecosystem_projection.command_definitions,
                 mcp_tools: ecosystem_projection.mcp_tools,
+                mcp_resources: ecosystem_projection.mcp_resources,
+                mcp_resource_templates: ecosystem_projection.mcp_resource_templates,
                 imported_agent_profiles: ecosystem_projection.imported_agent_profiles,
             };
             let context_budget =

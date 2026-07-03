@@ -5,7 +5,10 @@
 //! host code imports the resulting catalog into the kernel.
 
 use agent_os_config::{AgentOsPaths, CONFIG_FILE_NAME};
-use agent_os_kernel::discover_mcp_tool_definitions;
+use agent_os_kernel::{
+    discover_mcp_resource_definitions, discover_mcp_resource_template_definitions,
+    discover_mcp_tool_definitions,
+};
 use agent_os_sys::*;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -21,6 +24,8 @@ pub struct EcosystemImportReport {
     pub commands: usize,
     pub mcp_servers: usize,
     pub mcp_tools: usize,
+    pub mcp_resources: usize,
+    pub mcp_resource_templates: usize,
     pub agents: usize,
     pub sources: Vec<EcosystemSourceImportReport>,
 }
@@ -37,6 +42,8 @@ pub struct EcosystemSourceImportReport {
     pub commands: usize,
     pub mcp_servers: usize,
     pub mcp_tools: usize,
+    pub mcp_resources: usize,
+    pub mcp_resource_templates: usize,
     pub agents: usize,
 }
 
@@ -48,6 +55,8 @@ pub struct EcosystemCatalog {
     pub command_definitions: Vec<CommandDefinition>,
     pub mcp_servers: Vec<McpServerSpec>,
     pub mcp_tools: Vec<McpToolDefinition>,
+    pub mcp_resources: Vec<McpResourceDefinition>,
+    pub mcp_resource_templates: Vec<McpResourceTemplateDefinition>,
     pub imported_agent_profiles: Vec<ImportedAgentProfile>,
 }
 
@@ -82,6 +91,15 @@ impl EcosystemCatalog {
         for tool in &self.mcp_tools {
             report.mcp_tools += 1;
             source_report_mut(&mut report.sources, &tool.source, None).mcp_tools += 1;
+        }
+        for resource in &self.mcp_resources {
+            report.mcp_resources += 1;
+            source_report_mut(&mut report.sources, &resource.source, None).mcp_resources += 1;
+        }
+        for template in &self.mcp_resource_templates {
+            report.mcp_resource_templates += 1;
+            source_report_mut(&mut report.sources, &template.source, None)
+                .mcp_resource_templates += 1;
         }
         for profile in &self.imported_agent_profiles {
             report.agents += 1;
@@ -118,6 +136,13 @@ struct EcosystemRoot {
     kind: EcosystemSourceKind,
     scope: EcosystemSourceScope,
     rank: u32,
+}
+
+struct DiscoveredMcpServer {
+    server: McpServerSpec,
+    tools: Vec<McpToolDefinition>,
+    resources: Vec<McpResourceDefinition>,
+    resource_templates: Vec<McpResourceTemplateDefinition>,
 }
 
 impl EcosystemRoot {
@@ -180,12 +205,21 @@ pub fn discover_ecosystem(options: &EcosystemDiscoverOptions) -> AgentOsResult<E
 
     let mut mcp_servers = BTreeMap::new();
     let mut mcp_tools = BTreeMap::new();
+    let mut mcp_resources = BTreeMap::new();
+    let mut mcp_resource_templates = BTreeMap::new();
     for (path, scope, rank) in config_files(&workspace_root, &options.paths) {
         let config = read_json_config(&path)?;
-        for (server, tools) in discover_mcp(&path, scope, rank, &config)? {
+        for discovered in discover_mcp(&path, scope, rank, &config)? {
+            let server = discovered.server;
             mcp_servers.insert(server.name.clone(), server);
-            for tool in tools {
+            for tool in discovered.tools {
                 mcp_tools.insert(tool.model_tool_name.clone(), tool);
+            }
+            for resource in discovered.resources {
+                mcp_resources.insert(resource.uri.clone(), resource);
+            }
+            for template in discovered.resource_templates {
+                mcp_resource_templates.insert(template.uri_template.clone(), template);
             }
         }
     }
@@ -197,6 +231,8 @@ pub fn discover_ecosystem(options: &EcosystemDiscoverOptions) -> AgentOsResult<E
         command_definitions: commands.into_values().collect(),
         mcp_servers: mcp_servers.into_values().collect(),
         mcp_tools: mcp_tools.into_values().collect(),
+        mcp_resources: mcp_resources.into_values().collect(),
+        mcp_resource_templates: mcp_resource_templates.into_values().collect(),
         imported_agent_profiles: agents.into_values().collect(),
     })
 }
@@ -244,6 +280,8 @@ fn source_report_mut<'a>(
         commands: 0,
         mcp_servers: 0,
         mcp_tools: 0,
+        mcp_resources: 0,
+        mcp_resource_templates: 0,
         agents: 0,
     });
     let index = sources.len() - 1;
@@ -633,7 +671,7 @@ fn discover_mcp(
     scope: EcosystemSourceScope,
     rank: u32,
     config: &Value,
-) -> AgentOsResult<Vec<(McpServerSpec, Vec<McpToolDefinition>)>> {
+) -> AgentOsResult<Vec<DiscoveredMcpServer>> {
     let mut servers = Vec::new();
     let Some(local_stdio) = config
         .pointer("/mcp/local_stdio")
@@ -664,12 +702,21 @@ fn discover_mcp(
             source: source.clone(),
             created_at: now_rfc3339(),
         };
-        let tools = if enabled {
-            discover_mcp_tool_definitions(&server, source)?
+        let (tools, resources, resource_templates) = if enabled {
+            (
+                discover_mcp_tool_definitions(&server, source.clone())?,
+                discover_mcp_resource_definitions(&server, source.clone())?,
+                discover_mcp_resource_template_definitions(&server, source)?,
+            )
         } else {
-            Vec::new()
+            (Vec::new(), Vec::new(), Vec::new())
         };
-        servers.push((server, tools));
+        servers.push(DiscoveredMcpServer {
+            server,
+            tools,
+            resources,
+            resource_templates,
+        });
     }
     Ok(servers)
 }

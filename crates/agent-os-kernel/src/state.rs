@@ -63,6 +63,8 @@ pub struct KernelState {
     pub command_definitions: HashMap<String, CommandDefinition>,
     pub mcp_servers: HashMap<String, McpServerSpec>,
     pub mcp_tools: HashMap<String, McpToolDefinition>,
+    pub mcp_resources: HashMap<String, McpResourceDefinition>,
+    pub mcp_resource_templates: HashMap<String, McpResourceTemplateDefinition>,
     pub imported_agent_profiles: HashMap<String, ImportedAgentProfile>,
     pub final_submissions: HashMap<String, FinalSubmission>,
     pub reconciliation_reports: HashMap<String, crate::recovery::ReconciliationReport>,

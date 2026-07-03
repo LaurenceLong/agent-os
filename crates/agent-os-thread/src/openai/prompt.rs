@@ -210,6 +210,40 @@ fn ecosystem_context(request: &ModelTurnRequest) -> String {
             .join("\n");
         sections.push(format!("## Imported MCP Tools\n\n{body}"));
     }
+    if !request.context.mcp_resources.is_empty() {
+        let body = request
+            .context
+            .mcp_resources
+            .iter()
+            .map(|resource| {
+                format!(
+                    "- {} (server: {}, uri: {})",
+                    resource.name.as_deref().unwrap_or(&resource.uri),
+                    resource.server_name,
+                    resource.uri
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        sections.push(format!("## Imported MCP Resources\n\n{body}"));
+    }
+    if !request.context.mcp_resource_templates.is_empty() {
+        let body = request
+            .context
+            .mcp_resource_templates
+            .iter()
+            .map(|template| {
+                format!(
+                    "- {} (server: {}, uri_template: {})",
+                    template.name.as_deref().unwrap_or(&template.uri_template),
+                    template.server_name,
+                    template.uri_template
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        sections.push(format!("## Imported MCP Resource Templates\n\n{body}"));
+    }
     if sections.is_empty() {
         String::new()
     } else {

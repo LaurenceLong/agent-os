@@ -385,6 +385,16 @@ impl Kernel {
                 let tool: McpToolDefinition = parse_payload(&event.payload)?;
                 state.mcp_tools.insert(tool.model_tool_name.clone(), tool);
             }
+            "McpResourceRegistered" => {
+                let resource: McpResourceDefinition = parse_payload(&event.payload)?;
+                state.mcp_resources.insert(resource.uri.clone(), resource);
+            }
+            "McpResourceTemplateRegistered" => {
+                let template: McpResourceTemplateDefinition = parse_payload(&event.payload)?;
+                state
+                    .mcp_resource_templates
+                    .insert(template.uri_template.clone(), template);
+            }
             "ImportedAgentProfileRegistered" => {
                 let profile: ImportedAgentProfile = parse_payload(&event.payload)?;
                 state

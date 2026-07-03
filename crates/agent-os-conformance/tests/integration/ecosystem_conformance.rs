@@ -510,7 +510,30 @@ fn local_stdio_mcp_registers_and_executes_with_kernel_permissions() {
     let workspace = temp_workspace("agent-os-ecosystem-mcp");
     fs::create_dir_all(&workspace).unwrap();
     let server = compile_mcp_fixture(&workspace);
-    fs::create_dir_all(workspace.join(".agent-os")).unwrap();
+    fs::create_dir_all(workspace.join(".agent-os/prompts")).unwrap();
+    fs::write(
+        workspace.join(".agent-os/prompts/supervisor.md"),
+        "MCP package prompt\n",
+    )
+    .unwrap();
+    fs::write(
+        workspace.join(".agent-os/manifest.json"),
+        r#"{
+  "manifest_version": "0.1",
+  "package_name": "mcp-fixture-package",
+  "package_type": "agent",
+  "version": "0.1.0",
+  "entrypoint": "prompts/supervisor.md",
+  "required_kernel_version": "0.3",
+  "capabilities_requested": ["tool.invoke"],
+  "roles_provided": ["ProducerAgent"],
+  "tools_provided": ["mcp__echo__echo"],
+  "schemas": [],
+  "signature": null
+}
+"#,
+    )
+    .unwrap();
     fs::write(
         workspace.join(".agent-os/config.json"),
         json!({
@@ -530,9 +553,47 @@ fn local_stdio_mcp_registers_and_executes_with_kernel_permissions() {
     let report = import_workspace_ecosystem(&fx.kernel, &workspace).unwrap();
     assert_eq!(report.mcp_servers, 1);
     assert_eq!(report.mcp_tools, 1);
+    assert_eq!(report.mcp_resources, 1);
+    assert_eq!(report.mcp_resource_templates, 1);
     let state = fx.kernel.state_snapshot().unwrap();
     let tool = state.mcp_tools.get("mcp__echo__echo").unwrap();
     assert_eq!(tool.server_name, "echo");
+    let resource = state.mcp_resources.get("fixture://status").unwrap();
+    assert_eq!(resource.server_name, "echo");
+    assert_eq!(resource.name.as_deref(), Some("Fixture Status"));
+    let template = state
+        .mcp_resource_templates
+        .get("fixture://items/{id}")
+        .unwrap();
+    assert_eq!(template.server_name, "echo");
+    assert_eq!(template.name.as_deref(), Some("Fixture Item"));
+    let contribution_kinds = state
+        .package_contributions
+        .values()
+        .map(|contribution| {
+            (
+                contribution.contribution_kind,
+                contribution.contribution_name.as_str(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(contribution_kinds.contains(&(PackageContributionKind::McpServer, "echo")));
+    assert!(contribution_kinds.contains(&(PackageContributionKind::McpTool, "mcp__echo__echo")));
+    assert!(
+        contribution_kinds.contains(&(PackageContributionKind::McpResource, "fixture://status"))
+    );
+    assert!(contribution_kinds.contains(&(
+        PackageContributionKind::McpResourceTemplate,
+        "fixture://items/{id}"
+    )));
+    let replayed = Kernel::from_events(&fx.kernel.events().unwrap()).unwrap();
+    let replayed_state = replayed.state_snapshot().unwrap();
+    assert!(replayed_state
+        .mcp_resources
+        .contains_key("fixture://status"));
+    assert!(replayed_state
+        .mcp_resource_templates
+        .contains_key("fixture://items/{id}"));
     let descriptor = state.tool_descriptors.get("mcp__echo__echo").unwrap();
     assert_eq!(descriptor.driver_class, ToolDriverClass::Mcp);
     assert_eq!(
@@ -725,6 +786,10 @@ fn main() {
         let line = line.unwrap();
         if line.contains("\"method\":\"tools/list\"") {
             println!("{}", r#"{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"echo","description":"Echo one text field.","inputSchema":{"type":"object","required":["text"],"properties":{"text":{"type":"string"}},"additionalProperties":false}}]}}"#);
+        } else if line.contains("\"method\":\"resources/list\"") {
+            println!("{}", r#"{"jsonrpc":"2.0","id":2,"result":{"resources":[{"uri":"fixture://status","name":"Fixture Status","description":"Fixture status resource.","mimeType":"text/plain"}]}}"#);
+        } else if line.contains("\"method\":\"resources/templates/list\"") {
+            println!("{}", r#"{"jsonrpc":"2.0","id":2,"result":{"resourceTemplates":[{"uriTemplate":"fixture://items/{id}","name":"Fixture Item","description":"Fixture item resource.","mimeType":"application/json"}]}}"#);
         } else if line.contains("\"method\":\"tools/call\"") {
             let text = line.split("\"text\":\"").nth(1).and_then(|rest| rest.split('"').next()).unwrap_or("");
             println!(r#"{{"jsonrpc":"2.0","id":2,"result":{{"content":[{{"type":"text","text":"{}"}}]}}}}"#, text);
@@ -858,6 +923,30 @@ fn import_catalog(
             &tool.mcp_tool_id,
             &tool.model_tool_name,
             &tool.source,
+            None,
+        )?;
+    }
+    for resource in &catalog.mcp_resources {
+        kernel.register_mcp_resource_definition(resource.clone())?;
+        register_catalog_contribution(
+            kernel,
+            &catalog.package_manifests,
+            PackageContributionKind::McpResource,
+            &resource.mcp_resource_id,
+            &resource.uri,
+            &resource.source,
+            None,
+        )?;
+    }
+    for template in &catalog.mcp_resource_templates {
+        kernel.register_mcp_resource_template_definition(template.clone())?;
+        register_catalog_contribution(
+            kernel,
+            &catalog.package_manifests,
+            PackageContributionKind::McpResourceTemplate,
+            &template.mcp_resource_template_id,
+            &template.uri_template,
+            &template.source,
             None,
         )?;
     }
