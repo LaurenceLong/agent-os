@@ -469,6 +469,7 @@ impl Kernel {
                 call_id: invocation.call_id.clone(),
                 tool_name: invocation.tool_name.clone(),
                 started_at: now_rfc3339(),
+                child: None,
                 stdin: None,
                 output: ToolWorkerOutput::default(),
             },
@@ -527,6 +528,21 @@ impl Kernel {
             return Err(AgentOsError::NotFound(format!("tool worker {call_id}")));
         };
         worker.stdin = Some(std::sync::Arc::new(std::sync::Mutex::new(stdin)));
+        Ok(())
+    }
+
+    pub(in crate::tools) fn set_tool_worker_child(
+        &self,
+        call_id: &str,
+        child: std::sync::Arc<std::sync::Mutex<std::process::Child>>,
+    ) -> AgentOsResult<()> {
+        let mut workers = self.tool_workers.lock().map_err(|_| {
+            AgentOsError::Validation("tool worker registry lock poisoned".to_string())
+        })?;
+        let Some(worker) = workers.get_mut(call_id) else {
+            return Err(AgentOsError::NotFound(format!("tool worker {call_id}")));
+        };
+        worker.child = Some(child);
         Ok(())
     }
 

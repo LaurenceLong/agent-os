@@ -136,6 +136,10 @@ Tool driver tests MUST verify:
 - `run_command` supports explicit `stdin="piped"` process sessions, and
   `agent_control(action=send)` writes stdin by `process_id`, `write_id`, and
   `text` with replayable idempotent `ProcessStdinWritten` records
+- `agent_control(action=stop)` can interrupt a running process by
+  `process_id`, `agent_control(action=kill)` can terminate a running process by
+  `process_id`, and both lifecycle outcomes replay through `ProcessSession`
+  state
 - descriptor-declared evidence attachment for workspace, command, control-plane,
   and permission tools so final `evidence_map` entries can cite real evidence ids
 

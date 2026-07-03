@@ -95,17 +95,26 @@ impl Kernel {
     ) -> AgentOsResult<ProcessSession> {
         let mut session = self.process_session(process_id)?;
         let now = now_rfc3339();
+        let event_type = match session.state {
+            ProcessLifecycleState::Interrupted => "ProcessSessionInterrupted",
+            ProcessLifecycleState::Terminated => "ProcessSessionTerminated",
+            ProcessLifecycleState::TimedOut => "ProcessSessionTimedOut",
+            ProcessLifecycleState::Failed => "ProcessSessionFailed",
+            _ => {
+                session.state = ProcessLifecycleState::Exited;
+                "ProcessSessionExited"
+            }
+        };
         stdout.sequence = session.stdout.sequence;
         stdout.cursor = stdout.bytes;
         stderr.sequence = session.stderr.sequence;
         stderr.cursor = stderr.bytes;
-        session.state = ProcessLifecycleState::Exited;
         session.exit_code = exit_code;
         session.stdout = stdout;
         session.stderr = stderr;
         session.updated_at = now.clone();
         session.completed_at = Some(now);
-        self.emit_process_session("ProcessSessionExited", &session)?;
+        self.emit_process_session(event_type, &session)?;
         Ok(session)
     }
 
@@ -262,6 +271,32 @@ impl Kernel {
         Ok(write)
     }
 
+    pub(crate) fn interrupt_process_session(
+        &self,
+        process_id: &str,
+        reason: &str,
+    ) -> AgentOsResult<ProcessSession> {
+        self.stop_process_session(
+            process_id,
+            ProcessLifecycleState::Interrupted,
+            "ProcessSessionInterrupted",
+            reason,
+        )
+    }
+
+    pub(crate) fn terminate_process_session(
+        &self,
+        process_id: &str,
+        reason: &str,
+    ) -> AgentOsResult<ProcessSession> {
+        self.stop_process_session(
+            process_id,
+            ProcessLifecycleState::Terminated,
+            "ProcessSessionTerminated",
+            reason,
+        )
+    }
+
     pub(crate) fn process_session_by_tool_call_id(
         &self,
         tool_call_id: &str,
@@ -280,6 +315,60 @@ impl Kernel {
             .get(process_id)
             .cloned()
             .ok_or_else(|| AgentOsError::NotFound(format!("process session {process_id}")))
+    }
+
+    fn stop_process_session(
+        &self,
+        process_id: &str,
+        terminal_state: ProcessLifecycleState,
+        event_type: &str,
+        reason: &str,
+    ) -> AgentOsResult<ProcessSession> {
+        let mut session = self.process_session(process_id)?;
+        if session.state == terminal_state {
+            return Ok(session);
+        }
+        if session.state != ProcessLifecycleState::Running {
+            return Err(AgentOsError::Validation(format!(
+                "process stop requires running process, found {:?}",
+                session.state
+            )));
+        }
+        let child = self
+            .tool_workers
+            .lock()
+            .map_err(|_| {
+                AgentOsError::Validation("tool worker registry lock poisoned".to_string())
+            })?
+            .get(&session.tool_call_id)
+            .and_then(|worker| worker.child.clone())
+            .ok_or_else(|| {
+                AgentOsError::NotFound(format!("process child {}", session.process_id))
+            })?;
+        {
+            let mut child = child
+                .lock()
+                .map_err(|_| AgentOsError::Validation("process child lock poisoned".to_string()))?;
+            if child
+                .try_wait()
+                .map_err(|error| AgentOsError::Validation(format!("wait process: {error}")))?
+                .is_some()
+            {
+                return Err(AgentOsError::Validation(
+                    "process already exited before stop request".to_string(),
+                ));
+            }
+            child
+                .kill()
+                .map_err(|error| AgentOsError::Validation(format!("stop process: {error}")))?;
+        }
+        let now = now_rfc3339();
+        session.state = terminal_state;
+        session.error = Some(reason.to_string());
+        session.updated_at = now.clone();
+        session.completed_at = Some(now);
+        self.emit_process_session(event_type, &session)?;
+        Ok(session)
     }
 
     fn emit_process_session(

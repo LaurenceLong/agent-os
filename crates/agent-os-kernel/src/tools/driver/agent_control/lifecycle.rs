@@ -28,6 +28,15 @@ pub(super) fn apply_lifecycle_action(
             })
         }
         AgentControlAction::Stop => {
+            if payload.get("process_id").and_then(Value::as_str).is_some() {
+                return stop_process_for_target(
+                    kernel,
+                    target,
+                    payload,
+                    ProcessLifecycleState::Interrupted,
+                    "agent_control stop",
+                );
+            }
             let acb = terminate_target(
                 kernel,
                 target,
@@ -50,6 +59,15 @@ pub(super) fn apply_lifecycle_action(
         }
         AgentControlAction::ExportTrace => export_trace_for_target(kernel, target, payload),
         AgentControlAction::Kill => {
+            if payload.get("process_id").and_then(Value::as_str).is_some() {
+                return stop_process_for_target(
+                    kernel,
+                    target,
+                    payload,
+                    ProcessLifecycleState::Terminated,
+                    "agent_control kill",
+                );
+            }
             let acb = terminate_target(
                 kernel,
                 target,
@@ -93,21 +111,49 @@ pub(super) fn apply_lifecycle_action(
     }
 }
 
+fn stop_process_for_target(
+    kernel: &Kernel,
+    target: &AgentControlBlock,
+    payload: &Value,
+    terminal_state: ProcessLifecycleState,
+    reason: &str,
+) -> AgentOsResult<AgentControlActionResult> {
+    let process_id = payload
+        .get("process_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AgentOsError::Validation("process stop requires process_id".to_string()))?;
+    let session = process_session_for_target(kernel, target, process_id)?;
+    let stopped = match terminal_state {
+        ProcessLifecycleState::Interrupted => {
+            kernel.interrupt_process_session(&session.process_id, reason)?
+        }
+        ProcessLifecycleState::Terminated => {
+            kernel.terminate_process_session(&session.process_id, reason)?
+        }
+        _ => {
+            return Err(AgentOsError::Validation(
+                "invalid process stop terminal state".to_string(),
+            ))
+        }
+    };
+    Ok(AgentControlActionResult {
+        thread_status: target.status,
+        output: json!({
+            "process_id": stopped.process_id,
+            "process_session": stopped,
+            "interrupted": terminal_state == ProcessLifecycleState::Interrupted,
+            "terminated": terminal_state == ProcessLifecycleState::Terminated,
+        }),
+    })
+}
+
 fn send_to_target(
     kernel: &Kernel,
     target: &AgentControlBlock,
     payload: &Value,
 ) -> AgentOsResult<AgentControlActionResult> {
     if let Some(process_id) = payload.get("process_id").and_then(Value::as_str) {
-        let session = kernel
-            .read_state()?
-            .process_sessions
-            .get(process_id)
-            .filter(|session| {
-                session.agent_id == target.agent_id || session.task_id == target.task.task_id
-            })
-            .cloned()
-            .ok_or_else(|| AgentOsError::NotFound(format!("process session {process_id}")))?;
+        let session = process_session_for_target(kernel, target, process_id)?;
         let write_id = payload
             .get("write_id")
             .and_then(Value::as_str)
@@ -134,6 +180,22 @@ fn send_to_target(
             "payload": payload,
         }),
     })
+}
+
+fn process_session_for_target(
+    kernel: &Kernel,
+    target: &AgentControlBlock,
+    process_id: &str,
+) -> AgentOsResult<ProcessSession> {
+    kernel
+        .read_state()?
+        .process_sessions
+        .get(process_id)
+        .filter(|session| {
+            session.agent_id == target.agent_id || session.task_id == target.task.task_id
+        })
+        .cloned()
+        .ok_or_else(|| AgentOsError::NotFound(format!("process session {process_id}")))
 }
 
 fn output_for_target(

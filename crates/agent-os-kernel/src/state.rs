@@ -3,7 +3,7 @@ use agent_os_sys::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
-use std::process::ChildStdin;
+use std::process::{Child, ChildStdin};
 use std::sync::{Arc, Mutex, RwLock};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -81,6 +81,7 @@ pub(crate) struct ToolWorkerRecord {
     pub call_id: String,
     pub tool_name: String,
     pub started_at: String,
+    pub child: Option<Arc<Mutex<Child>>>,
     pub stdin: Option<Arc<Mutex<ChildStdin>>>,
     pub output: ToolWorkerOutput,
 }

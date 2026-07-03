@@ -1468,6 +1468,309 @@ fn process_stdin_write_is_idempotent_and_pollable_by_process_id() {
 }
 
 #[test]
+fn process_stop_and_kill_record_interrupted_and_terminated_sessions() {
+    let fx = fixture();
+    let workspace = std::env::temp_dir().join(format!(
+        "agent-os-stop-kill-command-{}-{}",
+        std::process::id(),
+        new_id("case_")
+    ));
+    let mut run_command_descriptor = fx
+        .kernel
+        .state_snapshot()
+        .unwrap()
+        .tool_descriptors
+        .get("run_command")
+        .unwrap()
+        .clone();
+    run_command_descriptor.lifecycle.foreground_timeout_ms = 500;
+    fx.kernel
+        .register_tool_descriptor(run_command_descriptor)
+        .unwrap();
+    let supervisor = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_supervisor".to_string(),
+            owner: "tester".to_string(),
+            goal: "control child process lifecycle".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: vec![workspace.to_string_lossy().into_owned()],
+        })
+        .unwrap();
+    let worker = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_producer".to_string(),
+            owner: supervisor.agent_id.clone(),
+            goal: "run stoppable commands".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: Some(supervisor.thread_id.clone()),
+            workspace_roots: vec![workspace.to_string_lossy().into_owned()],
+        })
+        .unwrap();
+    let env = fx
+        .kernel
+        .create_environment(
+            BackendType::IsolatedWorktree,
+            workspace.to_string_lossy(),
+            "sbox_workspace_write",
+            ReusePolicy::TaskScoped,
+        )
+        .unwrap();
+    fx.kernel
+        .attach_environment(
+            &env.environment_id,
+            &worker.agent_id,
+            &worker.thread_id,
+            &fx.task.task_id,
+            AttachMode::WorkspaceWrite,
+        )
+        .unwrap();
+    let command_cap = fx
+        .kernel
+        .grant_capability(
+            &worker.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            4,
+            None,
+        )
+        .unwrap();
+    let supervisor_approval = fx
+        .kernel
+        .request_approval(RequestApprovalInput {
+            goal_id: fx.goal.goal_id.clone(),
+            task_id: Some(fx.task.task_id.clone()),
+            requested_by_agent_id: supervisor.agent_id.clone(),
+            approval_type: ApprovalType::Human,
+            scope: ApprovalScope {
+                syscall_types: vec!["tool.invoke".to_string()],
+                resource_scopes: vec![json!("tool:*")],
+                risk_ceiling: 6,
+                goal_id: fx.goal.goal_id.clone(),
+                task_id: Some(fx.task.task_id.clone()),
+            },
+            risk_level: 6,
+            expires_at: None,
+        })
+        .unwrap();
+    fx.kernel
+        .record_approval(RecordApprovalInput {
+            approval_id: supervisor_approval.approval_id.clone(),
+            status: ApprovalStatus::Approved,
+            decision_by: "human".to_string(),
+            decision_reason: Some("approve supervisor process lifecycle control".to_string()),
+        })
+        .unwrap();
+    let supervisor_cap = fx
+        .kernel
+        .grant_capability(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            6,
+            Some(supervisor_approval.approval_id),
+        )
+        .unwrap();
+    let slow_command = if cfg!(windows) {
+        "Write-Output before-stop; Start-Sleep -Seconds 30; Write-Output after-stop"
+    } else {
+        "echo before-stop; sleep 30; echo after-stop"
+    };
+
+    let interrupted_command = fx
+        .kernel
+        .invoke_tool(
+            &worker.agent_id,
+            &fx.task.task_id,
+            &worker.session_id,
+            command_cap.capability_id.clone(),
+            4,
+            ToolInvokeInput {
+                tool_name: "run_command".to_string(),
+                input: json!({
+                    "command": slow_command,
+                    "cwd": workspace.to_string_lossy()
+                }),
+                evidence_claim: Some("interruptible command started".to_string()),
+            },
+        )
+        .unwrap();
+    assert_eq!(interrupted_command.status, ToolCallStatus::Running);
+    let interrupted_process_id = interrupted_command
+        .output
+        .as_ref()
+        .and_then(|output| output.get("process_id"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap()
+        .to_string();
+    wait_process_state(
+        &fx.kernel,
+        &interrupted_process_id,
+        ProcessLifecycleState::Running,
+    );
+
+    let stopped = fx
+        .kernel
+        .invoke_tool(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            &supervisor.session_id,
+            supervisor_cap.capability_id.clone(),
+            4,
+            ToolInvokeInput {
+                tool_name: "agent_control".to_string(),
+                input: json!({
+                    "action": "stop",
+                    "thread_id": worker.thread_id,
+                    "payload": {
+                        "process_id": interrupted_process_id
+                    }
+                }),
+                evidence_claim: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(stopped.status, ToolCallStatus::Completed);
+    assert_eq!(
+        stopped
+            .output
+            .as_ref()
+            .and_then(|output| output.pointer("/output/interrupted"))
+            .and_then(serde_json::Value::as_bool),
+        Some(true)
+    );
+    wait_process_state(
+        &fx.kernel,
+        &interrupted_process_id,
+        ProcessLifecycleState::Interrupted,
+    );
+
+    let terminated_command = fx
+        .kernel
+        .invoke_tool(
+            &worker.agent_id,
+            &fx.task.task_id,
+            &worker.session_id,
+            command_cap.capability_id,
+            4,
+            ToolInvokeInput {
+                tool_name: "run_command".to_string(),
+                input: json!({
+                    "command": slow_command,
+                    "cwd": workspace.to_string_lossy()
+                }),
+                evidence_claim: Some("terminable command started".to_string()),
+            },
+        )
+        .unwrap();
+    assert_eq!(terminated_command.status, ToolCallStatus::Running);
+    let terminated_process_id = terminated_command
+        .output
+        .as_ref()
+        .and_then(|output| output.get("process_id"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap()
+        .to_string();
+    wait_process_state(
+        &fx.kernel,
+        &terminated_process_id,
+        ProcessLifecycleState::Running,
+    );
+
+    let killed = fx
+        .kernel
+        .invoke_tool(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            &supervisor.session_id,
+            supervisor_cap.capability_id,
+            6,
+            ToolInvokeInput {
+                tool_name: "agent_control".to_string(),
+                input: json!({
+                    "action": "kill",
+                    "thread_id": worker.thread_id,
+                    "payload": {
+                        "process_id": terminated_process_id
+                    }
+                }),
+                evidence_claim: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(killed.status, ToolCallStatus::Completed);
+    assert_eq!(
+        killed
+            .output
+            .as_ref()
+            .and_then(|output| output.pointer("/output/terminated"))
+            .and_then(serde_json::Value::as_bool),
+        Some(true)
+    );
+    wait_process_state(
+        &fx.kernel,
+        &terminated_process_id,
+        ProcessLifecycleState::Terminated,
+    );
+
+    let replayed = Kernel::from_events(&fx.kernel.events().unwrap()).unwrap();
+    let replayed_state = replayed.state_snapshot().unwrap();
+    assert_eq!(
+        replayed_state
+            .process_sessions
+            .get(&interrupted_process_id)
+            .unwrap()
+            .state,
+        ProcessLifecycleState::Interrupted
+    );
+    assert_eq!(
+        replayed_state
+            .process_sessions
+            .get(&terminated_process_id)
+            .unwrap()
+            .state,
+        ProcessLifecycleState::Terminated
+    );
+
+    let _ = std::fs::remove_dir_all(workspace);
+}
+
+fn wait_process_state(
+    kernel: &Kernel,
+    process_id: &str,
+    expected: ProcessLifecycleState,
+) -> ProcessSession {
+    let started = std::time::Instant::now();
+    loop {
+        let session = kernel
+            .state_snapshot()
+            .unwrap()
+            .process_sessions
+            .get(process_id)
+            .unwrap()
+            .clone();
+        if session.state == expected {
+            return session;
+        }
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "process {process_id} remained in {:?}, expected {:?}",
+            session.state,
+            expected
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+#[test]
 fn default_tool_registry_is_minimal() {
     let fx = fixture();
     let state = fx.kernel.state_snapshot().unwrap();

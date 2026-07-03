@@ -9,9 +9,10 @@ use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
-use std::process::{ChildStderr, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStderr, ChildStdout, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 const PREVIEW_CHARS: usize = 2_000;
 
@@ -302,15 +303,24 @@ pub(in crate::tools) fn run_process(
             return Err(AgentOsError::Validation(message));
         }
     };
-    if stdin_mode == ProcessStdinMode::Piped {
-        let stdin = child.stdin.take().ok_or_else(|| {
+    let os_pid = child.id();
+    let stdin = if stdin_mode == ProcessStdinMode::Piped {
+        Some(child.stdin.take().ok_or_else(|| {
             AgentOsError::Validation("process stdin pipe unavailable".to_string())
-        })?;
+        })?)
+    } else {
+        None
+    };
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let child = Arc::new(Mutex::new(child));
+    kernel.set_tool_worker_child(tool_call_id, child.clone())?;
+    if let Some(stdin) = stdin {
         kernel.set_tool_worker_stdin(tool_call_id, stdin)?;
     }
     kernel.mark_process_session_running(
         &process.process_id,
-        Some(child.id()),
+        Some(os_pid),
         Some(stdout_spool_path.to_string_lossy().into_owned()),
         Some(stderr_spool_path.to_string_lossy().into_owned()),
     )?;
@@ -327,7 +337,7 @@ pub(in crate::tools) fn run_process(
         spool_path: Some(stderr_spool_path.to_string_lossy().into_owned()),
         ..ToolStreamOutput::default()
     }));
-    let stdout_reader = child.stdout.take().map(|stdout| {
+    let stdout_reader = stdout.map(|stdout| {
         spawn_stdout_reader(
             kernel.clone(),
             tool_call_id.to_string(),
@@ -337,7 +347,7 @@ pub(in crate::tools) fn run_process(
             stdout_capture.clone(),
         )
     });
-    let stderr_reader = child.stderr.take().map(|stderr| {
+    let stderr_reader = stderr.map(|stderr| {
         spawn_stderr_reader(
             kernel.clone(),
             tool_call_id.to_string(),
@@ -347,7 +357,7 @@ pub(in crate::tools) fn run_process(
             stderr_capture.clone(),
         )
     });
-    let status = match child.wait() {
+    let status = match wait_process_child(child) {
         Ok(status) => status,
         Err(error) => {
             let message = format!("wait process: {error}");
@@ -577,6 +587,23 @@ fn process_output_stream_name(stream: super::super::ToolOutputStream) -> Process
     match stream {
         super::super::ToolOutputStream::Stdout => ProcessOutputStreamName::Stdout,
         super::super::ToolOutputStream::Stderr => ProcessOutputStreamName::Stderr,
+    }
+}
+
+fn wait_process_child(child: Arc<Mutex<Child>>) -> AgentOsResult<ExitStatus> {
+    loop {
+        let status = {
+            let mut child = child
+                .lock()
+                .map_err(|_| AgentOsError::Validation("process child lock poisoned".to_string()))?;
+            child
+                .try_wait()
+                .map_err(|error| AgentOsError::Validation(format!("wait process: {error}")))?
+        };
+        if let Some(status) = status {
+            return Ok(status);
+        }
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 
