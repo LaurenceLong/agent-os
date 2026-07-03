@@ -96,7 +96,8 @@ pub(in crate::tools) fn run_agent_control(
             let target = target::resolve_agent_control_target(kernel, input, &payload)?;
             require_supervision_target(&requester, &target)?;
             let hooks = hooks::agent_hooks_for(kernel, &target.agent_id)?;
-            Ok(json!({
+            let process_status = process_status_payload(kernel, &target, &payload)?;
+            let mut output = json!({
                 "tool": descriptor.name.clone(),
                 "status": "ok",
                 "action": action_text,
@@ -108,7 +109,11 @@ pub(in crate::tools) fn run_agent_control(
                 "thread_status": target.status,
                 "session_id": target.session_id,
                 "hooks": hooks,
-            }))
+            });
+            if let Some((field, value)) = process_status {
+                output[field] = value;
+            }
+            Ok(output)
         }
         AgentControlAction::ApprovePermission | AgentControlAction::DenyPermission => {
             let permission_request_id = required_string(&payload, "permission_request_id")?;
@@ -241,6 +246,76 @@ fn require_supervision_target(
     Err(AgentOsError::PermissionDenied(
         "agent_control can only target the requester thread or a direct child".to_string(),
     ))
+}
+
+fn process_status_payload(
+    kernel: &Kernel,
+    target: &AgentControlBlock,
+    payload: &Value,
+) -> AgentOsResult<Option<(&'static str, Value)>> {
+    if let Some(process_id) = payload.get("process_id").and_then(Value::as_str) {
+        let process = kernel
+            .read_state()?
+            .process_sessions
+            .get(process_id)
+            .filter(|session| process_belongs_to_target(session, target))
+            .cloned()
+            .ok_or_else(|| AgentOsError::NotFound(format!("process session {process_id}")))?;
+        return Ok(Some(("process", json!(process))));
+    }
+    if !payload
+        .get("processes")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Ok(None);
+    }
+    let state_filter = payload
+        .get("state")
+        .and_then(Value::as_str)
+        .map(parse_process_lifecycle_state)
+        .transpose()?;
+    let mut processes = kernel
+        .read_state()?
+        .process_sessions
+        .values()
+        .filter(|session| process_belongs_to_target(session, target))
+        .filter(|session| state_filter.is_none_or(|state| session.state == state))
+        .cloned()
+        .collect::<Vec<_>>();
+    processes.sort_by(|left, right| {
+        left.started_at
+            .cmp(&right.started_at)
+            .then_with(|| left.process_id.cmp(&right.process_id))
+    });
+    Ok(Some((
+        "processes",
+        json!({
+            "items": processes,
+            "count": processes.len(),
+            "state_filter": state_filter,
+        }),
+    )))
+}
+
+fn process_belongs_to_target(session: &ProcessSession, target: &AgentControlBlock) -> bool {
+    session.thread_id == target.thread_id || session.agent_id == target.agent_id
+}
+
+fn parse_process_lifecycle_state(value: &str) -> AgentOsResult<ProcessLifecycleState> {
+    match value {
+        "starting" => Ok(ProcessLifecycleState::Starting),
+        "running" => Ok(ProcessLifecycleState::Running),
+        "exited" => Ok(ProcessLifecycleState::Exited),
+        "failed" => Ok(ProcessLifecycleState::Failed),
+        "interrupted" => Ok(ProcessLifecycleState::Interrupted),
+        "terminated" => Ok(ProcessLifecycleState::Terminated),
+        "timed_out" => Ok(ProcessLifecycleState::TimedOut),
+        "orphaned" => Ok(ProcessLifecycleState::Orphaned),
+        _ => Err(AgentOsError::Validation(format!(
+            "unknown process lifecycle state {value}"
+        ))),
+    }
 }
 
 /// Result of a stateful lifecycle action: the new thread status plus any

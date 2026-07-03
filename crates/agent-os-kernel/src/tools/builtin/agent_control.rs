@@ -17,7 +17,7 @@ fn descriptor(now: &str) -> ToolDescriptor {
         schema::DescriptorSpec {
             tool_id: "tool_agent_control",
             name: "agent_control",
-            description: "Supervisor control for child agent lifecycle, status, bounded output, hooks, process stdin, process stop/kill, permission decisions, and privileged state actions. Documented action families are start: start; read-only: status, output, export_trace; mutation: set_hook, send, resume, set_timeout; terminal: stop, kill; cleanup: delete_session, purge_state; permission: approve_permission, deny_permission. Use either agent_id or thread_id when targeting an existing agent. Do not invent agent_id or thread_id values. For action=output, omit payload.tool_call_id unless an exact non-empty background tool call id is provided. For action=send with payload.process_id, provide payload.write_id and payload.text. For action=stop or action=kill with payload.process_id, the action targets that process session instead of the child thread.",
+            description: "Supervisor control for child agent lifecycle, status, bounded output, hooks, process status/list, process stdin, process stop/kill, permission decisions, and privileged state actions. Documented action families are start: start; read-only: status, output, export_trace; mutation: set_hook, send, resume, set_timeout; terminal: stop, kill; cleanup: delete_session, purge_state; permission: approve_permission, deny_permission. Use either agent_id or thread_id when targeting an existing agent. Do not invent agent_id or thread_id values. For action=status with payload.process_id, read one process session; with payload.processes=true, list target process sessions. For action=output, omit payload.tool_call_id unless an exact non-empty background tool call id is provided. For action=send with payload.process_id, provide payload.write_id and payload.text. For action=stop or action=kill with payload.process_id, the action targets that process session instead of the child thread.",
             driver_class: ToolDriverClass::KernelBuiltin,
             risk_level: 6,
             input_schema: input_schema(),
@@ -43,6 +43,24 @@ fn descriptor(now: &str) -> ToolDescriptor {
                         "payload": {}
                     }),
                     "Returns lifecycle status, session id, security level, and active hooks for the child thread.",
+                ),
+                schema::example(
+                    "Read-only family: list process sessions for a child thread.",
+                    json!({
+                        "action": "status",
+                        "thread_id": "thread_example",
+                        "payload": {"processes": true, "state": "running"}
+                    }),
+                    "Returns the target child thread status plus process session records matching the optional state filter.",
+                ),
+                schema::example(
+                    "Read-only family: inspect one process session by process_id.",
+                    json!({
+                        "action": "status",
+                        "thread_id": "thread_example",
+                        "payload": {"process_id": "proc_example"}
+                    }),
+                    "Returns the target child thread status plus the matching process session record.",
                 ),
                 schema::example(
                     "Read-only family: read bounded child thread output when no exact tool call id is known.",
@@ -255,7 +273,7 @@ fn input_schema() -> Value {
             "idempotency_key": {"type": "string"},
             "payload": {
                 "type": "object",
-                "description": "Action-specific payload. start requires payload.goal. set_hook requires payload.prompt. send uses payload.message for child follow-up; send with payload.process_id requires payload.write_id and payload.text for process stdin. stop or kill with payload.process_id targets a process session. set_timeout uses payload.timeout_seconds or payload.timeout_ms. output accepts payload.cursor and payload.limit for child-thread output; omit tool_call_id unless you know the exact non-empty background tool call id. approve_permission requires payload.permission_request_id and payload.permissions; deny_permission requires payload.permission_request_id."
+                "description": "Action-specific payload. start requires payload.goal. status with payload.process_id reads one process; status with payload.processes=true lists target process sessions and may include payload.state. set_hook requires payload.prompt. send uses payload.message for child follow-up; send with payload.process_id requires payload.write_id and payload.text for process stdin. stop or kill with payload.process_id targets a process session. set_timeout uses payload.timeout_seconds or payload.timeout_ms. output accepts payload.cursor and payload.limit for child-thread output; omit tool_call_id unless you know the exact non-empty background tool call id. approve_permission requires payload.permission_request_id and payload.permissions; deny_permission requires payload.permission_request_id."
             }
         }),
     )
@@ -308,6 +326,7 @@ mod tests {
         assert!(payload_description.contains("omit tool_call_id"));
         assert!(payload_description.contains("payload.limit"));
         assert!(payload_description.contains("payload.goal"));
+        assert!(payload_description.contains("payload.processes=true"));
         assert!(payload_description.contains("payload.write_id"));
         assert!(payload_description.contains("stop or kill with payload.process_id"));
         assert!(descriptor.examples.iter().any(|example| {
@@ -319,6 +338,14 @@ mod tests {
             example.parameters["action"] == "send"
                 && example.parameters["payload"]["process_id"] == "proc_example"
                 && example.parameters["payload"]["write_id"] == "stdin_example_1"
+        }));
+        assert!(descriptor.examples.iter().any(|example| {
+            example.parameters["action"] == "status"
+                && example.parameters["payload"]["processes"] == true
+        }));
+        assert!(descriptor.examples.iter().any(|example| {
+            example.parameters["action"] == "status"
+                && example.parameters["payload"]["process_id"] == "proc_example"
         }));
         assert!(descriptor.examples.iter().any(|example| {
             example.parameters["action"] == "stop"

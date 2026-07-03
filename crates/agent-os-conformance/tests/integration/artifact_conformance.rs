@@ -1616,6 +1616,72 @@ fn process_stop_and_kill_record_interrupted_and_terminated_sessions() {
         &interrupted_process_id,
         ProcessLifecycleState::Running,
     );
+    let listed_running = fx
+        .kernel
+        .invoke_tool(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            &supervisor.session_id,
+            supervisor_cap.capability_id.clone(),
+            1,
+            ToolInvokeInput {
+                tool_name: "agent_control".to_string(),
+                input: json!({
+                    "action": "status",
+                    "thread_id": worker.thread_id,
+                    "payload": {
+                        "processes": true,
+                        "state": "running"
+                    }
+                }),
+                evidence_claim: None,
+            },
+        )
+        .unwrap();
+    let listed_running_ids = listed_running
+        .output
+        .as_ref()
+        .and_then(|output| output.pointer("/processes/items"))
+        .and_then(serde_json::Value::as_array)
+        .unwrap()
+        .iter()
+        .filter_map(|process| {
+            process
+                .get("process_id")
+                .and_then(serde_json::Value::as_str)
+        })
+        .collect::<Vec<_>>();
+    assert!(listed_running_ids.contains(&interrupted_process_id.as_str()));
+
+    let inspected_process = fx
+        .kernel
+        .invoke_tool(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            &supervisor.session_id,
+            supervisor_cap.capability_id.clone(),
+            1,
+            ToolInvokeInput {
+                tool_name: "agent_control".to_string(),
+                input: json!({
+                    "action": "status",
+                    "thread_id": worker.thread_id,
+                    "payload": {
+                        "process_id": interrupted_process_id.clone()
+                    }
+                }),
+                evidence_claim: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        inspected_process
+            .output
+            .as_ref()
+            .and_then(|output| output.pointer("/process/process_id"))
+            .and_then(serde_json::Value::as_str),
+        Some(interrupted_process_id.as_str())
+    );
 
     let stopped = fx
         .kernel

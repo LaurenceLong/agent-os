@@ -140,6 +140,9 @@ Tool driver tests MUST verify:
   `process_id`, `agent_control(action=kill)` can terminate a running process by
   `process_id`, and both lifecycle outcomes replay through `ProcessSession`
   state
+- `agent_control(action=status)` can inspect one process by `process_id` or
+  list target process sessions with `payload.processes=true` and optional
+  lifecycle `state` filtering
 - descriptor-declared evidence attachment for workspace, command, control-plane,
   and permission tools so final `evidence_map` entries can cite real evidence ids
 
