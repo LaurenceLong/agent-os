@@ -162,9 +162,18 @@ forward-only system design.
 - Keep findings split between current-contract gaps and future-roadmap gaps.
   Do not treat documented out-of-scope roadmap items as immediate release
   blockers unless the task explicitly asks for them.
-- After code changes, write a post-fix audit document that records the new
-  validation results, changed files, implemented fixes, forward-only notes, and
-  remaining gaps.
+- After code changes and validation, stage and commit the intended fix files
+  before writing the post-fix audit. The commit boundary is part of the audit
+  evidence.
+- Do not include unrelated dirty-tree changes in the audit commit. If unrelated
+  dirty files cannot be separated safely from the intended fix, stop and ask
+  instead of sweeping them into the commit.
+- After the commit, write a post-fix audit document. Its top section must record
+  the fix commit hash, fix commit tree hash, parent commit hash, pre-fix audit
+  path, validation results, changed files, implemented fixes, forward-only
+  notes, and remaining gaps.
+- If validation passes but the commit cannot be created, record the blocker in
+  the handoff and do not write a completed post-fix audit.
 - When the audit changes public behavior, tool schemas, runtime behavior,
   storage behavior, or conformance expectations, update focused tests in the
   same change.

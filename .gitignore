@@ -1,6 +1,7 @@
 /target/
 .env
 logs/
+# Local audit records stay on the operator machine.
 docs/audit/
 docs/superpowers/
 benchmarks/swe-bench-lite/results/
