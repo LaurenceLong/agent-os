@@ -2306,7 +2306,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
             &tmp,
             "role_producer",
             &format!(
-                "Complete this focused workspace validation. Use glob_files to locate read.txt by path pattern, use grep_files to confirm read.txt contains read me, then read read.txt. Also exercise workspace tool parameters: call read_file on paged.txt with offset 2 and limit 2; call glob_files with path notes, pattern *.txt, offset 1, and limit 1 so it returns the second txt file; call grep_files with path notes, include *.txt, pattern Needle, case_sensitive true, offset 1, and limit 1 so it returns the second case-sensitive txt match and excludes c.md and lower-case needle. The grep_files result is sufficient; do not read notes/c.md or make extra verification calls for that exclusion. Use apply_patch for every workspace mutation: add created.txt with content exactly FULL_TOOL_SURFACE_OK followed by one newline and no blank second line, update edit.txt by replacing status=old with status=new, and delete obsolete.tmp with an apply_patch delete operation. Use run_command only for the final verifier command {verifier_command}; do not use run_command for listing, deleting, grepping, or editing files. After the verifier succeeds, call accomplish_goal with a concise summary, then submit_final with summary exactly Workspace surface complete., evidence_map citing evidence_ids from completed tool results, tests_run containing {verifier_command}, and known_risks as an empty array. submit_final must be the last tool call."
+                "Complete this focused workspace validation. Use glob_files to locate read.txt by path pattern, use grep_files to confirm read.txt contains read me, then read read.txt. Also exercise workspace tool parameters with these exact JSON-relevant values: call read_file with path paged.txt, offset 2, and limit 2; call glob_files with path notes, pattern *.txt, offset 1, and limit 1 so it returns the second txt file; call grep_files with path notes, include *.txt, pattern Needle, case_sensitive true, offset 1, and limit 1 so it returns the second case-sensitive txt match and excludes c.md and lower-case needle. Do not substitute limit 20 for the paged read; the paged read must use limit 2. The grep_files result is sufficient; do not read notes/c.md or make extra verification calls for that exclusion. Use apply_patch for every workspace mutation: add created.txt with content exactly FULL_TOOL_SURFACE_OK followed by one newline and no blank second line, update edit.txt by replacing status=old with status=new, and delete obsolete.tmp with an apply_patch delete operation. Use run_command only for the final verifier command {verifier_command}; do not use run_command for listing, deleting, grepping, or editing files. After the verifier succeeds, call accomplish_goal with a concise summary, then submit_final with summary exactly Workspace surface complete., evidence_map citing evidence_ids from completed tool results, tests_run containing {verifier_command}, and known_risks as an empty array. submit_final must be the last tool call."
             ),
             Vec::new(),
             vec![ArtifactType::Patch],
@@ -2362,7 +2362,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
             &tmp,
             "role_producer",
             &format!(
-                "Complete this focused process stdin validation. Call run_command with command exactly {stdin_command} and stdin piped. Use the process_id returned by run_command to call write_stdin with write_id exactly live-stdin-1 and text exactly MODEL_STDIN_OK. Then call write_stdin again with the same process_id, field stdout, and after_sequence stdout 0. If the stdout chunks do not contain STDIN_ECHO:MODEL_STDIN_OK, poll write_stdin with the same field and after_sequence once more. Then call accomplish_goal with a concise summary, then submit_final with summary exactly Process stdin surface complete., evidence_map citing evidence_ids from completed tool results, tests_run containing write_stdin stdout poll, and known_risks as an empty array. submit_final must be the last tool call."
+                "Complete this focused process stdin validation. Call run_command with command exactly {stdin_command} and stdin piped. Use the process_id returned by run_command to call write_stdin with write_id exactly live-stdin-1 and text exactly MODEL_STDIN_OK. After that write call, you must call write_stdin a second time with the same process_id, field stdout, and after_sequence stdout 0 even if the first write_stdin output already contains STDIN_ECHO:MODEL_STDIN_OK. Do not call accomplish_goal or submit_final before this second write_stdin poll call. If the poll stdout chunks do not contain STDIN_ECHO:MODEL_STDIN_OK, poll write_stdin with the same field and after_sequence once more. Then call accomplish_goal with a concise summary, then submit_final with summary exactly Process stdin surface complete., evidence_map citing evidence_ids from completed tool results, tests_run containing write_stdin stdout poll, and known_risks as an empty array. submit_final must be the last tool call."
             ),
             Vec::new(),
             Vec::new(),
@@ -2533,6 +2533,19 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
             risk_level: 6,
         })
         .unwrap();
+    let process_task = lifecycle_kernel
+        .spawn_task(SpawnTaskInput {
+            goal_id: lifecycle_goal.goal_id.clone(),
+            parent_task_id: None,
+            title: "Live agent control process".to_string(),
+            description: "Live LLM must exercise process payload agent_control actions".to_string(),
+            depends_on: Vec::new(),
+            required_artifact_types: Vec::new(),
+            required_evidence_types: vec![EvidenceType::SourceRef],
+            priority: 10,
+            risk_level: 6,
+        })
+        .unwrap();
     let status_supervisor = lifecycle_kernel
         .spawn_agent(SpawnAgentInput {
             task_id: status_task.task_id.clone(),
@@ -2690,7 +2703,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
     .unwrap();
     let terminal_approval_id =
         approve_live_tool_risk(&lifecycle_kernel, &terminal_task, &terminal_supervisor);
-    let terminal_client = OpenAiModelClient::new(api_key, model.clone())
+    let terminal_client = OpenAiModelClient::new(api_key.clone(), model.clone())
         .with_api_base(api_base.clone())
         .with_endpoint(endpoint)
         .with_max_tokens(1536)
@@ -2727,6 +2740,116 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
         &terminal_report,
         &["stop", "kill"],
     );
+
+    let process_supervisor = lifecycle_kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: process_task.task_id.clone(),
+            role_profile_id: "role_supervisor".to_string(),
+            owner: "agent-os-thread-live-test".to_string(),
+            goal: "Complete this focused agent_control process validation. Read agent_control_process_seed.md, then use process_target_thread_id as thread_id only and do not provide agent_id or payload.tool_call_id. Call agent_control status with payload.processes true and payload.state running. Call agent_control status with payload.process_id set to output_process_id. Call agent_control output with payload.process_id set to output_process_id, payload.field stdout, and payload.after_sequence stdout 0. Call agent_control send with payload.process_id set to send_process_id, payload.write_id exactly agent-process-send-1, and payload.text exactly AGENT_SEND. Call agent_control stop with payload.process_id set to stop_process_id. Call agent_control kill with payload.process_id set to kill_process_id. Then submit_final with summary exactly Agent control process surface complete., evidence_map citing evidence_ids from completed tool results, tests_run containing agent_control process payloads, and known_risks as an empty array. submit_final must be the last tool call.".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: vec![tmp.to_string_lossy().to_string()],
+        })
+        .unwrap();
+    let process_target = live_child_agent(
+        &lifecycle_kernel,
+        &lifecycle_target_task.task_id,
+        &process_supervisor,
+        "process target",
+        &tmp,
+    );
+    let output_process = start_live_child_process(
+        &lifecycle_kernel,
+        &process_target,
+        &tmp,
+        live_agent_control_output_command(),
+    );
+    let output_process_id = running_process_id(&output_process);
+    wait_process_stdout_contains(&lifecycle_kernel, &output_process_id, "AGENT_PROCESS_READY");
+    let send_process = start_live_child_process(
+        &lifecycle_kernel,
+        &process_target,
+        &tmp,
+        live_agent_control_send_command(),
+    );
+    let send_process_id = running_process_id(&send_process);
+    let stop_process = start_live_child_process(
+        &lifecycle_kernel,
+        &process_target,
+        &tmp,
+        live_agent_control_sleep_command(),
+    );
+    let stop_process_id = running_process_id(&stop_process);
+    let kill_process = start_live_child_process(
+        &lifecycle_kernel,
+        &process_target,
+        &tmp,
+        live_agent_control_sleep_command(),
+    );
+    let kill_process_id = running_process_id(&kill_process);
+    std::fs::write(
+        tmp.join("agent_control_process_seed.md"),
+        format!(
+            "Agent control process seed\nprocess_target_thread_id: {}\noutput_process_id: {}\nsend_process_id: {}\nstop_process_id: {}\nkill_process_id: {}\nUse thread_id only. Do not provide agent_id. Do not provide payload.tool_call_id.\n",
+            process_target.thread_id,
+            output_process_id,
+            send_process_id,
+            stop_process_id,
+            kill_process_id
+        ),
+    )
+    .unwrap();
+    let process_approval_id =
+        approve_live_tool_risk(&lifecycle_kernel, &process_task, &process_supervisor);
+    let process_client = OpenAiModelClient::new(api_key, model.clone())
+        .with_api_base(api_base.clone())
+        .with_endpoint(endpoint)
+        .with_max_tokens(2048)
+        .with_audit_log(audit_log_path.clone());
+    let mut process_runtime = ThreadRuntime::new(
+        lifecycle_kernel.clone(),
+        process_supervisor.thread_id.clone(),
+        process_client,
+    );
+    let mut process_config = live_runtime_config(&tmp, 12);
+    process_config.tool_risk_ceiling = 6;
+    let process_report = process_runtime
+        .run_to_completion_with_overrides(
+            process_config,
+            RuntimeRunOverrides {
+                sandbox_profile_id: Some("sbox_workspace_write".to_string()),
+                tool_approval_id: Some(process_approval_id),
+            },
+        )
+        .unwrap();
+    assert!(process_report.final_submitted);
+    assert_all_tool_calls_completed(&process_report);
+    assert_live_goal_tools(
+        &audit_log_path,
+        provider,
+        "full_tool_surface_agent_control_process",
+        &process_report,
+        &["read_file", "agent_control", "submit_final"],
+    );
+    assert_agent_control_actions(
+        &audit_log_path,
+        provider,
+        "full_tool_surface_agent_control_process",
+        &process_report,
+        &["status", "output", "send", "stop", "kill"],
+    );
+    assert_agent_control_process_parameters_observed(
+        &process_report,
+        &process_target.thread_id,
+        &output_process_id,
+        &send_process_id,
+        &stop_process_id,
+        &kill_process_id,
+    );
+    let _ = lifecycle_kernel.terminate_process_session(&output_process_id, "live e2e cleanup");
+    let _ = lifecycle_kernel.terminate_process_session(&send_process_id, "live e2e cleanup");
     println!(
         "live_goal_full_tool_surface_log={}",
         audit_log_path.display()
@@ -2946,6 +3069,222 @@ fn assert_agent_control_actions(
     );
 }
 
+fn assert_agent_control_process_parameters_observed(
+    report: &RuntimeRunReport,
+    target_thread_id: &str,
+    output_process_id: &str,
+    send_process_id: &str,
+    stop_process_id: &str,
+    kill_process_id: &str,
+) {
+    let status_list = find_agent_control_record(report, "process list status", |record| {
+        record
+            .input
+            .as_ref()
+            .and_then(|input| input.get("action"))
+            .and_then(Value::as_str)
+            == Some("status")
+            && record
+                .input
+                .as_ref()
+                .and_then(|input| input.get("thread_id"))
+                .and_then(Value::as_str)
+                == Some(target_thread_id)
+            && record
+                .input
+                .as_ref()
+                .and_then(|input| input.pointer("/payload/processes"))
+                .and_then(Value::as_bool)
+                == Some(true)
+            && record
+                .input
+                .as_ref()
+                .and_then(|input| input.pointer("/payload/state"))
+                .and_then(Value::as_str)
+                == Some("running")
+    });
+    let listed_processes = status_list
+        .output
+        .as_ref()
+        .and_then(|output| output.pointer("/processes/items"))
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| panic!("missing process list output: {status_list:?}"));
+    assert!(listed_processes.iter().any(|process| {
+        process.get("process_id").and_then(Value::as_str) == Some(output_process_id)
+    }));
+
+    let status_single = find_agent_control_record(report, "single process status", |record| {
+        record
+            .input
+            .as_ref()
+            .and_then(|input| input.get("action"))
+            .and_then(Value::as_str)
+            == Some("status")
+            && record
+                .input
+                .as_ref()
+                .and_then(|input| input.get("thread_id"))
+                .and_then(Value::as_str)
+                == Some(target_thread_id)
+            && record
+                .input
+                .as_ref()
+                .and_then(|input| input.pointer("/payload/process_id"))
+                .and_then(Value::as_str)
+                == Some(output_process_id)
+    });
+    assert_eq!(
+        status_single
+            .output
+            .as_ref()
+            .and_then(|output| output.pointer("/process/process_id"))
+            .and_then(Value::as_str),
+        Some(output_process_id)
+    );
+
+    let output_record = find_agent_control_record(report, "process output", |record| {
+        record
+            .input
+            .as_ref()
+            .and_then(|input| input.get("action"))
+            .and_then(Value::as_str)
+            == Some("output")
+            && record
+                .input
+                .as_ref()
+                .and_then(|input| input.get("thread_id"))
+                .and_then(Value::as_str)
+                == Some(target_thread_id)
+            && record
+                .input
+                .as_ref()
+                .and_then(|input| input.pointer("/payload/process_id"))
+                .and_then(Value::as_str)
+                == Some(output_process_id)
+            && record
+                .input
+                .as_ref()
+                .and_then(|input| input.pointer("/payload/field"))
+                .and_then(Value::as_str)
+                == Some("stdout")
+            && record
+                .input
+                .as_ref()
+                .and_then(|input| input.pointer("/payload/after_sequence/stdout"))
+                .and_then(Value::as_u64)
+                == Some(0)
+    });
+    let process_stdout = output_record
+        .output
+        .as_ref()
+        .and_then(|output| output.pointer("/output/process_output/chunks"))
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| panic!("missing process output chunks: {output_record:?}"))
+        .iter()
+        .filter_map(|chunk| chunk.get("text").and_then(Value::as_str))
+        .collect::<Vec<_>>()
+        .join("");
+    assert!(process_stdout.contains("AGENT_PROCESS_READY"));
+
+    let send_record = find_agent_control_record(report, "process send", |record| {
+        record
+            .input
+            .as_ref()
+            .and_then(|input| input.get("action"))
+            .and_then(Value::as_str)
+            == Some("send")
+            && record
+                .input
+                .as_ref()
+                .and_then(|input| input.pointer("/payload/process_id"))
+                .and_then(Value::as_str)
+                == Some(send_process_id)
+            && record
+                .input
+                .as_ref()
+                .and_then(|input| input.pointer("/payload/write_id"))
+                .and_then(Value::as_str)
+                == Some("agent-process-send-1")
+            && record
+                .input
+                .as_ref()
+                .and_then(|input| input.pointer("/payload/text"))
+                .and_then(Value::as_str)
+                == Some("AGENT_SEND")
+    });
+    assert_eq!(
+        send_record
+            .output
+            .as_ref()
+            .and_then(|output| output.pointer("/output/stdin_write/write_id"))
+            .and_then(Value::as_str),
+        Some("agent-process-send-1")
+    );
+
+    let stop_record = find_agent_control_record(report, "process stop", |record| {
+        record
+            .input
+            .as_ref()
+            .and_then(|input| input.get("action"))
+            .and_then(Value::as_str)
+            == Some("stop")
+            && record
+                .input
+                .as_ref()
+                .and_then(|input| input.pointer("/payload/process_id"))
+                .and_then(Value::as_str)
+                == Some(stop_process_id)
+    });
+    assert_eq!(
+        stop_record
+            .output
+            .as_ref()
+            .and_then(|output| output.pointer("/output/interrupted"))
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+
+    let kill_record = find_agent_control_record(report, "process kill", |record| {
+        record
+            .input
+            .as_ref()
+            .and_then(|input| input.get("action"))
+            .and_then(Value::as_str)
+            == Some("kill")
+            && record
+                .input
+                .as_ref()
+                .and_then(|input| input.pointer("/payload/process_id"))
+                .and_then(Value::as_str)
+                == Some(kill_process_id)
+    });
+    assert_eq!(
+        kill_record
+            .output
+            .as_ref()
+            .and_then(|output| output.pointer("/output/terminated"))
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+}
+
+fn find_agent_control_record<'a>(
+    report: &'a RuntimeRunReport,
+    label: &str,
+    predicate: impl Fn(&'a ToolExecutionRecord) -> bool,
+) -> &'a ToolExecutionRecord {
+    report
+        .tool_results
+        .iter()
+        .find(|record| record.tool_name == "agent_control" && predicate(record))
+        .unwrap_or_else(|| {
+            panic!(
+                "missing {label} agent_control call: {:?}",
+                report.tool_results
+            )
+        })
+}
+
 fn write_full_surface_verifier(workspace: &Path) -> String {
     if cfg!(windows) {
         std::fs::write(
@@ -2972,6 +3311,30 @@ fn live_stdin_echo_command() -> &'static str {
     }
 }
 
+fn live_agent_control_output_command() -> &'static str {
+    if cfg!(windows) {
+        "Write-Output AGENT_PROCESS_READY; $null = [Console]::In.ReadLine(); Start-Sleep -Seconds 180"
+    } else {
+        "printf 'AGENT_PROCESS_READY\\n'; IFS= read -r _line; sleep 180"
+    }
+}
+
+fn live_agent_control_send_command() -> &'static str {
+    if cfg!(windows) {
+        "$buffer = New-Object char[] 10; $count = [Console]::In.ReadBlock($buffer, 0, 10); $text = -join $buffer[0..($count - 1)]; Write-Output ('AGENT_SEND_ECHO:' + $text); Start-Sleep -Seconds 180"
+    } else {
+        "text=$(dd bs=10 count=1 2>/dev/null); printf 'AGENT_SEND_ECHO:%s\\n' \"$text\"; sleep 180"
+    }
+}
+
+fn live_agent_control_sleep_command() -> &'static str {
+    if cfg!(windows) {
+        "Start-Sleep -Seconds 180"
+    } else {
+        "sleep 180"
+    }
+}
+
 fn live_child_agent(
     kernel: &Kernel,
     task_id: &str,
@@ -2991,6 +3354,93 @@ fn live_child_agent(
             workspace_roots: vec![workspace.to_string_lossy().to_string()],
         })
         .unwrap()
+}
+
+fn start_live_child_process(
+    kernel: &Kernel,
+    child: &AgentControlBlock,
+    workspace: &Path,
+    command: &str,
+) -> ToolInvocation {
+    let env = kernel
+        .create_environment(
+            BackendType::IsolatedWorktree,
+            workspace.to_string_lossy(),
+            "sbox_workspace_write".to_string(),
+            ReusePolicy::TaskScoped,
+        )
+        .unwrap();
+    kernel
+        .attach_environment(
+            &env.environment_id,
+            &child.agent_id,
+            &child.thread_id,
+            &child.task.task_id,
+            AttachMode::WorkspaceWrite,
+        )
+        .unwrap();
+    let capability = kernel
+        .grant_capability(
+            &child.agent_id,
+            &child.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string(), "process:*".to_string()],
+            4,
+            None,
+        )
+        .unwrap();
+    let invocation = kernel
+        .invoke_tool(
+            &child.agent_id,
+            &child.task.task_id,
+            &child.session_id,
+            capability.capability_id,
+            4,
+            ToolInvokeInput {
+                tool_name: "run_command".to_string(),
+                input: json!({
+                    "command": command,
+                    "cwd": workspace.to_string_lossy(),
+                    "stdin": "piped"
+                }),
+                evidence_claim: Some("live child process started".to_string()),
+            },
+        )
+        .unwrap();
+    assert_eq!(invocation.status, ToolCallStatus::Running);
+    invocation
+}
+
+fn running_process_id(invocation: &ToolInvocation) -> String {
+    invocation
+        .output
+        .as_ref()
+        .and_then(|output| output.get("process_id"))
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("running tool omitted process_id: {invocation:?}"))
+        .to_string()
+}
+
+fn wait_process_stdout_contains(kernel: &Kernel, process_id: &str, marker: &str) {
+    let started = std::time::Instant::now();
+    while started.elapsed() < std::time::Duration::from_secs(8) {
+        let stdout = kernel
+            .state_snapshot()
+            .unwrap()
+            .process_output_chunks
+            .iter()
+            .filter(|chunk| {
+                chunk.process_id == process_id && chunk.stream == ProcessOutputStreamName::Stdout
+            })
+            .map(|chunk| chunk.text.as_str())
+            .collect::<Vec<&str>>()
+            .join("");
+        if stdout.contains(marker) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    panic!("process {process_id} stdout did not contain marker {marker}");
 }
 
 fn approve_live_tool_risk(kernel: &Kernel, task: &Task, supervisor: &AgentControlBlock) -> String {

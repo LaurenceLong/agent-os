@@ -270,7 +270,7 @@ Anthropic-compatible control plane:
 Full tool surface:
   cargo test -p agent-os-thread live_openai_chat_completions_llm_goal_driven_full_tool_surface_e2e -- --ignored --nocapture
   cargo test -p agent-os-thread live_anthropic_messages_llm_goal_driven_full_tool_surface_e2e -- --ignored --nocapture
-  expected coverage: workspace tools, control-plane tools, agent_control action families, and parameter branches for read_file offset/limit, glob_files path/offset/limit, grep_files path/include/case_sensitive/offset/limit, run_command stdin=piped, write_stdin process_id/write_id/text/field/after_sequence, and request_permissions scope plus complete PermissionSet fields
+  expected coverage: workspace tools, control-plane tools, agent_control action families, agent_control process payload branches for status processes/state/process_id, output process_id/field/after_sequence, send process_id/write_id/text, stop process_id, and kill process_id, and parameter branches for read_file offset/limit, glob_files path/offset/limit, grep_files path/include/case_sensitive/offset/limit, run_command stdin=piped, write_stdin process_id/write_id/text/field/after_sequence, and request_permissions scope plus complete PermissionSet fields
 
 Ecosystem context:
   cargo test -p agent-os-thread live_openai_chat_completions_llm_goal_driven_ecosystem_e2e -- --ignored --nocapture
