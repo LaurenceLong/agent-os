@@ -151,6 +151,19 @@ fn live_anthropic_messages_llm_e2e_writes_file_and_logs_interaction() {
 }
 
 #[test]
+#[ignore = "requires AGENT_OS_LIVE_OPENAI_API_KEY and a live openai_responses endpoint"]
+fn live_openai_responses_llm_e2e_writes_file_and_logs_interaction() {
+    run_live_llm_e2e(
+        "openai_responses",
+        LlmApiStyle::OpenAiResponses,
+        "AGENT_OS_LIVE_OPENAI_API_KEY",
+        "AGENT_OS_LIVE_OPENAI_MODEL",
+        "AGENT_OS_LIVE_OPENAI_BASE_URL",
+        "live-openai_responses-e2e-interaction.jsonl",
+    );
+}
+
+#[test]
 #[ignore = "requires AGENT_OS_LIVE_OPENAI_API_KEY and a live openai_chat_completions endpoint"]
 fn live_openai_chat_completions_llm_goal_driven_workspace_e2e() {
     run_live_llm_goal_driven_workspace_e2e(
@@ -173,6 +186,19 @@ fn live_anthropic_messages_llm_goal_driven_workspace_e2e() {
         "AGENT_OS_LIVE_ANTHROPIC_MODEL",
         "AGENT_OS_LIVE_ANTHROPIC_BASE_URL",
         "live-anthropic_messages-goal-workspace.jsonl",
+    );
+}
+
+#[test]
+#[ignore = "requires AGENT_OS_LIVE_OPENAI_API_KEY and a live openai_responses endpoint"]
+fn live_openai_responses_llm_goal_driven_workspace_e2e() {
+    run_live_llm_goal_driven_workspace_e2e(
+        "openai_responses",
+        LlmApiStyle::OpenAiResponses,
+        "AGENT_OS_LIVE_OPENAI_API_KEY",
+        "AGENT_OS_LIVE_OPENAI_MODEL",
+        "AGENT_OS_LIVE_OPENAI_BASE_URL",
+        "live-openai_responses-goal-workspace.jsonl",
     );
 }
 
@@ -203,6 +229,19 @@ fn live_anthropic_messages_llm_goal_driven_control_plane_e2e() {
 }
 
 #[test]
+#[ignore = "requires AGENT_OS_LIVE_OPENAI_API_KEY and a live openai_responses endpoint"]
+fn live_openai_responses_llm_goal_driven_control_plane_e2e() {
+    run_live_llm_goal_driven_control_plane_e2e(
+        "openai_responses",
+        LlmApiStyle::OpenAiResponses,
+        "AGENT_OS_LIVE_OPENAI_API_KEY",
+        "AGENT_OS_LIVE_OPENAI_MODEL",
+        "AGENT_OS_LIVE_OPENAI_BASE_URL",
+        "live-openai_responses-goal-control-plane.jsonl",
+    );
+}
+
+#[test]
 #[ignore = "requires AGENT_OS_LIVE_OPENAI_API_KEY and a live openai_chat_completions endpoint"]
 fn live_openai_chat_completions_llm_goal_driven_full_tool_surface_e2e() {
     run_live_llm_goal_driven_full_tool_surface_e2e(
@@ -225,6 +264,19 @@ fn live_anthropic_messages_llm_goal_driven_full_tool_surface_e2e() {
         "AGENT_OS_LIVE_ANTHROPIC_MODEL",
         "AGENT_OS_LIVE_ANTHROPIC_BASE_URL",
         "live-anthropic_messages-goal-full-tool-surface.jsonl",
+    );
+}
+
+#[test]
+#[ignore = "requires AGENT_OS_LIVE_OPENAI_API_KEY and a live openai_responses endpoint"]
+fn live_openai_responses_llm_goal_driven_full_tool_surface_e2e() {
+    run_live_llm_goal_driven_full_tool_surface_e2e(
+        "openai_responses",
+        LlmApiStyle::OpenAiResponses,
+        "AGENT_OS_LIVE_OPENAI_API_KEY",
+        "AGENT_OS_LIVE_OPENAI_MODEL",
+        "AGENT_OS_LIVE_OPENAI_BASE_URL",
+        "live-openai_responses-goal-full-tool-surface.jsonl",
     );
 }
 
@@ -255,6 +307,19 @@ fn live_anthropic_messages_llm_goal_driven_agent_control_lifecycle_success_e2e()
 }
 
 #[test]
+#[ignore = "requires AGENT_OS_LIVE_OPENAI_API_KEY and a live openai_responses endpoint"]
+fn live_openai_responses_llm_goal_driven_agent_control_lifecycle_success_e2e() {
+    run_live_llm_goal_driven_agent_control_lifecycle_success_e2e(
+        "openai_responses",
+        LlmApiStyle::OpenAiResponses,
+        "AGENT_OS_LIVE_OPENAI_API_KEY",
+        "AGENT_OS_LIVE_OPENAI_MODEL",
+        "AGENT_OS_LIVE_OPENAI_BASE_URL",
+        "live-openai_responses-goal-agent-control-lifecycle-success.jsonl",
+    );
+}
+
+#[test]
 #[ignore = "requires AGENT_OS_LIVE_OPENAI_API_KEY and a live openai_chat_completions endpoint"]
 fn live_openai_chat_completions_llm_goal_driven_ecosystem_e2e() {
     run_live_llm_goal_driven_ecosystem_e2e(
@@ -281,6 +346,19 @@ fn live_anthropic_messages_llm_goal_driven_ecosystem_e2e() {
 }
 
 #[test]
+#[ignore = "requires AGENT_OS_LIVE_OPENAI_API_KEY and a live openai_responses endpoint"]
+fn live_openai_responses_llm_goal_driven_ecosystem_e2e() {
+    run_live_llm_goal_driven_ecosystem_e2e(
+        "openai_responses",
+        LlmApiStyle::OpenAiResponses,
+        "AGENT_OS_LIVE_OPENAI_API_KEY",
+        "AGENT_OS_LIVE_OPENAI_MODEL",
+        "AGENT_OS_LIVE_OPENAI_BASE_URL",
+        "live-openai_responses-goal-ecosystem.jsonl",
+    );
+}
+
+#[test]
 #[ignore = "requires AGENT_OS_LIVE_OPENAI_API_KEY and a live openai_chat_completions endpoint"]
 fn live_openai_chat_completions_llm_goal_driven_scoped_context_e2e() {
     run_live_llm_goal_driven_scoped_context_e2e(
@@ -303,6 +381,19 @@ fn live_anthropic_messages_llm_goal_driven_scoped_context_e2e() {
         "AGENT_OS_LIVE_ANTHROPIC_MODEL",
         "AGENT_OS_LIVE_ANTHROPIC_BASE_URL",
         "live-anthropic_messages-goal-scoped-context.jsonl",
+    );
+}
+
+#[test]
+#[ignore = "requires AGENT_OS_LIVE_OPENAI_API_KEY and a live openai_responses endpoint"]
+fn live_openai_responses_llm_goal_driven_scoped_context_e2e() {
+    run_live_llm_goal_driven_scoped_context_e2e(
+        "openai_responses",
+        LlmApiStyle::OpenAiResponses,
+        "AGENT_OS_LIVE_OPENAI_API_KEY",
+        "AGENT_OS_LIVE_OPENAI_MODEL",
+        "AGENT_OS_LIVE_OPENAI_BASE_URL",
+        "live-openai_responses-goal-scoped-context.jsonl",
     );
 }
 

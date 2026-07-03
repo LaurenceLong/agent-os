@@ -249,17 +249,28 @@ Current live goal-driven scenarios:
 ```text
 All ignored OpenAI/Anthropic live scenarios:
   cargo test -p agent-os-thread openai::tests::live -- --ignored --nocapture --test-threads=1
-  expected coverage: simple file-writing e2e, workspace e2e, control-plane e2e, agent_control lifecycle e2e, full tool-surface e2e for OpenAI-compatible and Anthropic-compatible providers
+  expected coverage: simple file-writing e2e, workspace e2e, control-plane e2e, agent_control lifecycle e2e, full tool-surface e2e for OpenAI Chat Completions, OpenAI Responses, and Anthropic-compatible providers
 
 OpenAI-compatible workspace:
+  cargo test -p agent-os-thread live_openai_chat_completions_llm_e2e_writes_file_and_logs_interaction -- --ignored --nocapture
   cargo test -p agent-os-thread live_openai_chat_completions_llm_goal_driven_workspace_e2e -- --ignored --nocapture
   expected coverage: read_file, apply_patch, run_command, accomplish_goal, submit_final
+
+OpenAI Responses workspace:
+  cargo test -p agent-os-thread live_openai_responses_llm_e2e_writes_file_and_logs_interaction -- --ignored --nocapture
+  cargo test -p agent-os-thread live_openai_responses_llm_goal_driven_workspace_e2e -- --ignored --nocapture
+  expected coverage: read_file, apply_patch, run_command, accomplish_goal, submit_final through the OpenAI Responses endpoint
 
 OpenAI-compatible control plane:
   cargo test -p agent-os-thread live_openai_chat_completions_llm_goal_driven_control_plane_e2e -- --ignored --nocapture
   expected coverage: set_goal, accomplish_goal, update_checklist, record_evidence, report_supervisor, post_blackboard, ask_human, request_permissions, agent_control, read_file, submit_final
 
+OpenAI Responses control plane:
+  cargo test -p agent-os-thread live_openai_responses_llm_goal_driven_control_plane_e2e -- --ignored --nocapture
+  expected coverage: set_goal, accomplish_goal, update_checklist, record_evidence, report_supervisor, post_blackboard, ask_human, request_permissions, agent_control, read_file, submit_final through the OpenAI Responses endpoint
+
 Anthropic-compatible workspace:
+  cargo test -p agent-os-thread live_anthropic_messages_llm_e2e_writes_file_and_logs_interaction -- --ignored --nocapture
   cargo test -p agent-os-thread live_anthropic_messages_llm_goal_driven_workspace_e2e -- --ignored --nocapture
   expected coverage: read_file, apply_patch, run_command, accomplish_goal, submit_final
 
@@ -269,8 +280,15 @@ Anthropic-compatible control plane:
 
 Full tool surface:
   cargo test -p agent-os-thread live_openai_chat_completions_llm_goal_driven_full_tool_surface_e2e -- --ignored --nocapture
+  cargo test -p agent-os-thread live_openai_responses_llm_goal_driven_full_tool_surface_e2e -- --ignored --nocapture
   cargo test -p agent-os-thread live_anthropic_messages_llm_goal_driven_full_tool_surface_e2e -- --ignored --nocapture
   expected coverage: workspace tools, control-plane tools, agent_control action families, agent_control process payload branches for status processes/state/process_id, output process_id/field/after_sequence, send process_id/write_id/text, stop process_id, and kill process_id, agent_control permission payload branches for approve_permission permission_request_id/decision_reason/permissions and deny_permission permission_request_id/decision_reason, and parameter branches for read_file offset/limit, glob_files path/offset/limit, grep_files path/include/case_sensitive/offset/limit, run_command mode/args/env/stdin=piped, write_stdin process_id/write_id/text/field/after_sequence, and request_permissions scope plus complete PermissionSet fields
+
+Agent control lifecycle success:
+  cargo test -p agent-os-thread live_openai_chat_completions_llm_goal_driven_agent_control_lifecycle_success_e2e -- --ignored --nocapture
+  cargo test -p agent-os-thread live_openai_responses_llm_goal_driven_agent_control_lifecycle_success_e2e -- --ignored --nocapture
+  cargo test -p agent-os-thread live_anthropic_messages_llm_goal_driven_agent_control_lifecycle_success_e2e -- --ignored --nocapture
+  expected coverage: live model can apply privileged agent_control delete_session and purge_state successfully with risk 6 through each non-image provider endpoint
 
 Privileged agent_control rejection:
   cargo test -p agent-os-conformance goal_driven_runtime_integration_rejects_understated_privileged_agent_control_risk
@@ -282,11 +300,13 @@ Control-plane optional parameters:
 
 Ecosystem context:
   cargo test -p agent-os-thread live_openai_chat_completions_llm_goal_driven_ecosystem_e2e -- --ignored --nocapture
+  cargo test -p agent-os-thread live_openai_responses_llm_goal_driven_ecosystem_e2e -- --ignored --nocapture
   cargo test -p agent-os-thread live_anthropic_messages_llm_goal_driven_ecosystem_e2e -- --ignored --nocapture
   expected coverage: load_skill name/offset/limit, read_skill_resource name/path/offset/limit, tool_search query/limit discovery of deferred local stdio MCP tools, MCP tool call, and final submission evidence citations
 
 Scoped context projection:
   cargo test -p agent-os-thread live_openai_chat_completions_llm_goal_driven_scoped_context_e2e -- --ignored --nocapture
+  cargo test -p agent-os-thread live_openai_responses_llm_goal_driven_scoped_context_e2e -- --ignored --nocapture
   cargo test -p agent-os-thread live_anthropic_messages_llm_goal_driven_scoped_context_e2e -- --ignored --nocapture
   expected coverage: scoped context snapshots and context compactions projected into the normal provider prompt and used by the live model through apply_patch, run_command, and submit_final
 
@@ -316,6 +336,12 @@ target/agent-os-audit/live-openai_chat_completions-goal-full-tool-surface.jsonl
 target/agent-os-audit/live-openai_chat_completions-goal-agent-control-lifecycle-success.jsonl
 target/agent-os-audit/live-openai_chat_completions-goal-ecosystem.jsonl
 target/agent-os-audit/live-openai_chat_completions-goal-scoped-context.jsonl
+target/agent-os-audit/live-openai_responses-goal-workspace.jsonl
+target/agent-os-audit/live-openai_responses-goal-control-plane.jsonl
+target/agent-os-audit/live-openai_responses-goal-full-tool-surface.jsonl
+target/agent-os-audit/live-openai_responses-goal-agent-control-lifecycle-success.jsonl
+target/agent-os-audit/live-openai_responses-goal-ecosystem.jsonl
+target/agent-os-audit/live-openai_responses-goal-scoped-context.jsonl
 target/agent-os-audit/live-anthropic_messages-goal-workspace.jsonl
 target/agent-os-audit/live-anthropic_messages-goal-control-plane.jsonl
 target/agent-os-audit/live-anthropic_messages-goal-full-tool-surface.jsonl
