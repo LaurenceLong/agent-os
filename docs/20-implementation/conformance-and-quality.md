@@ -127,6 +127,9 @@ Tool driver tests MUST verify:
 - `tool_call_id` output lookup defaults to new output, supports bounded
   `head`/`tail` windows, and supports `full=true` with `offset`/`limit` line
   paging over the complete spooled field
+- `run_command` creates a kernel-owned `ProcessSession`, returns `process_id`,
+  records command mode, executed argv, lifecycle state, output cursors, and
+  replayable exit or failure state
 - descriptor-declared evidence attachment for workspace, command, control-plane,
   and permission tools so final `evidence_map` entries can cite real evidence ids
 

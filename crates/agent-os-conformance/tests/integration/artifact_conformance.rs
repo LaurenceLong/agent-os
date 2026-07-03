@@ -583,16 +583,40 @@ fn workspace_and_process_tools_execute_through_broker_and_attach_evidence() {
         )
         .unwrap();
     assert_eq!(process.status, ToolCallStatus::Completed);
+    let process_output = process.output.as_ref().unwrap();
+    let process_id = process_output["process_id"].as_str().unwrap();
     assert_eq!(process.evidence_ids.len(), 1);
+    let state = fx.kernel.state_snapshot().unwrap();
     assert_eq!(
-        fx.kernel
-            .state_snapshot()
-            .unwrap()
+        state
             .evidence
             .get(&process.evidence_ids[0])
             .unwrap()
             .evidence_type,
         EvidenceType::CommandLog
+    );
+    let session = state.process_sessions.get(process_id).unwrap();
+    assert_eq!(session.tool_call_id, process.call_id);
+    assert_eq!(session.agent_id, fx.worker.agent_id);
+    assert_eq!(session.thread_id, fx.worker.thread_id);
+    assert_eq!(session.state, ProcessLifecycleState::Exited);
+    assert_eq!(session.exit_code, Some(0));
+    assert_eq!(session.command_mode, ProcessCommandMode::Exec);
+    assert_eq!(session.stdout.cursor, session.stdout.bytes);
+    assert_eq!(
+        session.stdout.bytes,
+        process_output["stdout_bytes"].as_u64().unwrap()
+    );
+    let replayed = Kernel::from_events(&fx.kernel.events().unwrap()).unwrap();
+    assert_eq!(
+        replayed
+            .state_snapshot()
+            .unwrap()
+            .process_sessions
+            .get(process_id)
+            .unwrap()
+            .state,
+        ProcessLifecycleState::Exited
     );
 
     let _ = std::fs::remove_dir_all(workspace);
@@ -871,7 +895,7 @@ fn long_running_command_returns_running_and_can_be_queried_by_tool_call_id() {
             ToolInvokeInput {
                 tool_name: "run_command".to_string(),
                 input: json!({
-                    "command": "Write-Output stdout-before; [Console]::Error.WriteLine('stderr-before'); Start-Sleep -Seconds 16; Write-Output stdout-after",
+                    "command": "Write-Output stdout-before; [Console]::Error.WriteLine('stderr-before'); Start-Sleep -Seconds 18; Write-Output stdout-after",
                     "cwd": workspace.to_string_lossy()
                 }),
                 evidence_claim: Some("background command started".to_string()),
@@ -888,6 +912,22 @@ fn long_running_command_returns_running_and_can_be_queried_by_tool_call_id() {
             .and_then(serde_json::Value::as_str),
         Some(command.call_id.as_str())
     );
+    let process_id = command
+        .output
+        .as_ref()
+        .and_then(|output| output.get("process_id"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap();
+    let process_session = fx
+        .kernel
+        .state_snapshot()
+        .unwrap()
+        .process_sessions
+        .get(process_id)
+        .unwrap()
+        .clone();
+    assert_eq!(process_session.tool_call_id, command.call_id);
+    assert_eq!(process_session.state, ProcessLifecycleState::Running);
 
     let queried = fx
         .kernel

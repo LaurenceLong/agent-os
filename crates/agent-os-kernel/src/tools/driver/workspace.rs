@@ -1,3 +1,4 @@
+use crate::process::StartProcessSessionInput;
 use crate::state::ToolStreamOutput;
 use crate::util::{hash_json, required_string};
 use crate::*;
@@ -255,7 +256,29 @@ pub(in crate::tools) fn run_process(
     let env = optional_string_map(input, "env")?;
     let cwd = canonical_workspace_root(&cwd)?;
     ensure_environment_lease_for_path(kernel, syscall, &cwd, false)?;
-    let (program, command_args) = run_command_program_and_args(&mode, &command_text, args);
+    let environment_keys = env.keys().cloned().collect::<Vec<_>>();
+    let (program, command_args) = run_command_program_and_args(&mode, &command_text, args.clone());
+    let (stdout_spool_path, stderr_spool_path) = tool_output_spool_paths(tool_call_id)?;
+    let acb = kernel
+        .thread_by_agent(&syscall.agent_id)?
+        .ok_or_else(|| AgentOsError::NotFound(format!("agent {}", syscall.agent_id)))?;
+    let process = kernel.start_process_session(StartProcessSessionInput {
+        tool_call_id: tool_call_id.to_string(),
+        agent_id: syscall.agent_id.clone(),
+        thread_id: acb.thread_id,
+        task_id: syscall.task_id.clone(),
+        session_id: syscall.session_id.clone(),
+        syscall_id: syscall.syscall_id.clone(),
+        capability_id: syscall.capability_token.clone(),
+        workspace_root: cwd.to_string_lossy().into_owned(),
+        cwd: cwd.to_string_lossy().into_owned(),
+        command_mode: process_command_mode(&mode),
+        command: command_text.to_string(),
+        args,
+        executed_program: program.clone(),
+        executed_args: command_args.clone(),
+        environment_keys,
+    })?;
     let mut command = Command::new(&program);
     command
         .args(&command_args)
@@ -265,10 +288,20 @@ pub(in crate::tools) fn run_process(
     if !env.is_empty() {
         command.envs(env);
     }
-    let mut child = command
-        .spawn()
-        .map_err(|error| AgentOsError::Validation(format!("run process: {error}")))?;
-    let (stdout_spool_path, stderr_spool_path) = tool_output_spool_paths(tool_call_id)?;
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            let message = format!("run process: {error}");
+            kernel.fail_process_session(&process.process_id, message.clone())?;
+            return Err(AgentOsError::Validation(message));
+        }
+    };
+    kernel.mark_process_session_running(
+        &process.process_id,
+        Some(child.id()),
+        Some(stdout_spool_path.to_string_lossy().into_owned()),
+        Some(stderr_spool_path.to_string_lossy().into_owned()),
+    )?;
     kernel.set_tool_worker_output_spool(
         tool_call_id,
         stdout_spool_path.to_string_lossy().into_owned(),
@@ -300,11 +333,22 @@ pub(in crate::tools) fn run_process(
             stderr_capture.clone(),
         )
     });
-    let status = child
-        .wait()
-        .map_err(|error| AgentOsError::Validation(format!("wait process: {error}")))?;
-    join_reader(stdout_reader)?;
-    join_reader(stderr_reader)?;
+    let status = match child.wait() {
+        Ok(status) => status,
+        Err(error) => {
+            let message = format!("wait process: {error}");
+            kernel.fail_process_session(&process.process_id, message.clone())?;
+            return Err(AgentOsError::Validation(message));
+        }
+    };
+    if let Err(error) = join_reader(stdout_reader) {
+        kernel.fail_process_session(&process.process_id, error.to_string())?;
+        return Err(error);
+    }
+    if let Err(error) = join_reader(stderr_reader) {
+        kernel.fail_process_session(&process.process_id, error.to_string())?;
+        return Err(error);
+    }
     let stdout = stdout_capture
         .lock()
         .map_err(|_| AgentOsError::Validation("stdout capture lock poisoned".to_string()))?
@@ -313,9 +357,16 @@ pub(in crate::tools) fn run_process(
         .lock()
         .map_err(|_| AgentOsError::Validation("stderr capture lock poisoned".to_string()))?
         .clone();
+    kernel.exit_process_session(
+        &process.process_id,
+        status.code(),
+        process_output_stream(ProcessOutputStreamName::Stdout, &stdout),
+        process_output_stream(ProcessOutputStreamName::Stderr, &stderr),
+    )?;
     Ok(json!({
         "tool": descriptor.name.clone(),
         "status": "ok",
+        "process_id": process.process_id,
         "input": input.clone(),
         "driver_class": descriptor.driver_class,
         "exit_code": status.code().unwrap_or(-1),
@@ -329,6 +380,28 @@ pub(in crate::tools) fn run_process(
         "stdout_bytes": stdout.bytes,
         "stderr_bytes": stderr.bytes,
     }))
+}
+
+fn process_command_mode(mode: &str) -> ProcessCommandMode {
+    match mode {
+        "exec" => ProcessCommandMode::Exec,
+        _ => ProcessCommandMode::Shell,
+    }
+}
+
+fn process_output_stream(
+    name: ProcessOutputStreamName,
+    stream: &ToolStreamOutput,
+) -> ProcessOutputStream {
+    let bytes = stream.bytes as u64;
+    ProcessOutputStream {
+        name,
+        sequence: 0,
+        bytes,
+        cursor: bytes,
+        truncated: stream.truncated,
+        spool_path: stream.spool_path.clone(),
+    }
 }
 
 fn run_command_mode(input: &Value, has_args: bool) -> AgentOsResult<String> {

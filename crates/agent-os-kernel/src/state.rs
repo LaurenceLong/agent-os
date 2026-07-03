@@ -29,6 +29,7 @@ pub struct KernelState {
     pub model_aliases: HashMap<String, ModelAlias>,
     pub provider_route_decisions: HashMap<String, ProviderRouteDecision>,
     pub provider_stream_sessions: HashMap<String, ProviderStreamSession>,
+    pub process_sessions: HashMap<String, ProcessSession>,
     pub communication_profiles: HashMap<String, CommunicationProfile>,
     pub capabilities: HashMap<String, CapabilityToken>,
     pub tool_descriptors: HashMap<String, ToolDescriptor>,
@@ -209,6 +210,7 @@ fn clear_event_projection(state: &mut KernelState) {
     state.communication_profiles.clear();
     state.provider_route_decisions.clear();
     state.provider_stream_sessions.clear();
+    state.process_sessions.clear();
     state.tool_invocations.clear();
     state.capabilities.clear();
     state.environments.clear();

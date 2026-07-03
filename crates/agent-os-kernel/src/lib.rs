@@ -19,6 +19,7 @@ mod goals;
 mod inputs;
 mod memento;
 mod permissions;
+mod process;
 mod profile_seed;
 mod profiles;
 mod provider;

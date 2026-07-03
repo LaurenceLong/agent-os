@@ -79,6 +79,7 @@ fn descriptor(now: &str) -> ToolDescriptor {
             &[
                 "tool",
                 "status",
+                "process_id",
                 "input",
                 "driver_class",
                 "exit_code",
@@ -90,6 +91,7 @@ fn descriptor(now: &str) -> ToolDescriptor {
             json!({
                 "tool": {"type": "string"},
                 "status": {"enum": ["ok"]},
+                "process_id": {"type": "string"},
                 "input": {"type": "object"},
                 "driver_class": {"type": "string"},
                 "exit_code": {"type": "integer"},

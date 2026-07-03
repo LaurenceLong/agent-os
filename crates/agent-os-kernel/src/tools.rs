@@ -285,9 +285,13 @@ impl Kernel {
             Ok(result) => result,
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 let mut progressed = running_snapshot;
+                let process_id = self
+                    .process_session_by_tool_call_id(&progressed.call_id)?
+                    .map(|session| session.process_id);
                 progressed.output = Some(json!({
                     "status": "running",
                     "tool_call_id": progressed.call_id,
+                    "process_id": process_id,
                     "tool_name": progressed.tool_name,
                     "foreground_timeout_ms": foreground_timeout.as_millis() as u64,
                     "message": "tool exceeded the foreground wait cap and is still running in the background"

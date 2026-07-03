@@ -188,6 +188,19 @@ impl Kernel {
                     .provider_stream_sessions
                     .insert(session.session_id.clone(), session);
             }
+            "ProcessSessionStarted"
+            | "ProcessSessionRunning"
+            | "ProcessSessionExited"
+            | "ProcessSessionFailed"
+            | "ProcessSessionInterrupted"
+            | "ProcessSessionTerminated"
+            | "ProcessSessionTimedOut"
+            | "ProcessSessionOrphaned" => {
+                let session: ProcessSession = parse_payload(&event.payload)?;
+                state
+                    .process_sessions
+                    .insert(session.process_id.clone(), session);
+            }
             "CapabilityGranted" => {
                 let cap: CapabilityToken = parse_payload(&event.payload)?;
                 state.capabilities.insert(cap.capability_id.clone(), cap);
