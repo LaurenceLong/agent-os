@@ -1,5 +1,7 @@
 use crate::common::*;
+use agent_os_config::AgentOsPaths;
 use agent_os_distro::{SoftwareCodeTask, SoftwareEditPlanSource, SoftwareWorkflowPrompt};
+use agent_os_ecosystem::EcosystemDiscoverOptions;
 use agent_os_sys::{PackageManifest, PackageType};
 use std::{env, fs, path::PathBuf};
 
@@ -22,6 +24,65 @@ fn software_engineering_distro_package_has_manifest_and_policy_packs() {
         .unwrap()["policy_name"],
         "software-engineering-final-answer"
     );
+}
+
+#[test]
+fn ecosystem_discovers_agent_os_package_manifest_contract() {
+    let workspace = temp_workspace("agent-os-conformance-package-manifest");
+    let home = workspace.join("home");
+    let project = workspace.join("project");
+    fs::create_dir_all(home.join("config")).unwrap();
+    fs::create_dir_all(project.join(".agent-os/prompts")).unwrap();
+    fs::create_dir_all(project.join(".agent-os/policy")).unwrap();
+    fs::write(
+        project.join(".agent-os/prompts/supervisor.md"),
+        "Package prompt\n",
+    )
+    .unwrap();
+    fs::write(project.join(".agent-os/policy/review.json"), "{}\n").unwrap();
+    fs::write(
+        project.join(".agent-os/manifest.json"),
+        r#"{
+  "manifest_version": "0.1",
+  "package_name": "project-agent-package",
+  "package_type": "agent",
+  "version": "0.1.0",
+  "entrypoint": "prompts/supervisor.md",
+  "required_kernel_version": "0.3",
+  "capabilities_requested": ["tool.invoke"],
+  "roles_provided": ["ProducerAgent"],
+  "tools_provided": [],
+  "schemas": ["policy/review.json"],
+  "signature": null
+}
+"#,
+    )
+    .unwrap();
+
+    let catalog = agent_os_ecosystem::discover_ecosystem(&EcosystemDiscoverOptions {
+        workspace_root: project.clone(),
+        paths: AgentOsPaths {
+            home: home.clone(),
+            config_dir: home.join("config"),
+            data_dir: home.join("data"),
+            state_dir: home.join("state"),
+            cache_dir: home.join("cache"),
+            log_dir: home.join("log"),
+            bin_dir: home.join("cache/bin"),
+        },
+    })
+    .unwrap();
+
+    assert_eq!(catalog.package_manifests.len(), 1);
+    let package = &catalog.package_manifests[0];
+    assert_eq!(package.manifest.package_name, "project-agent-package");
+    assert_eq!(package.manifest.package_type, PackageType::Agent);
+    assert!(package.manifest_path.ends_with("manifest.json"));
+    assert!(package.root_path.ends_with(".agent-os"));
+    assert!(!package.package_id.is_empty());
+    assert!(!package.content_hash.is_empty());
+
+    let _ = fs::remove_dir_all(workspace);
 }
 
 #[test]

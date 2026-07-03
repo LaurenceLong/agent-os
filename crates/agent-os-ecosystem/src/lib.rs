@@ -11,10 +11,11 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EcosystemImportReport {
+    pub packages: usize,
     pub instructions: usize,
     pub skills: usize,
     pub commands: usize,
@@ -30,6 +31,7 @@ pub struct EcosystemSourceImportReport {
     pub source_scope: EcosystemSourceScope,
     pub source_path: String,
     pub precedence_rank: Option<u32>,
+    pub packages: usize,
     pub instructions: usize,
     pub skills: usize,
     pub commands: usize,
@@ -40,6 +42,7 @@ pub struct EcosystemSourceImportReport {
 
 #[derive(Debug, Clone, Default)]
 pub struct EcosystemCatalog {
+    pub package_manifests: Vec<PackageManifestRecord>,
     pub instruction_documents: Vec<InstructionDocument>,
     pub skill_definitions: Vec<SkillDefinition>,
     pub command_definitions: Vec<CommandDefinition>,
@@ -51,6 +54,10 @@ pub struct EcosystemCatalog {
 impl EcosystemCatalog {
     pub fn import_report(&self) -> EcosystemImportReport {
         let mut report = EcosystemImportReport::default();
+        for package in &self.package_manifests {
+            report.packages += 1;
+            source_report_mut(&mut report.sources, &package.source, None).packages += 1;
+        }
         for document in &self.instruction_documents {
             report.instructions += 1;
             source_report_mut(
@@ -148,7 +155,18 @@ pub fn discover_ecosystem(options: &EcosystemDiscoverOptions) -> AgentOsResult<E
     let mut skills = BTreeMap::new();
     let mut commands = BTreeMap::new();
     let mut agents = BTreeMap::new();
+    let mut packages = BTreeMap::new();
     for root in &roots {
+        if let Some(package) = discover_package_manifest(root)? {
+            if packages
+                .insert(package.manifest.package_name.clone(), package)
+                .is_some()
+            {
+                return Err(AgentOsError::Validation(
+                    "duplicate package manifest identity".to_string(),
+                ));
+            }
+        }
         for skill in discover_skills(root)? {
             skills.insert(skill.name.clone(), skill);
         }
@@ -173,6 +191,7 @@ pub fn discover_ecosystem(options: &EcosystemDiscoverOptions) -> AgentOsResult<E
     }
 
     Ok(EcosystemCatalog {
+        package_manifests: packages.into_values().collect(),
         instruction_documents: instructions,
         skill_definitions: skills.into_values().collect(),
         command_definitions: commands.into_values().collect(),
@@ -219,6 +238,7 @@ fn source_report_mut<'a>(
         source_scope: source.source_scope,
         source_path: source.source_path.clone(),
         precedence_rank,
+        packages: 0,
         instructions: 0,
         skills: 0,
         commands: 0,
@@ -359,6 +379,130 @@ fn instruction_candidates_for_root(root: &EcosystemRoot) -> Vec<PathBuf> {
             vec![root.path.join("AGENTS.md"), root.path.join("CLAUDE.md")]
         }
     }
+}
+
+fn discover_package_manifest(root: &EcosystemRoot) -> AgentOsResult<Option<PackageManifestRecord>> {
+    let manifest_path = root.path.join("manifest.json");
+    if !manifest_path.is_file() {
+        return Ok(None);
+    }
+    let content = fs::read_to_string(&manifest_path).map_err(|error| {
+        AgentOsError::Validation(format!(
+            "read package manifest {}: {error}",
+            manifest_path.to_string_lossy()
+        ))
+    })?;
+    let manifest: PackageManifest = serde_json::from_str(&content).map_err(AgentOsError::from)?;
+    validate_package_manifest(&manifest_path, &root.path, &manifest)?;
+    let hash = hash_text(&content);
+    Ok(Some(PackageManifestRecord {
+        package_id: stable_id(
+            "package",
+            &manifest_path,
+            &format!("{}:{}:{}", manifest.package_name, manifest.version, hash),
+        ),
+        manifest,
+        root_path: root.path.to_string_lossy().to_string(),
+        manifest_path: manifest_path.to_string_lossy().to_string(),
+        source: root.source(&manifest_path),
+        content_hash: hash,
+        created_at: now_rfc3339(),
+    }))
+}
+
+fn validate_package_manifest(
+    manifest_path: &Path,
+    root: &Path,
+    manifest: &PackageManifest,
+) -> AgentOsResult<()> {
+    for (field, value) in [
+        ("manifest_version", manifest.manifest_version.as_str()),
+        ("package_name", manifest.package_name.as_str()),
+        ("version", manifest.version.as_str()),
+        ("entrypoint", manifest.entrypoint.as_str()),
+        (
+            "required_kernel_version",
+            manifest.required_kernel_version.as_str(),
+        ),
+    ] {
+        if value.trim().is_empty() {
+            return Err(AgentOsError::Validation(format!(
+                "{} package manifest field {field} must not be empty",
+                manifest_path.to_string_lossy()
+            )));
+        }
+    }
+    if manifest.package_name.contains(['/', '\\']) {
+        return Err(AgentOsError::Validation(format!(
+            "{} package_name must be an identity, not a path",
+            manifest_path.to_string_lossy()
+        )));
+    }
+    for field in [
+        ("capabilities_requested", &manifest.capabilities_requested),
+        ("roles_provided", &manifest.roles_provided),
+        ("tools_provided", &manifest.tools_provided),
+    ] {
+        validate_non_empty_string_entries(manifest_path, field.0, field.1)?;
+    }
+    validate_manifest_relative_file(manifest_path, root, "entrypoint", &manifest.entrypoint)?;
+    for schema in &manifest.schemas {
+        validate_manifest_relative_file(manifest_path, root, "schemas", schema)?;
+    }
+    Ok(())
+}
+
+fn validate_non_empty_string_entries(
+    manifest_path: &Path,
+    field: &str,
+    values: &[String],
+) -> AgentOsResult<()> {
+    if values.iter().any(|value| value.trim().is_empty()) {
+        return Err(AgentOsError::Validation(format!(
+            "{} package manifest field {field} must not contain empty entries",
+            manifest_path.to_string_lossy()
+        )));
+    }
+    Ok(())
+}
+
+fn validate_manifest_relative_file(
+    manifest_path: &Path,
+    root: &Path,
+    field: &str,
+    value: &str,
+) -> AgentOsResult<()> {
+    if value.trim().is_empty()
+        || value.starts_with("http://")
+        || value.starts_with("https://")
+        || value.contains('*')
+    {
+        return Err(AgentOsError::Validation(format!(
+            "{} package manifest field {field} must be an exact relative local file path",
+            manifest_path.to_string_lossy()
+        )));
+    }
+    let path = Path::new(value);
+    if path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        return Err(AgentOsError::Validation(format!(
+            "{} package manifest field {field} escapes the package root",
+            manifest_path.to_string_lossy()
+        )));
+    }
+    if !root.join(path).is_file() {
+        return Err(AgentOsError::Validation(format!(
+            "{} package manifest field {field} references a missing file: {value}",
+            manifest_path.to_string_lossy()
+        )));
+    }
+    Ok(())
 }
 
 fn discover_skills(root: &EcosystemRoot) -> AgentOsResult<Vec<SkillDefinition>> {
@@ -872,6 +1016,118 @@ mod tests {
     }
 
     #[test]
+    fn ecosystem_discovers_agent_os_package_manifest_records() {
+        let root = temp_dir("agent-os-ecosystem-package-manifest");
+        let home = root.join("home");
+        let workspace = root.join("workspace");
+        fs::create_dir_all(home.join("config")).unwrap();
+        fs::create_dir_all(workspace.join(".agent-os/prompts")).unwrap();
+        fs::create_dir_all(workspace.join(".agent-os/policy")).unwrap();
+        fs::write(
+            workspace.join(".agent-os/prompts/supervisor.md"),
+            "prompt\n",
+        )
+        .unwrap();
+        fs::write(workspace.join(".agent-os/policy/review.json"), "{}\n").unwrap();
+        write_manifest(
+            &workspace.join(".agent-os/manifest.json"),
+            "project-package",
+            "prompts/supervisor.md",
+            &["policy/review.json"],
+        );
+
+        let catalog = discover_ecosystem(&EcosystemDiscoverOptions {
+            workspace_root: workspace.clone(),
+            paths: test_paths(&home),
+        })
+        .unwrap();
+
+        assert_eq!(catalog.package_manifests.len(), 1);
+        let record = &catalog.package_manifests[0];
+        assert_eq!(record.manifest.package_name, "project-package");
+        assert_eq!(record.manifest.package_type, PackageType::Agent);
+        assert!(record.manifest_path.ends_with("manifest.json"));
+        assert!(record.root_path.ends_with(".agent-os"));
+        assert_eq!(record.source.source_kind, EcosystemSourceKind::AgentOs);
+        assert_eq!(record.source.source_scope, EcosystemSourceScope::Project);
+        assert!(!record.content_hash.is_empty());
+
+        let report = catalog.import_report();
+        assert_eq!(report.packages, 1);
+        assert!(report.sources.iter().any(|source| {
+            source.source_kind == EcosystemSourceKind::AgentOs
+                && source.source_scope == EcosystemSourceScope::Project
+                && source.source_path.ends_with("manifest.json")
+                && source.packages == 1
+        }));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn ecosystem_rejects_package_manifest_paths_outside_package_root() {
+        let root = temp_dir("agent-os-ecosystem-package-manifest-escape");
+        let home = root.join("home");
+        let workspace = root.join("workspace");
+        fs::create_dir_all(home.join("config")).unwrap();
+        fs::create_dir_all(workspace.join(".agent-os")).unwrap();
+        write_manifest(
+            &workspace.join(".agent-os/manifest.json"),
+            "bad-package",
+            "../outside.md",
+            &[],
+        );
+
+        let err = discover_ecosystem(&EcosystemDiscoverOptions {
+            workspace_root: workspace.clone(),
+            paths: test_paths(&home),
+        })
+        .unwrap_err();
+        assert!(
+            matches!(err, AgentOsError::Validation(ref message) if message.contains("escapes the package root")),
+            "{err:?}"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn ecosystem_rejects_duplicate_package_manifest_identities() {
+        let root = temp_dir("agent-os-ecosystem-package-manifest-dupe");
+        let home = root.join("home");
+        let workspace = root.join("workspace");
+        fs::create_dir_all(home.join("config/prompts")).unwrap();
+        fs::create_dir_all(workspace.join(".agent-os/prompts")).unwrap();
+        fs::write(home.join("config/prompts/supervisor.md"), "global prompt\n").unwrap();
+        fs::write(
+            workspace.join(".agent-os/prompts/supervisor.md"),
+            "project prompt\n",
+        )
+        .unwrap();
+        write_manifest(
+            &home.join("config/manifest.json"),
+            "duplicate-package",
+            "prompts/supervisor.md",
+            &[],
+        );
+        write_manifest(
+            &workspace.join(".agent-os/manifest.json"),
+            "duplicate-package",
+            "prompts/supervisor.md",
+            &[],
+        );
+
+        let err = discover_ecosystem(&EcosystemDiscoverOptions {
+            workspace_root: workspace.clone(),
+            paths: test_paths(&home),
+        })
+        .unwrap_err();
+        assert!(
+            matches!(err, AgentOsError::Validation(ref message) if message.contains("duplicate package manifest identity")),
+            "{err:?}"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn import_report_records_agents_and_claude_migration_sources() {
         let root = temp_dir("agent-os-ecosystem-source-report");
         let home = root.join("home");
@@ -950,6 +1206,34 @@ mod tests {
         fs::write(
             path,
             format!("---\nname: {name}\ndescription: {marker} skill.\n---\n{marker} body\n"),
+        )
+        .unwrap();
+    }
+
+    fn write_manifest(path: &Path, package_name: &str, entrypoint: &str, schemas: &[&str]) {
+        let schemas = schemas
+            .iter()
+            .map(|schema| format!("\"{schema}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        fs::write(
+            path,
+            format!(
+                r#"{{
+  "manifest_version": "0.1",
+  "package_name": "{package_name}",
+  "package_type": "agent",
+  "version": "0.1.0",
+  "entrypoint": "{entrypoint}",
+  "required_kernel_version": "0.3",
+  "capabilities_requested": ["tool.invoke"],
+  "roles_provided": ["ProducerAgent"],
+  "tools_provided": [],
+  "schemas": [{schemas}],
+  "signature": null
+}}
+"#
+            ),
         )
         .unwrap();
     }

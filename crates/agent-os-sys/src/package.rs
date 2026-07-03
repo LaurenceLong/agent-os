@@ -8,13 +8,13 @@ pub enum PackageType {
     Distro,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PackageSignature {
     pub algorithm: String,
     pub value: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PackageManifest {
     pub manifest_version: String,
     pub package_name: String,
@@ -27,4 +27,15 @@ pub struct PackageManifest {
     pub tools_provided: Vec<String>,
     pub schemas: Vec<String>,
     pub signature: Option<PackageSignature>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PackageManifestRecord {
+    pub package_id: String,
+    pub manifest: PackageManifest,
+    pub root_path: String,
+    pub manifest_path: String,
+    pub source: crate::EcosystemSource,
+    pub content_hash: String,
+    pub created_at: String,
 }

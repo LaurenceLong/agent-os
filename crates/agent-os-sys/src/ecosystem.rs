@@ -33,7 +33,7 @@ pub enum ImportedAgentMode {
     All,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EcosystemSource {
     pub source_kind: EcosystemSourceKind,
     pub source_scope: EcosystemSourceScope,
