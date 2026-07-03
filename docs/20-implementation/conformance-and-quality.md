@@ -222,8 +222,9 @@ Ecosystem conformance tests MUST verify:
   the kernel tool broker
 - denied skill and MCP calls record kernel authorization failures rather than
   executing drivers
-- OpenAI-compatible and Anthropic-compatible model tool views project core and
-  dynamic schemas from kernel `ToolDescriptor` records
+- OpenAI-compatible and Anthropic-compatible model tool views project core
+  schemas and direct dynamic tool schemas from kernel `ToolDescriptor` records,
+  with deferred dynamic tools discoverable through `tool_search`
 
 ## 5.4 Current v0.3 Tool and Live Coverage
 

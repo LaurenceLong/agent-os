@@ -1231,6 +1231,50 @@ fn request_tool_view_projects_core_tools_from_kernel_descriptors() {
     );
 }
 
+#[test]
+fn request_tool_view_projects_direct_dynamic_tool_schema_from_kernel_descriptor() {
+    let tmp = std::env::temp_dir().join(format!("aos-openai-dynamic-tools-{}", new_id("t_")));
+    let (_kernel, mut request) = make_kernel_request(&tmp);
+    attach_mcp_echo_tool(&mut request);
+
+    let tools = tool_definitions_for_request(&request);
+    let mcp_tool = tools
+        .iter()
+        .find(|tool| {
+            tool.pointer("/function/name").and_then(Value::as_str) == Some("mcp__echo__echo")
+        })
+        .unwrap();
+    assert_eq!(
+        mcp_tool.pointer("/function/description"),
+        Some(&json!("Echo one text field."))
+    );
+    assert_eq!(
+        mcp_tool.pointer("/function/parameters/required"),
+        Some(&json!(["text"]))
+    );
+    assert_eq!(
+        mcp_tool.pointer("/function/parameters/properties/text/type"),
+        Some(&json!("string"))
+    );
+
+    let anthropic_tool = anthropic_tool_definitions_for_request(&request)
+        .into_iter()
+        .find(|tool| tool.get("name").and_then(Value::as_str) == Some("mcp__echo__echo"))
+        .unwrap();
+    assert_eq!(
+        anthropic_tool.get("description"),
+        Some(&json!("Echo one text field."))
+    );
+    assert_eq!(
+        anthropic_tool.pointer("/input_schema/required"),
+        Some(&json!(["text"]))
+    );
+    assert_eq!(
+        anthropic_tool.pointer("/input_schema/properties/text/type"),
+        Some(&json!("string"))
+    );
+}
+
 fn agent_control_actions(tools: &[Value]) -> Vec<String> {
     tools
         .iter()
