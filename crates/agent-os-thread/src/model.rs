@@ -23,6 +23,7 @@ pub struct ModelContextProjection {
     pub context_snapshots: Vec<ContextSnapshot>,
     pub memory_records: Vec<MemoryRecord>,
     pub context_compactions: Vec<ContextCompaction>,
+    pub mementos: Vec<MementoFragment>,
     pub tool_plan: ToolPlan,
     pub tool_descriptors: Vec<ToolDescriptor>,
     pub instruction_documents: Vec<InstructionDocument>,

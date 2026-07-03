@@ -13,11 +13,23 @@ impl Kernel {
                 "child or peer thread cannot read owner mementos".to_string(),
             ));
         }
+        let now = now_rfc3339();
         let mut mementos: Vec<_> = self
             .read_state()?
             .mementos
             .values()
             .filter(|m| m.owner_thread_id == owner_thread_id)
+            .filter(|m| {
+                matches!(
+                    m.status,
+                    MementoStatus::Armed | MementoStatus::Triggered | MementoStatus::Projected
+                )
+            })
+            .filter(|m| {
+                m.expires_at
+                    .as_ref()
+                    .is_none_or(|expires_at| expires_at > &now)
+            })
             .cloned()
             .collect();
         mementos.sort_by_key(|memento| std::cmp::Reverse(memento.projection.priority));

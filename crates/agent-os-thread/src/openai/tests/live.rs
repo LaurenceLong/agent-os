@@ -535,25 +535,25 @@ fn run_live_llm_goal_driven_scoped_context_e2e(
         "verify_context.sh"
     };
     let verifier_command = if cfg!(windows) {
-        format!(r#"command "{verifier_name}""#)
+        format!(r#"command ".\{verifier_name}""#)
     } else {
         format!(r#"command "sh {verifier_name}""#)
     };
     if cfg!(windows) {
         std::fs::write(
             tmp.join(verifier_name),
-            "@echo off\r\nset RESULT=%~dp0context_result.txt\r\nfindstr /C:\"CONTEXT_PROJECTION_OK\" \"%RESULT%\" >nul || exit /b 1\r\nfindstr /C:\"prompt-review/context.md\" \"%RESULT%\" >nul || exit /b 1\r\nfindstr /C:\"context_snapshot:live-obsolete\" \"%RESULT%\" >nul || exit /b 1\r\necho CONTEXT_PROJECTION_VERIFIED\r\n",
+            "@echo off\r\nset RESULT=%~dp0context_result.txt\r\nfindstr /C:\"CONTEXT_PROJECTION_OK\" \"%RESULT%\" >nul || exit /b 1\r\nfindstr /C:\"prompt-review/context.md\" \"%RESULT%\" >nul || exit /b 1\r\nfindstr /C:\"context_snapshot:live-obsolete\" \"%RESULT%\" >nul || exit /b 1\r\nfindstr /C:\"Review scoped context reminder\" \"%RESULT%\" >nul || exit /b 1\r\necho CONTEXT_PROJECTION_VERIFIED\r\n",
         )
         .unwrap();
     } else {
         std::fs::write(
             tmp.join(verifier_name),
-            "#!/bin/sh\ngrep -F \"CONTEXT_PROJECTION_OK\" context_result.txt >/dev/null || exit 1\ngrep -F \"prompt-review/context.md\" context_result.txt >/dev/null || exit 1\ngrep -F \"context_snapshot:live-obsolete\" context_result.txt >/dev/null || exit 1\necho CONTEXT_PROJECTION_VERIFIED\n",
+            "#!/bin/sh\ngrep -F \"CONTEXT_PROJECTION_OK\" context_result.txt >/dev/null || exit 1\ngrep -F \"prompt-review/context.md\" context_result.txt >/dev/null || exit 1\ngrep -F \"context_snapshot:live-obsolete\" context_result.txt >/dev/null || exit 1\ngrep -F \"Review scoped context reminder\" context_result.txt >/dev/null || exit 1\necho CONTEXT_PROJECTION_VERIFIED\n",
         )
         .unwrap();
     }
     let goal = format!(
-        "Use the scoped context projection in your prompt to discover the loaded_refs value and the context compaction superseded_refs value. Create context_result.txt with three lines: CONTEXT_PROJECTION_OK, then the loaded_refs value, then the superseded_refs value. Do not write snapshot or compaction ids unless they appear inside those ref values. Verify it by calling run_command with {verifier_command}. Finish with submit_final and cite evidence_ids from completed tool results."
+        "Use the scoped context projection in your prompt to discover the loaded_refs value, the context compaction superseded_refs value, and the owner memento title. Create context_result.txt with four lines: CONTEXT_PROJECTION_OK, then the loaded_refs value, then the superseded_refs value, then the owner memento title. Do not write snapshot or compaction ids unless they appear inside those ref values. Verify it by calling run_command with {verifier_command}. Finish with submit_final and cite evidence_ids from completed tool results."
     );
     let kernel = live_kernel_with_blob_stores(&tmp);
     let (kernel, request) = make_kernel_request_for_role_on_kernel_with_requirements(
@@ -585,6 +585,36 @@ fn run_live_llm_goal_driven_scoped_context_e2e(
             superseded_refs: vec!["context_snapshot:live-obsolete".to_string()],
             token_estimate: 128,
         })
+        .unwrap();
+    let memento = kernel
+        .create_memento(agent_os_kernel::CreateMementoInput {
+            owner_agent_id: request.thread.agent_id.clone(),
+            owner_thread_id: request.thread.thread_id.clone(),
+            goal_id: request.thread.task.goal_id.clone(),
+            task_id: request.thread.task.task_id.clone(),
+            anchor: MementoAnchor {
+                anchor_type: MementoAnchorType::Manual,
+                anchor_ref: None,
+                condition: None,
+            },
+            content: MementoContent {
+                title: "Review scoped context reminder".to_string(),
+                body: "Use this owner reminder after reading scoped context.".to_string(),
+                checklist: vec!["cite context evidence".to_string()],
+                structured: None,
+            },
+            projection: MementoProjection {
+                mode: MementoProjectionMode::OwnerContext,
+                priority: MementoPriority::High,
+                max_projection_count: Some(1),
+            },
+            links: MementoLinks::default(),
+            supersedes: None,
+            expires_at: None,
+        })
+        .unwrap();
+    kernel
+        .arm_memento(&request.thread.agent_id, &memento.memento_id)
         .unwrap();
     let client = OpenAiModelClient::new(api_key, model.clone())
         .with_api_base(api_base.clone())
@@ -622,9 +652,12 @@ fn run_live_llm_goal_driven_scoped_context_e2e(
     assert!(result.contains("CONTEXT_PROJECTION_OK"));
     assert!(result.contains("prompt-review/context.md"));
     assert!(result.contains("context_snapshot:live-obsolete"));
+    assert!(result.contains("Review scoped context reminder"));
     assert_provider_request_contains_text(&audit_log_path, "# Scoped Context Projection");
     assert_provider_request_contains_text(&audit_log_path, "prompt-review/context.md");
     assert_provider_request_contains_text(&audit_log_path, "context_snapshot:live-obsolete");
+    assert_provider_request_contains_text(&audit_log_path, "Review scoped context reminder");
+    assert_run_command_succeeded_with_stdout(&report, "CONTEXT_PROJECTION_VERIFIED");
     append_jsonl(
         &audit_log_path,
         &json!({
@@ -1242,6 +1275,32 @@ fn assert_completed_tool(report: &RuntimeRunReport, tool_name: &str) {
                 && record.status == agent_os_sys::ToolCallStatus::Completed),
         "missing completed tool result for {tool_name}: {:?}",
         report.tool_results
+    );
+}
+
+fn assert_run_command_succeeded_with_stdout(report: &RuntimeRunReport, expected_stdout: &str) {
+    let record = report
+        .tool_results
+        .iter()
+        .rev()
+        .find(|record| record.tool_name == "run_command")
+        .unwrap_or_else(|| panic!("missing run_command result: {:?}", report.tool_results));
+    let output = record
+        .output
+        .as_ref()
+        .unwrap_or_else(|| panic!("missing run_command output: {record:?}"));
+    assert_eq!(
+        output.get("exit_code").and_then(Value::as_i64),
+        Some(0),
+        "run_command did not succeed: {record:?}"
+    );
+    let stdout = output
+        .get("stdout")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("missing run_command stdout: {record:?}"));
+    assert!(
+        stdout.contains(expected_stdout),
+        "run_command stdout did not contain {expected_stdout}: {stdout}"
     );
 }
 

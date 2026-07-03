@@ -223,6 +223,9 @@ impl<C: ModelClient> ThreadRuntime<C> {
                     .cmp(&right.created_at)
                     .then_with(|| left.compaction_id.cmp(&right.compaction_id))
             });
+            let mementos = self
+                .kernel
+                .visible_mementos_for_thread(&acb.thread_id, &acb.thread_id)?;
             let mut ecosystem_projection = ecosystem_projection::from_state(&state);
             let tool_planning_mode = if finalization_feedback_sent {
                 ToolPlanningMode::FinalizationOnly
@@ -254,6 +257,7 @@ impl<C: ModelClient> ThreadRuntime<C> {
                 context_snapshots,
                 memory_records,
                 context_compactions,
+                mementos,
                 tool_plan,
                 tool_descriptors: ecosystem_projection.tool_descriptors,
                 instruction_documents: ecosystem_projection.instruction_documents,

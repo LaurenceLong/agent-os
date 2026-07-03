@@ -158,6 +158,9 @@ fn runtime_exports_real_system_prompt_review_bundle_for_core_roles() {
             assert!(system_prompt.contains("prompt-review/context.md"));
             assert!(system_prompt.contains("## Context Compactions"));
             assert!(system_prompt.contains("context_snapshot:prompt-review-obsolete"));
+            assert!(system_prompt.contains("## Owner Memento Fragments"));
+            assert!(system_prompt.contains("Review prompt context"));
+            assert!(system_prompt.contains("Confirm prompt-review-skill and MCP visibility."));
             assert!(!system_prompt.contains("supervise and escalate"));
             if role.label == "producer" {
                 assert!(system_prompt.contains("Producer responsibility:"));
@@ -546,6 +549,36 @@ fn run_prompt_export_case(
             token_estimate: 128,
         })
         .unwrap();
+    let memento = kernel
+        .create_memento(common::CreateMementoInput {
+            owner_agent_id: agent.agent_id.clone(),
+            owner_thread_id: agent.thread_id.clone(),
+            goal_id: agent.task.goal_id.clone(),
+            task_id: agent.task.task_id.clone(),
+            anchor: common::MementoAnchor {
+                anchor_type: common::MementoAnchorType::Manual,
+                anchor_ref: None,
+                condition: None,
+            },
+            content: common::MementoContent {
+                title: "Review prompt context".to_string(),
+                body: "Confirm prompt-review-skill and MCP visibility.".to_string(),
+                checklist: vec!["inspect provider request".to_string()],
+                structured: None,
+            },
+            projection: common::MementoProjection {
+                mode: common::MementoProjectionMode::OwnerContext,
+                priority: common::MementoPriority::High,
+                max_projection_count: Some(1),
+            },
+            links: common::MementoLinks::default(),
+            supersedes: None,
+            expires_at: None,
+        })
+        .unwrap();
+    kernel
+        .arm_memento(&agent.agent_id, &memento.memento_id)
+        .unwrap();
 
     let client = agent_os_thread::OpenAiModelClient::new("test-key", "prompt-export-model")
         .with_api_base(endpoint)
@@ -596,6 +629,10 @@ fn normalize_generated_context_ids(prompt: &str) -> String {
             if line.starts_with("- cmpct_") {
                 let rest = line.split_once(':').map(|(_, rest)| rest).unwrap_or("");
                 return format!("- <compaction_id>:{rest}");
+            }
+            if line.starts_with("- reminder mmt_") {
+                let rest = line.split_once(':').map(|(_, rest)| rest).unwrap_or("");
+                return format!("- reminder <memento_id>:{rest}");
             }
             line.to_string()
         })

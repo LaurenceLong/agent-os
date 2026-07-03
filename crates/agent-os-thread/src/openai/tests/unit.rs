@@ -186,6 +186,44 @@ fn default_system_prompt_projects_scoped_context_lifecycle() {
         activated_at: Some(now_rfc3339()),
         superseded_by: None,
     });
+    request.context.mementos.push(MementoFragment {
+        memento_id: "mmt_owner".to_string(),
+        owner_agent_id: request.thread.agent_id.clone(),
+        owner_thread_id: request.thread.thread_id.clone(),
+        goal_id: request.thread.task.goal_id.clone(),
+        task_id: request.thread.task.task_id.clone(),
+        status: MementoStatus::Triggered,
+        anchor: MementoAnchor {
+            anchor_type: MementoAnchorType::ChildThreadCompleted,
+            anchor_ref: Some("thread_child".to_string()),
+            condition: None,
+        },
+        content: MementoContent {
+            title: "Review child evidence".to_string(),
+            body: "Check the child output before accepting.".to_string(),
+            checklist: vec!["inspect logs".to_string()],
+            structured: None,
+        },
+        projection: MementoProjection {
+            mode: MementoProjectionMode::OwnerNextTurn,
+            priority: MementoPriority::High,
+            max_projection_count: Some(1),
+        },
+        immutability: MementoImmutability {
+            content_hash: "sha256:memento".to_string(),
+            committed_at: Some(now_rfc3339()),
+            committed_by: Some(request.thread.agent_id.clone()),
+        },
+        visibility: MementoVisibility {
+            owner_only: true,
+            child_visible: false,
+        },
+        links: MementoLinks::default(),
+        supersession: MementoSupersession::default(),
+        created_at: now_rfc3339(),
+        updated_at: now_rfc3339(),
+        expires_at: None,
+    });
 
     let prompt = default_system_prompt(&request, tmp.to_str().unwrap());
 
@@ -201,6 +239,11 @@ fn default_system_prompt_projects_scoped_context_lifecycle() {
     assert!(prompt.contains("## Active Memory Records"));
     assert!(prompt.contains("mem_active"));
     assert!(prompt.contains("preserve scoped context"));
+    assert!(prompt.contains("## Owner Memento Fragments"));
+    assert!(prompt.contains("owner-scoped self-reminders"));
+    assert!(prompt.contains("Review child evidence"));
+    assert!(prompt.contains("Check the child output before accepting."));
+    assert!(prompt.contains("inspect logs"));
 }
 
 #[test]

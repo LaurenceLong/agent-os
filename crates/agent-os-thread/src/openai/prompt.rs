@@ -182,6 +182,33 @@ fn scoped_context(request: &ModelTurnRequest) -> String {
             sections.push(format!("## Active Memory Records\n\n{body}"));
         }
     }
+    if !request.context.mementos.is_empty() {
+        let body = request
+            .context
+            .mementos
+            .iter()
+            .map(|memento| {
+                let checklist = if memento.content.checklist.is_empty() {
+                    String::new()
+                } else {
+                    format!(" checklist [{}]", memento.content.checklist.join("; "))
+                };
+                format!(
+                    "- reminder {}: status {:?}, priority {:?}, title {}, body {}{}",
+                    memento.memento_id,
+                    memento.status,
+                    memento.projection.priority,
+                    memento.content.title,
+                    memento.content.body,
+                    checklist
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        sections.push(format!(
+            "## Owner Memento Fragments\n\nThese are owner-scoped self-reminders, not child instructions or evidence.\n\n{body}"
+        ));
+    }
     if sections.is_empty() {
         String::new()
     } else {

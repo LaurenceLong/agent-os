@@ -96,6 +96,9 @@ Runtime conformance tests MUST verify:
   status instead of converting model non-finalization into host failure
 - runtime model-context projection includes scoped context snapshots, context
   compactions, and active memory records in provider-visible prompt content
+- runtime model-context projection includes owner-visible Memento Fragments
+  through the kernel owner-only API, while draft, consumed, superseded, expired,
+  and invalidated fragments stay out of normal context
 - runtime context-pruning events remain explicit and replayable when context
   pressure supersedes older tool results, context snapshots, or memory records
 

@@ -382,9 +382,21 @@ fn memento_is_owner_scoped_and_triggered_by_child_completion() {
             expires_at: None,
         })
         .unwrap();
+    assert!(fx
+        .kernel
+        .visible_mementos_for_thread(&supervisor.thread_id, &supervisor.thread_id)
+        .unwrap()
+        .is_empty());
     fx.kernel
         .arm_memento(&supervisor.agent_id, &draft.memento_id)
         .unwrap();
+    let armed_mementos = fx
+        .kernel
+        .visible_mementos_for_thread(&supervisor.thread_id, &supervisor.thread_id)
+        .unwrap();
+    assert!(armed_mementos
+        .iter()
+        .any(|m| m.memento_id == draft.memento_id && m.status == MementoStatus::Armed));
     assert!(fx
         .kernel
         .visible_mementos_for_thread(&child.thread_id, &supervisor.thread_id)
@@ -424,4 +436,12 @@ fn memento_is_owner_scoped_and_triggered_by_child_completion() {
     assert!(mementos
         .iter()
         .any(|m| m.memento_id == draft.memento_id && m.status == MementoStatus::Triggered));
+    fx.kernel
+        .consume_memento(&supervisor.agent_id, &draft.memento_id)
+        .unwrap();
+    assert!(fx
+        .kernel
+        .visible_mementos_for_thread(&supervisor.thread_id, &supervisor.thread_id)
+        .unwrap()
+        .is_empty());
 }
