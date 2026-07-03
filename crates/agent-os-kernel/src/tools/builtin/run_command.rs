@@ -19,7 +19,7 @@ fn descriptor(now: &str) -> ToolDescriptor {
         schema::DescriptorSpec {
             tool_id: "tool_run_command",
             name: "run_command",
-            description: "Run a shell command in the workspace by default, or run one executable with explicit args in exec mode. Captures bounded stdout, stderr, exit code, and truncation metadata.",
+            description: "Run a shell command in the workspace by default, or run one executable with explicit args in exec mode. Captures bounded stdout, stderr, exit code, truncation metadata, process_id, and optional piped stdin state.",
             driver_class: ToolDriverClass::Shell,
             risk_level: 4,
             input_schema: schema::object(
@@ -28,6 +28,7 @@ fn descriptor(now: &str) -> ToolDescriptor {
                 "command": {"type": "string"},
                 "mode": {"enum": ["shell", "exec"]},
                 "args": {"type": "array", "items": {"type": "string"}},
+                "stdin": {"enum": ["closed", "piped"]},
                 "cwd": {"type": "string"},
                 "env": {
                     "type": "object",
@@ -51,6 +52,10 @@ fn descriptor(now: &str) -> ToolDescriptor {
                     "description": "Optional exec-mode arguments for command. Omit for normal shell command strings.",
                     "items": {"type": "string"}
                 },
+                "stdin": {
+                    "enum": ["closed", "piped"],
+                    "description": "Defaults to closed. Use piped only when a later agent_control send will write to the returned process_id."
+                },
                 "env": {
                     "type": "object",
                     "description": "Optional per-command environment variables.",
@@ -73,6 +78,11 @@ fn descriptor(now: &str) -> ToolDescriptor {
                     "Run one executable with explicit argv when shell parsing is not wanted.",
                     json!({"mode": "exec", "command": "cargo", "args": ["test", "-p", "agent-os-kernel"]}),
                     "Returns exit_code plus bounded stdout/stderr and truncation metadata.",
+                ),
+                schema::example(
+                    "Start a command that will receive stdin later.",
+                    json!({"command": "python -c \"import sys; print('got:' + sys.stdin.readline().strip())\"", "stdin": "piped"}),
+                    "Returns process_id while stdin remains writable during the process lifetime.",
                 ),
             ],
             output_schema: schema::object(
@@ -103,7 +113,8 @@ fn descriptor(now: &str) -> ToolDescriptor {
                 "executed_program": {"type": "string"},
                 "executed_args": {"type": "array", "items": {"type": "string"}},
                 "stdout_bytes": {"type": "integer"},
-                "stderr_bytes": {"type": "integer"}
+                "stderr_bytes": {"type": "integer"},
+                "stdin_mode": {"enum": ["closed", "piped"]}
             }),
         ),
             runtime_input_policy: schema::injected_workspace_root("cwd"),
@@ -175,10 +186,22 @@ mod tests {
             .and_then(Value::as_str)
             .unwrap();
         assert!(command_description.contains("Shell command by default"));
+        let stdin_description = descriptor
+            .model_input_schema
+            .as_ref()
+            .unwrap()
+            .pointer("/properties/stdin/description")
+            .and_then(Value::as_str)
+            .unwrap();
+        assert!(stdin_description.contains("Defaults to closed"));
         assert!(descriptor
             .examples
             .iter()
             .any(|example| example.parameters == json!({"command": "rg -n \"TODO\" crates"})));
+        assert!(descriptor.examples.iter().any(|example| {
+            example.parameters["stdin"] == "piped"
+                && example.expected_result.contains("stdin remains writable")
+        }));
     }
 
     #[test]

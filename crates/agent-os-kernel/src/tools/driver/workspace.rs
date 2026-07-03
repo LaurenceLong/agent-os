@@ -248,6 +248,7 @@ pub(in crate::tools) fn run_process(
     let cwd = PathBuf::from(required_string(input, "cwd")?);
     let args = optional_string_array(input, "args")?.unwrap_or_default();
     let mode = run_command_mode(input, !args.is_empty())?;
+    let stdin_mode = run_command_stdin_mode(input)?;
     if mode == "shell" && !args.is_empty() {
         return Err(AgentOsError::Validation(
             "run_command args require exec mode".to_string(),
@@ -278,11 +279,16 @@ pub(in crate::tools) fn run_process(
         executed_program: program.clone(),
         executed_args: command_args.clone(),
         environment_keys,
+        stdin_mode,
     })?;
     let mut command = Command::new(&program);
     command
         .args(&command_args)
         .current_dir(&cwd)
+        .stdin(match stdin_mode {
+            ProcessStdinMode::Piped => Stdio::piped(),
+            ProcessStdinMode::Closed => Stdio::null(),
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if !env.is_empty() {
@@ -296,6 +302,12 @@ pub(in crate::tools) fn run_process(
             return Err(AgentOsError::Validation(message));
         }
     };
+    if stdin_mode == ProcessStdinMode::Piped {
+        let stdin = child.stdin.take().ok_or_else(|| {
+            AgentOsError::Validation("process stdin pipe unavailable".to_string())
+        })?;
+        kernel.set_tool_worker_stdin(tool_call_id, stdin)?;
+    }
     kernel.mark_process_session_running(
         &process.process_id,
         Some(child.id()),
@@ -373,6 +385,7 @@ pub(in crate::tools) fn run_process(
         "driver_class": descriptor.driver_class,
         "exit_code": status.code().unwrap_or(-1),
         "execution_mode": mode,
+        "stdin_mode": stdin_mode,
         "executed_program": program,
         "executed_args": command_args,
         "stdout": stdout.tail_window(super::super::builtin::run_command::OUTPUT_PREVIEW_CHARS).text,
@@ -418,6 +431,17 @@ fn run_command_mode(input: &Value, has_args: bool) -> AgentOsResult<String> {
         "shell" | "exec" => Ok(mode),
         _ => Err(AgentOsError::Validation(
             "run_command mode must be shell or exec".to_string(),
+        )),
+    }
+}
+
+fn run_command_stdin_mode(input: &Value) -> AgentOsResult<ProcessStdinMode> {
+    let mode = optional_string(input, "stdin")?.unwrap_or_else(|| "closed".to_string());
+    match mode.as_str() {
+        "closed" => Ok(ProcessStdinMode::Closed),
+        "piped" => Ok(ProcessStdinMode::Piped),
+        _ => Err(AgentOsError::Validation(
+            "run_command stdin must be closed or piped".to_string(),
         )),
     }
 }

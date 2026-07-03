@@ -215,6 +215,13 @@ impl Kernel {
                 }
                 state.process_output_chunks.push(chunk);
             }
+            "ProcessStdinWritten" => {
+                let write: ProcessStdinWrite = parse_payload(&event.payload)?;
+                if let Some(session) = state.process_sessions.get_mut(&write.process_id) {
+                    session.updated_at = write.created_at.clone();
+                }
+                state.process_stdin_writes.push(write);
+            }
             "CapabilityGranted" => {
                 let cap: CapabilityToken = parse_payload(&event.payload)?;
                 state.capabilities.insert(cap.capability_id.clone(), cap);

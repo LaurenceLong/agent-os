@@ -1176,6 +1176,298 @@ fn long_running_command_returns_running_and_can_be_queried_by_tool_call_id() {
 }
 
 #[test]
+fn process_stdin_write_is_idempotent_and_pollable_by_process_id() {
+    let fx = fixture();
+    let workspace = std::env::temp_dir().join(format!(
+        "agent-os-stdin-command-{}-{}",
+        std::process::id(),
+        new_id("case_")
+    ));
+    let mut run_command_descriptor = fx
+        .kernel
+        .state_snapshot()
+        .unwrap()
+        .tool_descriptors
+        .get("run_command")
+        .unwrap()
+        .clone();
+    run_command_descriptor.lifecycle.foreground_timeout_ms = 500;
+    fx.kernel
+        .register_tool_descriptor(run_command_descriptor)
+        .unwrap();
+    let supervisor = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_supervisor".to_string(),
+            owner: "tester".to_string(),
+            goal: "write child process stdin".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: vec![workspace.to_string_lossy().into_owned()],
+        })
+        .unwrap();
+    let worker = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_producer".to_string(),
+            owner: supervisor.agent_id.clone(),
+            goal: "run a stdin command".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: Some(supervisor.thread_id.clone()),
+            workspace_roots: vec![workspace.to_string_lossy().into_owned()],
+        })
+        .unwrap();
+    let env = fx
+        .kernel
+        .create_environment(
+            BackendType::IsolatedWorktree,
+            workspace.to_string_lossy(),
+            "sbox_workspace_write",
+            ReusePolicy::TaskScoped,
+        )
+        .unwrap();
+    fx.kernel
+        .attach_environment(
+            &env.environment_id,
+            &worker.agent_id,
+            &worker.thread_id,
+            &fx.task.task_id,
+            AttachMode::WorkspaceWrite,
+        )
+        .unwrap();
+    let command_cap = fx
+        .kernel
+        .grant_capability(
+            &worker.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            4,
+            None,
+        )
+        .unwrap();
+    let supervisor_approval = fx
+        .kernel
+        .request_approval(RequestApprovalInput {
+            goal_id: fx.goal.goal_id.clone(),
+            task_id: Some(fx.task.task_id.clone()),
+            requested_by_agent_id: supervisor.agent_id.clone(),
+            approval_type: ApprovalType::Human,
+            scope: ApprovalScope {
+                syscall_types: vec!["tool.invoke".to_string()],
+                resource_scopes: vec![json!("tool:*")],
+                risk_ceiling: 6,
+                goal_id: fx.goal.goal_id.clone(),
+                task_id: Some(fx.task.task_id.clone()),
+            },
+            risk_level: 6,
+            expires_at: None,
+        })
+        .unwrap();
+    fx.kernel
+        .record_approval(RecordApprovalInput {
+            approval_id: supervisor_approval.approval_id.clone(),
+            status: ApprovalStatus::Approved,
+            decision_by: "human".to_string(),
+            decision_reason: Some("approve supervisor process stdin write".to_string()),
+        })
+        .unwrap();
+    let supervisor_cap = fx
+        .kernel
+        .grant_capability(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            6,
+            Some(supervisor_approval.approval_id),
+        )
+        .unwrap();
+    let stdin_command = if cfg!(windows) {
+        "$line = [Console]::In.ReadLine(); Write-Output \"stdin:$line\"; Start-Sleep -Seconds 2"
+    } else {
+        "IFS= read -r line; printf 'stdin:%s\n' \"$line\"; sleep 2"
+    };
+    let command = fx
+        .kernel
+        .invoke_tool(
+            &worker.agent_id,
+            &fx.task.task_id,
+            &worker.session_id,
+            command_cap.capability_id,
+            4,
+            ToolInvokeInput {
+                tool_name: "run_command".to_string(),
+                input: json!({
+                    "command": stdin_command,
+                    "stdin": "piped",
+                    "cwd": workspace.to_string_lossy()
+                }),
+                evidence_claim: Some("stdin command started".to_string()),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(command.status, ToolCallStatus::Running);
+    let process_id = command
+        .output
+        .as_ref()
+        .and_then(|output| output.get("process_id"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap()
+        .to_string();
+    let mut process_session = fx
+        .kernel
+        .state_snapshot()
+        .unwrap()
+        .process_sessions
+        .get(&process_id)
+        .unwrap()
+        .clone();
+    let running_started = std::time::Instant::now();
+    while process_session.state != ProcessLifecycleState::Running
+        && running_started.elapsed() < std::time::Duration::from_secs(5)
+    {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        process_session = fx
+            .kernel
+            .state_snapshot()
+            .unwrap()
+            .process_sessions
+            .get(&process_id)
+            .unwrap()
+            .clone();
+    }
+    assert_eq!(process_session.state, ProcessLifecycleState::Running);
+    assert_eq!(process_session.stdin_mode, ProcessStdinMode::Piped);
+
+    let send_payload = json!({
+        "action": "send",
+        "thread_id": worker.thread_id,
+        "payload": {
+            "process_id": process_id,
+            "write_id": "stdin-write-1",
+            "text": "codex-stdin\n"
+        }
+    });
+    let send = fx
+        .kernel
+        .invoke_tool(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            &supervisor.session_id,
+            supervisor_cap.capability_id.clone(),
+            4,
+            ToolInvokeInput {
+                tool_name: "agent_control".to_string(),
+                input: send_payload.clone(),
+                evidence_claim: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(send.status, ToolCallStatus::Completed, "{:?}", send.output);
+    assert_eq!(
+        send.output
+            .as_ref()
+            .and_then(|output| output.pointer("/output/stdin_write/write_id"))
+            .and_then(serde_json::Value::as_str),
+        Some("stdin-write-1")
+    );
+
+    let duplicate = fx
+        .kernel
+        .invoke_tool(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            &supervisor.session_id,
+            supervisor_cap.capability_id.clone(),
+            4,
+            ToolInvokeInput {
+                tool_name: "agent_control".to_string(),
+                input: send_payload,
+                evidence_claim: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        duplicate
+            .output
+            .as_ref()
+            .and_then(|output| output.pointer("/output/stdin_write/sequence"))
+            .and_then(serde_json::Value::as_u64),
+        Some(1)
+    );
+    let state_after_writes = fx.kernel.state_snapshot().unwrap();
+    assert_eq!(
+        state_after_writes
+            .process_stdin_writes
+            .iter()
+            .filter(|write| write.process_id == process_id)
+            .count(),
+        1
+    );
+
+    let mut stdin_output = String::new();
+    let poll_started = std::time::Instant::now();
+    while poll_started.elapsed() < std::time::Duration::from_secs(8) {
+        let queried = fx
+            .kernel
+            .invoke_tool(
+                &supervisor.agent_id,
+                &fx.task.task_id,
+                &supervisor.session_id,
+                supervisor_cap.capability_id.clone(),
+                1,
+                ToolInvokeInput {
+                    tool_name: "agent_control".to_string(),
+                    input: json!({
+                        "action": "output",
+                        "thread_id": worker.thread_id,
+                        "payload": {
+                            "process_id": process_id,
+                            "field": "stdout"
+                        }
+                    }),
+                    evidence_claim: None,
+                },
+            )
+            .unwrap();
+        stdin_output = queried
+            .output
+            .as_ref()
+            .and_then(|output| output.pointer("/output/process_output/chunks"))
+            .and_then(serde_json::Value::as_array)
+            .unwrap()
+            .iter()
+            .filter_map(|chunk| chunk.get("text").and_then(serde_json::Value::as_str))
+            .collect::<Vec<_>>()
+            .join("");
+        if stdin_output.contains("stdin:codex-stdin") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    assert!(stdin_output.contains("stdin:codex-stdin"));
+
+    let replayed = Kernel::from_events(&fx.kernel.events().unwrap()).unwrap();
+    let replayed_state = replayed.state_snapshot().unwrap();
+    assert_eq!(
+        replayed_state
+            .process_stdin_writes
+            .iter()
+            .filter(|write| write.process_id == process_id)
+            .count(),
+        1
+    );
+
+    let _ = std::fs::remove_dir_all(workspace);
+}
+
+#[test]
 fn default_tool_registry_is_minimal() {
     let fx = fixture();
     let state = fx.kernel.state_snapshot().unwrap();

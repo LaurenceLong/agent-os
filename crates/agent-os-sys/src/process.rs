@@ -32,6 +32,7 @@ pub enum ProcessTtyMode {
 pub enum ProcessStdinMode {
     #[default]
     Closed,
+    Piped,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -61,6 +62,17 @@ pub struct ProcessOutputChunk {
     pub sequence: u64,
     pub start_byte: u64,
     pub end_byte: u64,
+    pub bytes: u64,
+    pub text: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProcessStdinWrite {
+    pub write_id: String,
+    pub process_id: String,
+    pub tool_call_id: String,
+    pub sequence: u64,
     pub bytes: u64,
     pub text: String,
     pub created_at: String,

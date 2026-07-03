@@ -16,13 +16,7 @@ pub(super) fn apply_lifecycle_action(
 ) -> AgentOsResult<AgentControlActionResult> {
     match action {
         AgentControlAction::Output => output_for_target(kernel, target, payload),
-        AgentControlAction::Send => Ok(AgentControlActionResult {
-            thread_status: target.status,
-            output: json!({
-                "sent": true,
-                "payload": payload,
-            }),
-        }),
+        AgentControlAction::Send => send_to_target(kernel, target, payload),
         AgentControlAction::Resume => {
             let acb = resume_target(kernel, syscall, target)?;
             Ok(AgentControlActionResult {
@@ -97,6 +91,49 @@ pub(super) fn apply_lifecycle_action(
             "invalid lifecycle action dispatch: {action:?}"
         ))),
     }
+}
+
+fn send_to_target(
+    kernel: &Kernel,
+    target: &AgentControlBlock,
+    payload: &Value,
+) -> AgentOsResult<AgentControlActionResult> {
+    if let Some(process_id) = payload.get("process_id").and_then(Value::as_str) {
+        let session = kernel
+            .read_state()?
+            .process_sessions
+            .get(process_id)
+            .filter(|session| {
+                session.agent_id == target.agent_id || session.task_id == target.task.task_id
+            })
+            .cloned()
+            .ok_or_else(|| AgentOsError::NotFound(format!("process session {process_id}")))?;
+        let write_id = payload
+            .get("write_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                AgentOsError::Validation("process send requires payload.write_id".to_string())
+            })?;
+        let text = payload.get("text").and_then(Value::as_str).ok_or_else(|| {
+            AgentOsError::Validation("process send requires payload.text".to_string())
+        })?;
+        let write = kernel.write_process_stdin(&session.process_id, write_id, text)?;
+        return Ok(AgentControlActionResult {
+            thread_status: target.status,
+            output: json!({
+                "sent": true,
+                "process_id": session.process_id,
+                "stdin_write": write,
+            }),
+        });
+    }
+    Ok(AgentControlActionResult {
+        thread_status: target.status,
+        output: json!({
+            "sent": true,
+            "payload": payload,
+        }),
+    })
 }
 
 fn output_for_target(

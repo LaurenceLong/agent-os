@@ -133,6 +133,9 @@ Tool driver tests MUST verify:
 - process output chunks are appended as replayable sequence events, and
   `agent_control(action=output)` can poll by `process_id` plus
   `after_sequence`
+- `run_command` supports explicit `stdin="piped"` process sessions, and
+  `agent_control(action=send)` writes stdin by `process_id`, `write_id`, and
+  `text` with replayable idempotent `ProcessStdinWritten` records
 - descriptor-declared evidence attachment for workspace, command, control-plane,
   and permission tools so final `evidence_map` entries can cite real evidence ids
 

@@ -3,6 +3,7 @@ use agent_os_sys::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
+use std::process::ChildStdin;
 use std::sync::{Arc, Mutex, RwLock};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -31,6 +32,7 @@ pub struct KernelState {
     pub provider_stream_sessions: HashMap<String, ProviderStreamSession>,
     pub process_sessions: HashMap<String, ProcessSession>,
     pub process_output_chunks: Vec<ProcessOutputChunk>,
+    pub process_stdin_writes: Vec<ProcessStdinWrite>,
     pub communication_profiles: HashMap<String, CommunicationProfile>,
     pub capabilities: HashMap<String, CapabilityToken>,
     pub tool_descriptors: HashMap<String, ToolDescriptor>,
@@ -79,6 +81,7 @@ pub(crate) struct ToolWorkerRecord {
     pub call_id: String,
     pub tool_name: String,
     pub started_at: String,
+    pub stdin: Option<Arc<Mutex<ChildStdin>>>,
     pub output: ToolWorkerOutput,
 }
 
@@ -213,6 +216,7 @@ fn clear_event_projection(state: &mut KernelState) {
     state.provider_stream_sessions.clear();
     state.process_sessions.clear();
     state.process_output_chunks.clear();
+    state.process_stdin_writes.clear();
     state.tool_invocations.clear();
     state.capabilities.clear();
     state.environments.clear();

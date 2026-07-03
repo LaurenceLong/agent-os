@@ -1,5 +1,6 @@
 use crate::state::Kernel;
 use agent_os_sys::*;
+use std::io::Write;
 
 pub(crate) struct StartProcessSessionInput {
     pub tool_call_id: String,
@@ -17,6 +18,7 @@ pub(crate) struct StartProcessSessionInput {
     pub executed_program: String,
     pub executed_args: Vec<String>,
     pub environment_keys: Vec<String>,
+    pub stdin_mode: ProcessStdinMode,
 }
 
 impl Kernel {
@@ -43,7 +45,7 @@ impl Kernel {
             executed_args: input.executed_args,
             environment_keys: input.environment_keys,
             tty_mode: ProcessTtyMode::None,
-            stdin_mode: ProcessStdinMode::Closed,
+            stdin_mode: input.stdin_mode,
             os_pid: None,
             state: ProcessLifecycleState::Starting,
             exit_code: None,
@@ -163,6 +165,101 @@ impl Kernel {
             &chunk,
         )?;
         Ok(chunk)
+    }
+
+    pub(crate) fn write_process_stdin(
+        &self,
+        process_id: &str,
+        write_id: &str,
+        text: &str,
+    ) -> AgentOsResult<ProcessStdinWrite> {
+        if write_id.is_empty() {
+            return Err(AgentOsError::Validation(
+                "process stdin write_id must not be empty".to_string(),
+            ));
+        }
+        if text.is_empty() {
+            return Err(AgentOsError::Validation(
+                "process stdin text must not be empty".to_string(),
+            ));
+        }
+        if let Some(existing) = self
+            .read_state()?
+            .process_stdin_writes
+            .iter()
+            .find(|write| write.process_id == process_id && write.write_id == write_id)
+            .cloned()
+        {
+            if existing.text != text {
+                return Err(AgentOsError::Validation(
+                    "process stdin write_id already exists with different text".to_string(),
+                ));
+            }
+            return Ok(existing);
+        }
+        let session = self.process_session(process_id)?;
+        if session.state != ProcessLifecycleState::Running {
+            return Err(AgentOsError::Validation(format!(
+                "process stdin requires running process, found {:?}",
+                session.state
+            )));
+        }
+        if session.stdin_mode != ProcessStdinMode::Piped {
+            return Err(AgentOsError::Validation(
+                "process stdin requires piped stdin mode".to_string(),
+            ));
+        }
+        let stdin = self
+            .tool_workers
+            .lock()
+            .map_err(|_| {
+                AgentOsError::Validation("tool worker registry lock poisoned".to_string())
+            })?
+            .get(&session.tool_call_id)
+            .and_then(|worker| worker.stdin.clone())
+            .ok_or_else(|| {
+                AgentOsError::NotFound(format!("process stdin {}", session.process_id))
+            })?;
+        {
+            let mut stdin = stdin
+                .lock()
+                .map_err(|_| AgentOsError::Validation("process stdin lock poisoned".to_string()))?;
+            stdin
+                .write_all(text.as_bytes())
+                .and_then(|_| stdin.flush())
+                .map_err(|error| {
+                    AgentOsError::Validation(format!("write process stdin: {error}"))
+                })?;
+        }
+        let sequence = self
+            .read_state()?
+            .process_stdin_writes
+            .iter()
+            .filter(|write| write.process_id == process_id)
+            .map(|write| write.sequence)
+            .max()
+            .unwrap_or(0)
+            + 1;
+        let write = ProcessStdinWrite {
+            write_id: write_id.to_string(),
+            process_id: session.process_id.clone(),
+            tool_call_id: session.tool_call_id.clone(),
+            sequence,
+            bytes: text.len() as u64,
+            text: text.to_string(),
+            created_at: now_rfc3339(),
+        };
+        self.emit(
+            "ProcessStdinWritten",
+            "process_session",
+            &write.process_id,
+            Some(session.agent_id),
+            Some(session.task_id),
+            Some(write.tool_call_id.clone()),
+            None,
+            &write,
+        )?;
+        Ok(write)
     }
 
     pub(crate) fn process_session_by_tool_call_id(

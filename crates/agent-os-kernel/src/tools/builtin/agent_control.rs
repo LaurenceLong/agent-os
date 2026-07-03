@@ -17,7 +17,7 @@ fn descriptor(now: &str) -> ToolDescriptor {
         schema::DescriptorSpec {
             tool_id: "tool_agent_control",
             name: "agent_control",
-            description: "Supervisor control for child agent lifecycle, status, bounded output, hooks, permission decisions, and privileged state actions. Documented action families are start: start; read-only: status, output, export_trace; mutation: set_hook, send, resume, set_timeout; terminal: stop, kill; cleanup: delete_session, purge_state; permission: approve_permission, deny_permission. Use either agent_id or thread_id when targeting an existing agent. Do not invent agent_id or thread_id values. For action=output, omit payload.tool_call_id unless an exact non-empty background tool call id is provided.",
+            description: "Supervisor control for child agent lifecycle, status, bounded output, hooks, process stdin, permission decisions, and privileged state actions. Documented action families are start: start; read-only: status, output, export_trace; mutation: set_hook, send, resume, set_timeout; terminal: stop, kill; cleanup: delete_session, purge_state; permission: approve_permission, deny_permission. Use either agent_id or thread_id when targeting an existing agent. Do not invent agent_id or thread_id values. For action=output, omit payload.tool_call_id unless an exact non-empty background tool call id is provided. For action=send with payload.process_id, provide payload.write_id and payload.text.",
             driver_class: ToolDriverClass::KernelBuiltin,
             risk_level: 6,
             input_schema: input_schema(),
@@ -92,6 +92,19 @@ fn descriptor(now: &str) -> ToolDescriptor {
                         "payload": {"message": "Focus on the parser failure before editing."}
                     }),
                     "Records a supervised follow-up command for the target child session.",
+                ),
+                schema::example(
+                    "Mutation family: write stdin to a running process by process_id.",
+                    json!({
+                        "action": "send",
+                        "thread_id": "thread_example",
+                        "payload": {
+                            "process_id": "proc_example",
+                            "write_id": "stdin_example_1",
+                            "text": "answer\n"
+                        }
+                    }),
+                    "Writes stdin exactly once for the write_id and returns the retained stdin write record.",
                 ),
                 schema::example(
                     "Mutation family: resume a persisted child session.",
@@ -224,7 +237,7 @@ fn input_schema() -> Value {
             "idempotency_key": {"type": "string"},
             "payload": {
                 "type": "object",
-                "description": "Action-specific payload. start requires payload.goal. set_hook requires payload.prompt. send uses payload.message. set_timeout uses payload.timeout_seconds or payload.timeout_ms. output accepts payload.cursor and payload.limit for child-thread output; omit tool_call_id unless you know the exact non-empty background tool call id. approve_permission requires payload.permission_request_id and payload.permissions; deny_permission requires payload.permission_request_id."
+                "description": "Action-specific payload. start requires payload.goal. set_hook requires payload.prompt. send uses payload.message for child follow-up; send with payload.process_id requires payload.write_id and payload.text for process stdin. set_timeout uses payload.timeout_seconds or payload.timeout_ms. output accepts payload.cursor and payload.limit for child-thread output; omit tool_call_id unless you know the exact non-empty background tool call id. approve_permission requires payload.permission_request_id and payload.permissions; deny_permission requires payload.permission_request_id."
             }
         }),
     )
@@ -277,10 +290,16 @@ mod tests {
         assert!(payload_description.contains("omit tool_call_id"));
         assert!(payload_description.contains("payload.limit"));
         assert!(payload_description.contains("payload.goal"));
+        assert!(payload_description.contains("payload.write_id"));
         assert!(descriptor.examples.iter().any(|example| {
             example.parameters["action"] == "output"
                 && example.parameters["thread_id"] == "thread_example"
                 && example.parameters["payload"]["limit"] == 20
+        }));
+        assert!(descriptor.examples.iter().any(|example| {
+            example.parameters["action"] == "send"
+                && example.parameters["payload"]["process_id"] == "proc_example"
+                && example.parameters["payload"]["write_id"] == "stdin_example_1"
         }));
     }
 
