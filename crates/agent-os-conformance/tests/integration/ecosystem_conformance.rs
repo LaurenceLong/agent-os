@@ -75,6 +75,121 @@ fn ecosystem_imports_project_sources_and_replays_kernel_events() {
 }
 
 #[test]
+fn package_install_enable_disable_state_replays_from_kernel_events() {
+    let workspace = temp_workspace("agent-os-package-install-state");
+    fs::create_dir_all(workspace.join(".agent-os/prompts")).unwrap();
+    fs::create_dir_all(workspace.join(".agent-os/policy")).unwrap();
+    fs::write(
+        workspace.join(".agent-os/prompts/supervisor.md"),
+        "Prompt\n",
+    )
+    .unwrap();
+    fs::write(workspace.join(".agent-os/policy/review.json"), "{}\n").unwrap();
+    fs::write(
+        workspace.join(".agent-os/manifest.json"),
+        r#"{
+  "manifest_version": "0.1",
+  "package_name": "governed-package",
+  "package_type": "agent",
+  "version": "0.1.0",
+  "entrypoint": "prompts/supervisor.md",
+  "required_kernel_version": "0.3",
+  "capabilities_requested": ["tool.invoke"],
+  "roles_provided": ["ProducerAgent"],
+  "tools_provided": [],
+  "schemas": ["policy/review.json"],
+  "signature": null
+}
+"#,
+    )
+    .unwrap();
+    let catalog = discover_ecosystem(&EcosystemDiscoverOptions {
+        workspace_root: workspace.clone(),
+        paths: test_paths(&workspace),
+    })
+    .unwrap();
+    let package = catalog.package_manifests[0].clone();
+
+    let kernel = Kernel::new();
+    let install = kernel
+        .install_package_manifest(
+            package.clone(),
+            PackageInstallProvenance {
+                installed_by: "conformance".to_string(),
+                reason: Some("test install".to_string()),
+            },
+        )
+        .unwrap();
+    assert_eq!(install.manifest.package_name, "governed-package");
+    assert_eq!(install.status, PackageInstallStatus::Enabled);
+    assert_eq!(
+        kernel
+            .state_snapshot()
+            .unwrap()
+            .package_installs
+            .get("governed-package")
+            .unwrap()
+            .content_hash,
+        package.content_hash
+    );
+
+    let duplicate = kernel
+        .install_package_manifest(
+            package,
+            PackageInstallProvenance {
+                installed_by: "conformance".to_string(),
+                reason: None,
+            },
+        )
+        .unwrap_err();
+    assert!(
+        matches!(duplicate, AgentOsError::Validation(ref message) if message.contains("already installed")),
+        "{duplicate:?}"
+    );
+
+    let disabled = kernel
+        .disable_package("governed-package", "disabled by policy")
+        .unwrap();
+    assert_eq!(disabled.status, PackageInstallStatus::Disabled);
+    assert_eq!(
+        disabled.disabled_reason.as_deref(),
+        Some("disabled by policy")
+    );
+    let enabled = kernel.enable_package("governed-package").unwrap();
+    assert_eq!(enabled.status, PackageInstallStatus::Enabled);
+    assert_eq!(enabled.disabled_reason, None);
+
+    let events = kernel.events().unwrap();
+    assert!(events
+        .iter()
+        .any(|event| event.event_type == "PackageInstalled"));
+    assert!(events
+        .iter()
+        .any(|event| event.event_type == "PackageDisabled"));
+    assert!(events
+        .iter()
+        .any(|event| event.event_type == "PackageEnabled"));
+
+    let replayed = Kernel::from_events(&events).unwrap();
+    let replayed_state = replayed.state_snapshot().unwrap();
+    let replayed_package = replayed_state
+        .package_installs
+        .get("governed-package")
+        .unwrap();
+    assert_eq!(replayed_package.status, PackageInstallStatus::Enabled);
+    assert_eq!(
+        replayed_package.manifest.entrypoint,
+        "prompts/supervisor.md"
+    );
+    assert_eq!(
+        replayed_package.install_provenance.installed_by,
+        "conformance"
+    );
+
+    let _ = fs::remove_dir_all(workspace);
+}
+
+#[test]
 fn ecosystem_project_agent_os_overrides_agents_and_claude_skill_names() {
     let workspace = temp_workspace("agent-os-ecosystem-duplicate-skill");
     for (root, marker) in [

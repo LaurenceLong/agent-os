@@ -345,6 +345,12 @@ impl Kernel {
                     .memory_records
                     .insert(memory.memory_id.clone(), memory);
             }
+            "PackageInstalled" | "PackageEnabled" | "PackageDisabled" => {
+                let install: PackageInstallRecord = parse_payload(&event.payload)?;
+                state
+                    .package_installs
+                    .insert(install.manifest.package_name.clone(), install);
+            }
             "InstructionDocumentImported" => {
                 let document: InstructionDocument = parse_payload(&event.payload)?;
                 state

@@ -18,6 +18,7 @@ mod export;
 mod goals;
 mod inputs;
 mod memento;
+mod packages;
 mod permissions;
 mod process;
 mod profile_seed;

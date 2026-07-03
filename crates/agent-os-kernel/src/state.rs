@@ -55,6 +55,7 @@ pub struct KernelState {
     pub audit_events: HashMap<String, AuditEvent>,
     pub locks: HashMap<String, Lock>,
     pub memory_records: HashMap<String, MemoryRecord>,
+    pub package_installs: HashMap<String, PackageInstallRecord>,
     pub instruction_documents: HashMap<String, InstructionDocument>,
     pub skill_definitions: HashMap<String, SkillDefinition>,
     pub command_definitions: HashMap<String, CommandDefinition>,
@@ -236,6 +237,7 @@ fn clear_event_projection(state: &mut KernelState) {
     state.audit_events.clear();
     state.locks.clear();
     state.memory_records.clear();
+    state.package_installs.clear();
     state.instruction_documents.clear();
     state.skill_definitions.clear();
     state.command_definitions.clear();
