@@ -28,12 +28,24 @@ pub(in crate::tools) fn run_agent_control(
 ) -> AgentOsResult<Value> {
     let action_text = required_string(input, "action")?;
     let action = action::parse_agent_control_action(&action_text)?;
-    action::require_agent_control_action_risk(action, syscall.risk_level)?;
     let payload = input.get("payload").cloned().unwrap_or_else(|| json!({}));
     let requester = kernel
         .thread_by_agent(&syscall.agent_id)?
         .ok_or_else(|| AgentOsError::NotFound(format!("agent {}", syscall.agent_id)))?;
     kernel.require_control_plane_security_level(&requester, "agent_control")?;
+    if let Err(error) = action::require_agent_control_action_risk(action, syscall.risk_level) {
+        let target = target::resolve_agent_control_target(kernel, input, &payload).ok();
+        command::record_agent_control_command(
+            kernel,
+            syscall,
+            &requester,
+            target.as_ref(),
+            action,
+            payload,
+            AgentControlCommandStatus::Rejected,
+        )?;
+        return Err(error);
+    }
     match action {
         AgentControlAction::Start => {
             let goal = required_string(&payload, "goal")?;

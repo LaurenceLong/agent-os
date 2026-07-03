@@ -538,6 +538,16 @@ fn goal_driven_runtime_integration_rejects_understated_privileged_agent_control_
                 && invocation.status == ToolCallStatus::Failed
                 && invocation.input.get("action").and_then(Value::as_str) == Some(case.action)
         }));
+        let expected_action = match case.action {
+            "kill" => AgentControlAction::Kill,
+            "delete_session" => AgentControlAction::DeleteSession,
+            "purge_state" => AgentControlAction::PurgeState,
+            _ => unreachable!("unexpected rejection action {}", case.action),
+        };
+        assert!(state.agent_control_commands.values().any(|command| {
+            command.action == expected_action
+                && command.status == AgentControlCommandStatus::Rejected
+        }));
         write_audit_log(
             &format!(
                 "goal-driven-agent-control-{}-rejection-integration.jsonl",

@@ -274,7 +274,7 @@ Full tool surface:
 
 Privileged agent_control rejection:
   cargo test -p agent-os-conformance goal_driven_runtime_integration_rejects_understated_privileged_agent_control_risk
-  expected coverage: goal-driven runtime recovery when kill, delete_session, and purge_state are attempted with understated risk level 4 and rejected by the kernel risk guard
+  expected coverage: goal-driven runtime recovery when kill, delete_session, and purge_state are attempted with understated risk level 4, rejected by the kernel risk guard, and recorded as Rejected agent_control commands in the append-only store
 
 Ecosystem context:
   cargo test -p agent-os-thread live_openai_chat_completions_llm_goal_driven_ecosystem_e2e -- --ignored --nocapture
