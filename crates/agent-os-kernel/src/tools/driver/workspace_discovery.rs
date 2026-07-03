@@ -375,7 +375,7 @@ struct IgnoreRule {
 #[derive(Debug, Clone, Default)]
 struct IgnoreRules {
     rules: Vec<IgnoreRule>,
-    has_configured_ignore: bool,
+    has_gitignore: bool,
 }
 
 fn load_ignore_rules_to_scope(root: &Path, scope: &Path) -> AgentOsResult<IgnoreRules> {
@@ -407,7 +407,9 @@ fn load_ignore_rules(
         if !ignore_file.exists() {
             continue;
         }
-        rules.has_configured_ignore = true;
+        if ignore_file_name == ".gitignore" {
+            rules.has_gitignore = true;
+        }
         let content = fs::read_to_string(&ignore_file).map_err(|error| {
             AgentOsError::Validation(format!("read {ignore_file_name}: {error}"))
         })?;
@@ -454,7 +456,7 @@ fn is_ignored_discovery_path(root: &Path, path: &Path, is_dir: bool, rules: &Ign
     if is_dir && is_always_ignored_dir(path) {
         return true;
     }
-    if is_dir && !rules.has_configured_ignore && is_default_ignored_dir(path) {
+    if is_dir && !rules.has_gitignore && is_default_ignored_dir(path) {
         return true;
     }
     let relative = workspace_relative_path(root, path);
@@ -949,7 +951,7 @@ mod tests {
     }
 
     #[test]
-    fn discovery_lets_ignore_file_configuration_own_target_and_node_modules() {
+    fn discovery_reads_ignore_file_without_disabling_default_dirs() {
         let root = std::env::temp_dir().join(format!(
             "agent-os-discovery-ignore-file-unit-{}-{}",
             std::process::id(),
@@ -960,8 +962,13 @@ mod tests {
         ));
         fs::create_dir_all(root.join("target")).unwrap();
         fs::create_dir_all(root.join("node_modules")).unwrap();
-        fs::write(root.join(".ignore"), "").unwrap();
+        fs::write(root.join(".ignore"), "ignored-by-ignore.txt\n").unwrap();
         fs::write(root.join("visible.txt"), "needle visible\n").unwrap();
+        fs::write(
+            root.join("ignored-by-ignore.txt"),
+            "needle ignored by ignore\n",
+        )
+        .unwrap();
         fs::write(root.join("target/generated.txt"), "needle target\n").unwrap();
         fs::write(root.join("node_modules/package.txt"), "needle module\n").unwrap();
 
@@ -983,22 +990,14 @@ mod tests {
             glob,
         )
         .unwrap();
-        let mut glob_paths = glob_output["matches"]
+        let glob_paths = glob_output["matches"]
             .as_array()
             .unwrap()
             .iter()
             .map(|item| item["path"].as_str().unwrap())
             .collect::<Vec<_>>();
-        glob_paths.sort();
-        assert_eq!(
-            glob_paths,
-            vec![
-                "node_modules/package.txt",
-                "target/generated.txt",
-                "visible.txt"
-            ]
-        );
-        assert_eq!(glob_output["files_skipped"], 0);
+        assert_eq!(glob_paths, vec!["visible.txt"]);
+        assert_eq!(glob_output["files_skipped"], 3);
 
         let _ = fs::remove_dir_all(root);
     }
