@@ -267,6 +267,11 @@ Anthropic-compatible control plane:
   cargo test -p agent-os-thread live_anthropic_messages_llm_goal_driven_control_plane_e2e -- --ignored --nocapture
   expected coverage: set_goal, accomplish_goal, update_checklist, record_evidence, report_supervisor, post_blackboard, ask_human, request_permissions, agent_control, read_file, submit_final
 
+Full tool surface:
+  cargo test -p agent-os-thread live_openai_chat_completions_llm_goal_driven_full_tool_surface_e2e -- --ignored --nocapture
+  cargo test -p agent-os-thread live_anthropic_messages_llm_goal_driven_full_tool_surface_e2e -- --ignored --nocapture
+  expected coverage: workspace tools, control-plane tools, agent_control action families, and parameter branches for read_file offset/limit, glob_files path/offset/limit, and grep_files path/include/case_sensitive/offset/limit
+
 Scoped context projection:
   cargo test -p agent-os-thread live_openai_chat_completions_llm_goal_driven_scoped_context_e2e -- --ignored --nocapture
   cargo test -p agent-os-thread live_anthropic_messages_llm_goal_driven_scoped_context_e2e -- --ignored --nocapture

@@ -1337,6 +1337,186 @@ fn assert_run_command_succeeded_with_stdout(report: &RuntimeRunReport, expected_
     );
 }
 
+fn assert_read_file_parameters_observed(report: &RuntimeRunReport) {
+    let record = report
+        .tool_results
+        .iter()
+        .find(|record| {
+            record.tool_name == "read_file"
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("path"))
+                    .and_then(Value::as_str)
+                    == Some("paged.txt")
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("offset"))
+                    .and_then(Value::as_u64)
+                    == Some(2)
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("limit"))
+                    .and_then(Value::as_u64)
+                    == Some(2)
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "missing parameterized read_file call: {:?}",
+                report.tool_results
+            )
+        });
+    let output = record
+        .output
+        .as_ref()
+        .unwrap_or_else(|| panic!("missing read_file output: {record:?}"));
+    assert_eq!(output.get("offset").and_then(Value::as_u64), Some(2));
+    assert_eq!(output.get("limit").and_then(Value::as_u64), Some(2));
+    assert_eq!(
+        output.get("returned_lines").and_then(Value::as_u64),
+        Some(2)
+    );
+    assert_eq!(output.get("next_offset").and_then(Value::as_u64), Some(4));
+    let content = output
+        .get("content")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("missing read_file content: {record:?}"));
+    assert!(content.contains("page-two"));
+    assert!(content.contains("page-three"));
+    assert!(!content.contains("page-one"));
+}
+
+fn assert_glob_parameters_observed(report: &RuntimeRunReport) {
+    let record = report
+        .tool_results
+        .iter()
+        .find(|record| {
+            record.tool_name == "glob_files"
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("path"))
+                    .and_then(Value::as_str)
+                    == Some("notes")
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("pattern"))
+                    .and_then(Value::as_str)
+                    == Some("*.txt")
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("offset"))
+                    .and_then(Value::as_u64)
+                    == Some(1)
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("limit"))
+                    .and_then(Value::as_u64)
+                    == Some(1)
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "missing parameterized glob_files call: {:?}",
+                report.tool_results
+            )
+        });
+    let output = record
+        .output
+        .as_ref()
+        .unwrap_or_else(|| panic!("missing glob_files output: {record:?}"));
+    assert_eq!(output.get("path").and_then(Value::as_str), Some("notes"));
+    assert_eq!(output.get("offset").and_then(Value::as_u64), Some(1));
+    assert_eq!(output.get("limit").and_then(Value::as_u64), Some(1));
+    assert_eq!(
+        output.get("returned_matches").and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        output.pointer("/matches/0/path").and_then(Value::as_str),
+        Some("notes/b.txt")
+    );
+}
+
+fn assert_grep_parameters_observed(report: &RuntimeRunReport) {
+    let record = report
+        .tool_results
+        .iter()
+        .find(|record| {
+            record.tool_name == "grep_files"
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("path"))
+                    .and_then(Value::as_str)
+                    == Some("notes")
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("include"))
+                    .and_then(Value::as_str)
+                    == Some("*.txt")
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("pattern"))
+                    .and_then(Value::as_str)
+                    == Some("Needle")
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("case_sensitive"))
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("offset"))
+                    .and_then(Value::as_u64)
+                    == Some(1)
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("limit"))
+                    .and_then(Value::as_u64)
+                    == Some(1)
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "missing parameterized grep_files call: {:?}",
+                report.tool_results
+            )
+        });
+    let output = record
+        .output
+        .as_ref()
+        .unwrap_or_else(|| panic!("missing grep_files output: {record:?}"));
+    assert_eq!(output.get("path").and_then(Value::as_str), Some("notes"));
+    assert_eq!(output.get("include").and_then(Value::as_str), Some("*.txt"));
+    assert_eq!(
+        output.get("case_sensitive").and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(output.get("offset").and_then(Value::as_u64), Some(1));
+    assert_eq!(output.get("limit").and_then(Value::as_u64), Some(1));
+    assert_eq!(
+        output.get("returned_matches").and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        output.pointer("/matches/0/path").and_then(Value::as_str),
+        Some("notes/b.txt")
+    );
+    assert_eq!(
+        output.pointer("/matches/0/line").and_then(Value::as_str),
+        Some("Needle second")
+    );
+}
+
 fn assert_no_completed_read_image(report: &RuntimeRunReport) {
     let completed_read_image = report.tool_results.iter().any(|record| {
         record.tool_name == "read_image" && record.status == agent_os_sys::ToolCallStatus::Completed
@@ -1732,6 +1912,19 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
     let api_base = live_env_var(base_env);
     let tmp = fresh_live_tmp("aos-live-goal-full-surface", provider);
     std::fs::write(tmp.join("read.txt"), "read me from live full surface\n").unwrap();
+    std::fs::write(
+        tmp.join("paged.txt"),
+        "page-one\npage-two\npage-three\npage-four\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(tmp.join("notes")).unwrap();
+    std::fs::write(
+        tmp.join("notes").join("a.txt"),
+        "Needle first\nneedle lower\n",
+    )
+    .unwrap();
+    std::fs::write(tmp.join("notes").join("b.txt"), "Needle second\n").unwrap();
+    std::fs::write(tmp.join("notes").join("c.md"), "Needle markdown\n").unwrap();
     std::fs::write(tmp.join("edit.txt"), "status=old\nkeep=this line\n").unwrap();
     std::fs::write(tmp.join("obsolete.tmp"), "delete this file\n").unwrap();
     let verifier_command = write_full_surface_verifier(&tmp);
@@ -1758,7 +1951,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
             &tmp,
             "role_producer",
             &format!(
-                "Complete this focused workspace validation. Use glob_files to locate read.txt by path pattern, use grep_files to confirm read.txt contains read me, then read read.txt. Use apply_patch for every workspace mutation: add created.txt with exactly FULL_TOOL_SURFACE_OK followed by one newline, update edit.txt by replacing status=old with status=new, and delete obsolete.tmp with an apply_patch delete operation. Use run_command only for the final verifier command {verifier_command}; do not use run_command for listing, deleting, grepping, or editing files. After the verifier succeeds, call accomplish_goal with a concise summary, then submit_final with summary exactly Workspace surface complete., evidence_map citing evidence_ids from completed tool results, tests_run containing {verifier_command}, and known_risks as an empty array. submit_final must be the last tool call."
+                "Complete this focused workspace validation. Use glob_files to locate read.txt by path pattern, use grep_files to confirm read.txt contains read me, then read read.txt. Also exercise workspace tool parameters: call read_file on paged.txt with offset 2 and limit 2; call glob_files with path notes, pattern *.txt, offset 1, and limit 1 so it returns the second txt file; call grep_files with path notes, include *.txt, pattern Needle, case_sensitive true, offset 1, and limit 1 so it returns the second case-sensitive txt match and excludes c.md and lower-case needle. Use apply_patch for every workspace mutation: add created.txt with exactly FULL_TOOL_SURFACE_OK followed by one newline, update edit.txt by replacing status=old with status=new, and delete obsolete.tmp with an apply_patch delete operation. Use run_command only for the final verifier command {verifier_command}; do not use run_command for listing, deleting, grepping, or editing files. After the verifier succeeds, call accomplish_goal with a concise summary, then submit_final with summary exactly Workspace surface complete., evidence_map citing evidence_ids from completed tool results, tests_run containing {verifier_command}, and known_risks as an empty array. submit_final must be the last tool call."
             ),
             Vec::new(),
             vec![ArtifactType::Patch],
@@ -1789,6 +1982,9 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
         "status=new\nkeep=this line\n"
     );
     assert!(!tmp.join("obsolete.tmp").exists());
+    assert_read_file_parameters_observed(&workspace_report);
+    assert_glob_parameters_observed(&workspace_report);
+    assert_grep_parameters_observed(&workspace_report);
     assert_live_goal_tools(
         &audit_log_path,
         provider,
