@@ -133,6 +133,7 @@ pub fn app_protocol_request_methods() -> Vec<AppMethodSpec> {
             ClientSession,
             Implemented,
         ),
+        method("process/list", Process, ClientSession, Implemented),
         method("process/stop", Process, ClientSession, Implemented),
         method("process/kill", Process, ClientSession, Implemented),
         method(
@@ -346,6 +347,7 @@ mod tests {
 
         for method in [
             "thread/start",
+            "process/list",
             "process/stop",
             "model/list",
             "provider/capabilities/read",

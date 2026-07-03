@@ -80,6 +80,7 @@ fn app_protocol_export_freezes_current_agent_os_method_families() {
         "approval/respond",
         "resource/session/open",
         "resource/session/close",
+        "process/list",
         "process/stop",
         "process/kill",
         "automation/schedule/create",
@@ -141,6 +142,9 @@ fn app_protocol_schema_and_typescript_exports_match_versioned_contract() {
         .any(|method| method == "provider/capabilities/read"));
     assert!(request_methods
         .iter()
+        .any(|method| method == "process/list"));
+    assert!(request_methods
+        .iter()
         .any(|method| method == "process/kill"));
     assert!(notification_types
         .iter()
@@ -151,6 +155,7 @@ fn app_protocol_schema_and_typescript_exports_match_versioned_contract() {
     assert!(typescript.contains("export const APP_PROTOCOL_VERSION"));
     assert!(typescript.contains("\"agent-os.app.v1\""));
     assert!(typescript.contains("\"provider/capabilities/read\""));
+    assert!(typescript.contains("\"process/list\""));
 }
 
 fn human_client() -> ClientConnection {

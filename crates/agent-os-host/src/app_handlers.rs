@@ -12,9 +12,9 @@ use agent_os_sys::{
     AppProviderCapabilitiesProjection, AppProviderOperationProjection, AppProviderProjection,
     AppProviderUsageProjection, AppProviderUsageTotalsProjection, AppRequest, AppResponse,
     ApprovalStatus, ClientConnection, CreateAutomationScheduleInput, CredentialSource,
-    EcosystemSource, OpenResourceSessionInput, PermissionProfile, ProjectionCursor,
-    ProviderStreamEventType, ProviderStreamSession, ProviderStreamStatus, ResourceSessionType,
-    StatsQuery, ThreadStatus, TurnInputKind,
+    EcosystemSource, OpenResourceSessionInput, PermissionProfile, ProcessLifecycleState,
+    ProjectionCursor, ProviderStreamEventType, ProviderStreamSession, ProviderStreamStatus,
+    ResourceSessionType, StatsQuery, ThreadStatus, TurnInputKind,
 };
 use agent_os_thread::{RuntimeJob, RuntimeJobRecord};
 use serde::Serialize;
@@ -114,6 +114,7 @@ impl AppKernelService for AgentOsHost {
             AppRequest::ResourceSessionClose { session_id } => {
                 self.resource_session_close(&session_id)
             }
+            AppRequest::ProcessList { state } => self.process_list(state),
             AppRequest::ProcessStop { process_id, reason } => {
                 self.process_stop(client, process_id, reason)
             }
@@ -570,6 +571,22 @@ impl AgentOsHost {
     fn resource_session_close(&self, session_id: &str) -> AgentOsResult<AppResponse> {
         let session = self.kernel().close_resource_session(session_id)?;
         accepted("resource_session", session)
+    }
+
+    fn process_list(&self, state: Option<ProcessLifecycleState>) -> AgentOsResult<AppResponse> {
+        let snapshot = self.kernel().state_snapshot()?;
+        let mut sessions = snapshot
+            .process_sessions
+            .values()
+            .filter(|session| state.map(|state| session.state == state).unwrap_or(true))
+            .cloned()
+            .collect::<Vec<_>>();
+        sessions.sort_by(|left, right| {
+            left.started_at
+                .cmp(&right.started_at)
+                .then_with(|| left.process_id.cmp(&right.process_id))
+        });
+        accepted("process_sessions", sessions)
     }
 
     fn process_stop(

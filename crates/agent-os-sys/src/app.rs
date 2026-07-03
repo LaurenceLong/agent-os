@@ -1,7 +1,7 @@
 use crate::{
     AutomationScheduleKind, CredentialSource, EcosystemSourceKind, EcosystemSourceScope,
-    LlmApiStyle, ModelCapabilities, ModelLimit, ProviderStreamStatus, ResourceSessionType,
-    SecurityLevel, ThreadStatus, TurnStatus,
+    LlmApiStyle, ModelCapabilities, ModelLimit, ProcessLifecycleState, ProviderStreamStatus,
+    ResourceSessionType, SecurityLevel, ThreadStatus, TurnStatus,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -443,6 +443,11 @@ pub enum AppRequest {
         process_id: String,
         reason: Option<String>,
     },
+    #[serde(rename = "process/list")]
+    ProcessList {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        state: Option<ProcessLifecycleState>,
+    },
     #[serde(rename = "automation/schedule/create")]
     AutomationScheduleCreate {
         name: String,
@@ -594,6 +599,10 @@ mod tests {
 
     #[test]
     fn process_cleanup_requests_use_protocol_method_names() {
+        let list = serde_json::to_value(AppRequest::ProcessList {
+            state: Some(ProcessLifecycleState::Running),
+        })
+        .unwrap();
         let stop = serde_json::to_value(AppRequest::ProcessStop {
             process_id: "proc_1".to_string(),
             reason: Some("cleanup".to_string()),
@@ -605,6 +614,8 @@ mod tests {
         })
         .unwrap();
 
+        assert_eq!(list["method"], "process/list");
+        assert_eq!(list["params"]["state"], "running");
         assert_eq!(stop["method"], "process/stop");
         assert_eq!(stop["params"]["process_id"], "proc_1");
         assert_eq!(kill["method"], "process/kill");

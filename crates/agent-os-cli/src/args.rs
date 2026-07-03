@@ -1,4 +1,4 @@
-use agent_os_sys::{AgentOsError, AgentOsResult};
+use agent_os_sys::{AgentOsError, AgentOsResult, ProcessLifecycleState};
 use serde_json::{json, Value};
 use std::env;
 use std::path::PathBuf;
@@ -37,6 +37,7 @@ pub(crate) struct StatusOptions {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProcessAction {
+    List,
     Stop,
     Kill,
 }
@@ -45,7 +46,8 @@ pub(crate) enum ProcessAction {
 pub(crate) struct ProcessOptions {
     pub(crate) action: ProcessAction,
     pub(crate) state_db: Option<PathBuf>,
-    pub(crate) process_id: String,
+    pub(crate) process_id: Option<String>,
+    pub(crate) state: Option<ProcessLifecycleState>,
     pub(crate) reason: Option<String>,
 }
 
@@ -293,6 +295,7 @@ impl StatusOptions {
 impl ProcessOptions {
     pub(crate) fn parse(args: &[String]) -> AgentOsResult<Self> {
         let action = match args.first().map(String::as_str) {
+            Some("list") => ProcessAction::List,
             Some("stop") => ProcessAction::Stop,
             Some("kill") => ProcessAction::Kill,
             Some("--help") | Some("-h") | None => {
@@ -308,6 +311,7 @@ impl ProcessOptions {
         };
         let mut state_db = None;
         let mut process_id = None;
+        let mut state = None;
         let mut reason = None;
         let mut index = 1;
         while index < args.len() {
@@ -324,6 +328,10 @@ impl ProcessOptions {
                     index += 1;
                     reason = Some(required_arg(args, index, "--reason")?.to_string());
                 }
+                "--state" => {
+                    index += 1;
+                    state = Some(parse_process_state(required_arg(args, index, "--state")?)?);
+                }
                 "--help" | "-h" => {
                     return Err(AgentOsError::Validation(
                         serde_json::to_string(&usage_json()).unwrap_or_default(),
@@ -337,14 +345,50 @@ impl ProcessOptions {
             }
             index += 1;
         }
+        match action {
+            ProcessAction::List => {
+                if process_id.is_some() || reason.is_some() {
+                    return Err(AgentOsError::Validation(
+                        "process list accepts --state but not --process-id or --reason".to_string(),
+                    ));
+                }
+            }
+            ProcessAction::Stop | ProcessAction::Kill => {
+                if state.is_some() {
+                    return Err(AgentOsError::Validation(
+                        "--state is only valid for process list".to_string(),
+                    ));
+                }
+                if process_id.is_none() {
+                    return Err(AgentOsError::Validation(
+                        "--process-id is required for process cleanup".to_string(),
+                    ));
+                }
+            }
+        }
         Ok(Self {
             action,
             state_db,
-            process_id: process_id.ok_or_else(|| {
-                AgentOsError::Validation("--process-id is required for process cleanup".to_string())
-            })?,
+            process_id,
+            state,
             reason,
         })
+    }
+}
+
+fn parse_process_state(value: &str) -> AgentOsResult<ProcessLifecycleState> {
+    match value {
+        "starting" => Ok(ProcessLifecycleState::Starting),
+        "running" => Ok(ProcessLifecycleState::Running),
+        "exited" => Ok(ProcessLifecycleState::Exited),
+        "failed" => Ok(ProcessLifecycleState::Failed),
+        "interrupted" => Ok(ProcessLifecycleState::Interrupted),
+        "terminated" => Ok(ProcessLifecycleState::Terminated),
+        "timed_out" => Ok(ProcessLifecycleState::TimedOut),
+        "orphaned" => Ok(ProcessLifecycleState::Orphaned),
+        _ => Err(AgentOsError::Validation(format!(
+            "unknown process state {value}"
+        ))),
     }
 }
 
@@ -563,7 +607,7 @@ pub(crate) fn usage_json() -> Value {
             "run": "Run a deterministic end-to-end Agent-OS task.",
             "code": "Apply an exact repository edit and run a test command through Agent-OS.",
             "status": "Inspect a SQLite-backed Agent-OS state database.",
-            "process": "Stop or kill a kernel-owned Agent-OS process session.",
+            "process": "List, stop, or kill kernel-owned Agent-OS process sessions.",
             "resume": "Resume an existing Agent Thread from a SQLite-backed state database."
         },
         "chat_options": {
@@ -606,10 +650,12 @@ pub(crate) fn usage_json() -> Value {
             "--thread-id": "Optional thread id to inspect."
         },
         "process_options": {
+            "list": "List process sessions, optionally filtered by state.",
             "stop": "Interrupt a running process session.",
             "kill": "Terminate a running process session.",
             "--state-db": "Optional SQLite event store path. Defaults to the global Agent-OS state store.",
-            "--process-id": "Required process session id.",
+            "--process-id": "Required process session id for stop and kill.",
+            "--state": "Optional process list state filter: starting, running, exited, failed, interrupted, terminated, timed_out, or orphaned.",
             "--reason": "Optional cleanup reason recorded on the process session."
         },
         "resume_options": {
@@ -685,6 +731,23 @@ mod tests {
     }
 
     #[test]
+    fn process_list_options_parse_state_filter() {
+        let options = ProcessOptions::parse(&argv(&[
+            "list",
+            "--state",
+            "running",
+            "--state-db",
+            "state.sqlite",
+        ]))
+        .unwrap();
+
+        assert_eq!(options.action, ProcessAction::List);
+        assert_eq!(options.state, Some(ProcessLifecycleState::Running));
+        assert_eq!(options.process_id, None);
+        assert_eq!(options.state_db, Some(PathBuf::from("state.sqlite")));
+    }
+
+    #[test]
     fn process_kill_options_parse_cleanup_request() {
         let options = ProcessOptions::parse(&argv(&[
             "kill",
@@ -698,7 +761,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(options.action, ProcessAction::Kill);
-        assert_eq!(options.process_id, "proc_1");
+        assert_eq!(options.process_id.as_deref(), Some("proc_1"));
         assert_eq!(options.reason.as_deref(), Some("test cleanup"));
         assert_eq!(options.state_db, Some(PathBuf::from("state.sqlite")));
     }

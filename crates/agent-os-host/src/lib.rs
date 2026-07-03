@@ -769,9 +769,9 @@ mod tests {
     use agent_os_app_server::{AppKernelService, AppServer};
     use agent_os_sys::{
         AppRequest, AppRequestEnvelope, AppResponse, AutomationScheduleKind, ClientConnection,
-        ClientKind, EvidenceMapEntry, FinalSubmission, ProjectionCursor, ProviderStreamEventType,
-        ProviderUsage, ResourceSessionType, SecurityLevel, StatsQuery, StatsSnapshot,
-        StreamRequest, TurnStatus,
+        ClientKind, EvidenceMapEntry, FinalSubmission, ProcessLifecycleState, ProjectionCursor,
+        ProviderStreamEventType, ProviderUsage, ResourceSessionType, SecurityLevel, StatsQuery,
+        StatsSnapshot, StreamRequest, TurnStatus,
     };
     use agent_os_thread::{
         ModelAction, ModelClient, ModelTurnRequest, ModelTurnResponse, ToolAction,
@@ -2446,6 +2446,16 @@ mod tests {
             .unwrap()
             .to_string();
         assert_eq!(body["process_sessions"][0]["state"], "running");
+        let listed = request(
+            &mut server,
+            "req_process_list_running",
+            AppRequest::ProcessList {
+                state: Some(ProcessLifecycleState::Running),
+            },
+        );
+        let listed_body = accepted_body(listed);
+        assert_eq!(listed_body["process_sessions"][0]["process_id"], process_id);
+        assert_eq!(listed_body["process_sessions"][0]["state"], "running");
 
         let cleaned = match action {
             AppCleanupAction::Stop => request(
