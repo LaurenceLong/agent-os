@@ -1505,7 +1505,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
             &tmp,
             "role_producer",
             &format!(
-                "Complete this focused workspace validation. Read read.txt. Use apply_patch for every workspace mutation: add created.txt with exactly FULL_TOOL_SURFACE_OK followed by one newline, update edit.txt by replacing status=old with status=new, and delete obsolete.tmp with an apply_patch delete operation. Use run_command only for the final verifier command {verifier_command}; do not use run_command for listing, deleting, or editing files. After the verifier succeeds, call accomplish_goal with a concise summary, then submit_final with summary exactly Workspace surface complete., evidence_map citing evidence_ids from completed tool results, tests_run containing {verifier_command}, and known_risks as an empty array. submit_final must be the last tool call."
+                "Complete this focused workspace validation. Use search_files to locate read.txt by searching for read me, then read read.txt. Use apply_patch for every workspace mutation: add created.txt with exactly FULL_TOOL_SURFACE_OK followed by one newline, update edit.txt by replacing status=old with status=new, and delete obsolete.tmp with an apply_patch delete operation. Use run_command only for the final verifier command {verifier_command}; do not use run_command for listing, deleting, or editing files. After the verifier succeeds, call accomplish_goal with a concise summary, then submit_final with summary exactly Workspace surface complete., evidence_map citing evidence_ids from completed tool results, tests_run containing {verifier_command}, and known_risks as an empty array. submit_final must be the last tool call."
             ),
             Vec::new(),
             vec![ArtifactType::Patch],
@@ -1521,7 +1521,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
         workspace_request.thread.thread_id.clone(),
         workspace_client,
     );
-    let workspace_config = live_runtime_config(&tmp, 14);
+    let workspace_config = live_runtime_config(&tmp, 15);
     let workspace_report = workspace_runtime
         .run_to_completion(workspace_config)
         .unwrap();
@@ -1543,6 +1543,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
         &workspace_report,
         &[
             "apply_patch",
+            "search_files",
             "read_file",
             "run_command",
             "accomplish_goal",

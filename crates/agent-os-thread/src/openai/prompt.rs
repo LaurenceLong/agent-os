@@ -31,7 +31,7 @@ pub(crate) fn default_system_prompt(request: &ModelTurnRequest, workspace_root: 
 
 ## Operating Workflow
 
-1. Gather context with the most appropriate visible tool. Use read_file for bounded known text files; use read_image for workspace images when visible; use run_command for search, git inspection, directory listing, generated evidence, builds, tests, and other shell-native inspection.
+1. Gather context with the most appropriate visible tool. Use search_files when relevant files are unknown; use read_file for bounded known text files; use read_image for workspace images when visible; use run_command for git inspection, generated evidence, builds, tests, and other shell-native inspection.
 2. Make the smallest coherent change that satisfies the task. Use apply_patch for workspace file creation, update, or deletion when that tool is visible.
 3. Verify with focused evidence. Prefer the narrowest command, test, build, lint, or inspection that proves the changed behavior.
 4. Iterate from fresh evidence when a tool fails or reveals a better path.

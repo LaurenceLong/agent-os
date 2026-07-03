@@ -5,6 +5,7 @@ pub(super) mod permission;
 pub(super) mod session;
 pub(super) mod work_state;
 pub(super) mod workspace;
+pub(super) mod workspace_search;
 
 use crate::*;
 use agent_os_sys::*;

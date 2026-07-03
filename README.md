@@ -55,7 +55,7 @@ Implemented kernel surfaces include:
 - host-backed interactive `chat` execution through `agent-os-hostd --stdio`, the app-server JSONL protocol, SQLite-backed runtime job records, and user-level provider configuration
 - Agent Thread Runtime loop that consumes provider-neutral model actions, records provider stream events, bounds provider requests with a hard client timeout, executes tool proposals through Tool Broker, yields on background-running tools, bounds pre-patch investigation loops, auto-commits patch artifacts from diff evidence, blocks nonzero process checks, submits evidence-backed final output through the broker, checkpoints, and replays
 - external process model adapter for `ModelTurnRequest` JSON over stdin and `ModelTurnResponse` JSON over stdout, so real provider wrappers can drive the same runtime without linking provider SDKs into the kernel
-- a converged v0.3 Host OS tool surface of `read_file`, `read_image`, `apply_patch`, and `run_command`, with each built-in tool owned by its own kernel Rust module and descriptor
+- a converged v0.3 Host OS tool surface of `search_files`, `read_file`, `read_image`, `apply_patch`, and `run_command`, with each built-in tool owned by its own kernel Rust module and descriptor
 - Agent-OS control-plane tools for objective/checklist state, Supervisor communication, scoped blackboard posts, human asks, evidence records, supervised child agents, and final session submission
 - app-server-owned thread projections, including coarse `thread/read`, paged
   turn and timeline reads, branch fork records, rollback records, and manual
@@ -72,6 +72,7 @@ Agent-OS v0.3.0 separates these surfaces that must not be conflated:
 
 ```text
 Host OS tools:
+  search_files
   read_file
   read_image
   apply_patch
@@ -208,7 +209,7 @@ AGENT_OS_LIVE_ANTHROPIC_MODEL=claude-sonnet-4-20250514 \
 cargo test -p agent-os-thread live_anthropic_messages_llm_goal_driven -- --ignored --nocapture
 ```
 
-These ignored tests use the normal system prompt and normal Agent Thread Runtime loop. They do not mock model responses and do not inject per-tool forcing prompts. The workspace scenario covers `read_file`, `apply_patch`, `run_command`, `accomplish_goal`, and `submit_final`. The control-plane scenario covers `set_goal`, `accomplish_goal`, `update_checklist`, `record_evidence`, `report_supervisor`, `post_blackboard`, `ask_human`, `agent_control`, `read_file`, and `submit_final`.
+These ignored tests use the normal system prompt and normal Agent Thread Runtime loop. They do not mock model responses and do not inject per-tool forcing prompts. The workspace scenario covers `search_files`, `read_file`, `apply_patch`, `run_command`, `accomplish_goal`, and `submit_final`. The control-plane scenario covers `set_goal`, `accomplish_goal`, `update_checklist`, `record_evidence`, `report_supervisor`, `post_blackboard`, `ask_human`, `agent_control`, `read_file`, and `submit_final`.
 
 Inspectable interaction logs are written under `target/agent-os-audit/`:
 

@@ -202,6 +202,24 @@ pub(in crate::tools) fn run_workspace_read_image(
     }))
 }
 
+pub(in crate::tools) fn run_workspace_search_files(
+    kernel: &Kernel,
+    syscall: &SyscallEnvelope,
+    descriptor: &ToolDescriptor,
+    input: &Value,
+) -> AgentOsResult<Value> {
+    let workspace_root = PathBuf::from(required_string(input, "workspace_root")?);
+    let request = super::workspace_search::parse_search_request(input)?;
+    let relative_scope = PathBuf::from(request.path.as_deref().unwrap_or("."));
+    let (root, scope) = resolve_workspace_path(&workspace_root, &relative_scope)?;
+    ensure_environment_lease_for_path(kernel, syscall, &root, false)?;
+    ensure_workspace_target_contained(&root, &scope)?;
+    let metadata = fs::metadata(&scope).map_err(|error| {
+        AgentOsError::Validation(format!("stat workspace search path: {error}"))
+    })?;
+    super::workspace_search::run_search(descriptor, input, &root, &scope, metadata, request)
+}
+
 pub(in crate::tools) fn run_process(
     kernel: &Kernel,
     syscall: &SyscallEnvelope,
@@ -468,7 +486,7 @@ fn optional_string(input: &Value, field: &str) -> AgentOsResult<Option<String>> 
     value
         .as_str()
         .map(|value| Some(value.to_string()))
-        .ok_or_else(|| AgentOsError::Validation(format!("run_command {field} must be a string")))
+        .ok_or_else(|| AgentOsError::Validation(format!("{field} must be a string")))
 }
 
 fn optional_string_array(input: &Value, field: &str) -> AgentOsResult<Option<Vec<String>>> {

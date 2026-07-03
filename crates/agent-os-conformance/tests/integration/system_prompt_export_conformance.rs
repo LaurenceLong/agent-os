@@ -166,6 +166,7 @@ fn runtime_exports_real_system_prompt_review_bundle_for_core_roles() {
             }
 
             let tool_names = provider_tool_names(first_provider_request, provider);
+            assert!(tool_names.contains(&"search_files".to_string()));
             assert!(tool_names.contains(&"read_file".to_string()));
             assert!(tool_names.contains(&"read_image".to_string()));
             assert!(tool_names.contains(&"run_command".to_string()));
@@ -265,6 +266,7 @@ fn runtime_exports_real_system_prompt_review_bundle_for_core_roles() {
 
         let first_tools_markdown =
             fs::read_to_string(&canonical_request_steps[0].tools_md).unwrap();
+        assert!(first_tools_markdown.contains("### search_files"));
         assert!(first_tools_markdown.contains("### run_command"));
         assert!(first_tools_markdown.contains("Examples:"));
         assert!(first_tools_markdown.contains(PROMPT_REVIEW_MCP_TOOL));

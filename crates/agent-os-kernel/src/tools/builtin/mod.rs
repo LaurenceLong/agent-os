@@ -18,6 +18,7 @@ mod report_supervisor;
 mod request_permissions;
 pub(super) mod run_command;
 mod schema;
+pub(super) mod search_files;
 mod set_goal;
 mod submit_final;
 mod update_checklist;
@@ -55,6 +56,7 @@ fn all_tools() -> Vec<BuiltinTool> {
         read_file::tool(),
         read_image::tool(),
         run_command::tool(),
+        search_files::tool(),
         set_goal::tool(),
         accomplish_goal::tool(),
         update_checklist::tool(),

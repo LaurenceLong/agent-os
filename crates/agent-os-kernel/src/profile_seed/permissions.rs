@@ -93,6 +93,7 @@ fn producer_reviewer_permission_set() -> PermissionSet {
         ]),
         allowed_tool_names: strings(&[
             "apply_patch",
+            "search_files",
             "read_file",
             "read_image",
             "run_command",

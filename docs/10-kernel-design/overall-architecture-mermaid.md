@@ -59,7 +59,7 @@ flowchart TB
     end
 
     subgraph tools["Built-In Tool Data Plane"]
-        builtin_tools["Kernel-owned built-in tools<br/>read_file, read_image, apply_patch, run_command<br/>ecosystem tools, control-plane tools, submit_final"]
+        builtin_tools["Kernel-owned built-in tools<br/>search_files, read_file, read_image, apply_patch, run_command<br/>ecosystem tools, control-plane tools, submit_final"]
         workspace["Workspace files and patches"]
         shell["Local commands and process output"]
         skill_files["Skill and instruction resources"]

@@ -31,6 +31,7 @@ fn default_system_prompt_generates_tool_contract() {
 
     assert!(prompt.contains("## Visible Tool Summary"));
     assert!(prompt.contains("Producer responsibility:"));
+    assert!(prompt.contains("- search_files:"));
     assert!(prompt.contains("- read_file:"));
     assert!(prompt.contains("- read_image:"));
     assert!(prompt.contains("- apply_patch:"));
@@ -686,8 +687,9 @@ fn tool_definitions_include_all_core_tools() {
                 .and_then(Value::as_str)
         })
         .collect();
-    assert_eq!(names.len(), 16);
+    assert_eq!(names.len(), 17);
     assert!(names.contains(&"apply_patch"));
+    assert!(names.contains(&"search_files"));
     assert!(names.contains(&"read_file"));
     assert!(names.contains(&"read_image"));
     assert!(names.contains(&"run_command"));
@@ -886,6 +888,7 @@ fn read_image_tool_is_hidden_for_text_only_models() {
         })
         .collect::<Vec<_>>();
 
+    assert!(names.contains(&"search_files".to_string()));
     assert!(names.contains(&"read_file".to_string()));
     assert!(!names.contains(&"read_image".to_string()));
 }

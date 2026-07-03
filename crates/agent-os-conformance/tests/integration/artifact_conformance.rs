@@ -1045,6 +1045,7 @@ fn default_tool_registry_is_minimal() {
         tool_names,
         std::collections::BTreeSet::from([
             "apply_patch",
+            "search_files",
             "read_file",
             "read_image",
             "run_command",

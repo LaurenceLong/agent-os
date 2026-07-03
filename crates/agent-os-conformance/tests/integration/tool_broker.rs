@@ -57,6 +57,17 @@ fn tool_broker_integration_runs_all_model_visible_tool_families() {
         }),
         Some("source file was inspected"),
     );
+    let search = tools.invoke(
+        1,
+        "search_files",
+        json!({
+            "workspace_root": workspace.to_string_lossy(),
+            "query": "read me",
+            "mode": "content",
+            "limit": 10
+        }),
+        Some("workspace search located source content"),
+    );
     let image = tools.invoke(
         1,
         "read_image",
@@ -228,6 +239,12 @@ fn tool_broker_integration_runs_all_model_visible_tool_families() {
             .trim(),
         "env-visible"
     );
+    assert_eq!(search.status, ToolCallStatus::Completed);
+    assert_eq!(search.output.as_ref().unwrap()["returned_matches"], 1);
+    assert_eq!(
+        search.output.as_ref().unwrap()["matches"][0]["path"],
+        "read.txt"
+    );
 
     let state = fx.kernel.state_snapshot().unwrap();
     let completed_tools = state
@@ -249,6 +266,7 @@ fn tool_broker_integration_runs_all_model_visible_tool_families() {
             "request_permissions",
             "report_supervisor",
             "run_command",
+            "search_files",
             "set_goal",
             "accomplish_goal",
             "submit_final",
