@@ -70,6 +70,25 @@ pub struct SpawnAgentInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForkThreadInput {
+    pub source_thread_id: String,
+    pub from_turn_id: Option<String>,
+    pub created_by_client_id: String,
+    pub title: Option<String>,
+    pub goal: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RollbackThreadInput {
+    pub thread_id: String,
+    pub target_turn_id: Option<String>,
+    pub target_item_id: Option<String>,
+    pub target_event_id: Option<String>,
+    pub reason: String,
+    pub created_by_client_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttachEvidenceInput {
     pub goal_id: String,
     pub task_id: Option<String>,

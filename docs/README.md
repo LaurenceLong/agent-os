@@ -71,7 +71,7 @@ Provider System: The unified system-level module that resolves provider profiles
 
 Role Profile: The kernel-owned definition of an Agent Thread's semantic job, default policies, allowed delegation targets, and conformance family. The current core roles are Supervisor, Producer, and Reviewer; distributions may add aliases.
 
-App Server: The JSONL protocol gate that exposes thread start/read/list/archive, turn start/steer/interrupt, stats, notifications, automation, and task bundle export over typed `AppRequest` envelopes. It owns app-facing response shapes such as the `thread/read` projection.
+App Server: The JSONL protocol gate that exposes thread start/read/list/archive, thread fork/rollback/compact, paged thread turn and timeline reads, turn start/steer/interrupt, stats, notifications, automation, and task bundle export over typed `AppRequest` envelopes. It owns app-facing response shapes such as the `thread/read` projection.
 
 Host Layer: The `agent-os-host` service boundary. It opens the SQLite-backed kernel store, combines kernel/store/runtime/app-server components, owns runtime job records and background workers, and starts configured Agent Thread Runtime jobs through the `agent-os-hostd` process.
 

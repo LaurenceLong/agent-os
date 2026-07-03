@@ -41,15 +41,28 @@ forward-only system design.
 
 ## File And Module Size
 
-- Keep production Rust modules focused and preferably under 400 lines.
-- Files over 600 lines must be split before adding substantial new behavior.
-- Files over 1000 lines are considered architectural debt. Do not add new
-  responsibilities to them; extract cohesive modules first.
+- Keep production Rust `.rs` files focused, with substantial modules generally
+  targeting 300-800 lines of code.
+- Files over 800 lines require a review-time explanation for why the file still
+  represents one cohesive ownership boundary.
+- Files over 1200 lines should be split by default before adding substantial new
+  behavior.
+- Keep individual functions under 100 lines when practical. Longer functions
+  require a strong domain reason and should remain easy to review.
 - Test files may be larger than production modules, but long tests must still be
   organized by scenario and fixture modules.
-- Split by ownership, not by arbitrary line count. Good splits include:
-  provider client, prompt/message construction, tool schema, parser, runtime
-  loop, tool driver family, profile seed family, and test fixtures.
+- Split by feature, domain, or ownership boundary, not by arbitrary line count
+  and not mechanically by Rust item type. Good splits include provider client,
+  prompt/message construction, tool schema, parser, runtime loop, tool driver
+  family, profile seed family, and test fixtures.
+- Prefer module layouts where `lib.rs` exposes the public API and re-exports,
+  while domain folders expose cohesive APIs through their own `mod.rs` files and
+  focused implementation files such as `agent/runner.rs`, `agent/scheduler.rs`,
+  `agent/state.rs`, `storage/repo.rs`, `storage/mysql.rs`, and
+  `storage/migration.rs`.
+- Avoid mechanical splits such as `foo_struct.rs`, `foo_impl.rs`,
+  `foo_helpers.rs`, or `foo_utils.rs`; those usually hide coupling instead of
+  clarifying ownership.
 - Avoid dumping unrelated shared routines into `lib.rs`, `mod.rs`, or a broad
   `util.rs`. Facade modules should mostly declare modules and re-export stable
   types.

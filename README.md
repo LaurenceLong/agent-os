@@ -57,7 +57,10 @@ Implemented kernel surfaces include:
 - external process model adapter for `ModelTurnRequest` JSON over stdin and `ModelTurnResponse` JSON over stdout, so real provider wrappers can drive the same runtime without linking provider SDKs into the kernel
 - a converged v0.3 Host OS tool surface of `read_file`, `read_image`, `apply_patch`, and `run_command`, with each built-in tool owned by its own kernel Rust module and descriptor
 - Agent-OS control-plane tools for objective/checklist state, Supervisor communication, scoped blackboard posts, human asks, evidence records, supervised child agents, and final session submission
-- app-server-owned `thread/read` response projection shape, with host providing raw read models and runtime job state
+- app-server-owned thread projections, including coarse `thread/read`, paged
+  turn and timeline reads, branch fork records, rollback records, and manual
+  compaction visibility, with host providing raw read models and runtime job
+  state
 - conformance coverage for workspace crate dependency boundaries so production crates cannot drift back into cross-layer dependencies
 - a Supervisor-led workflow model where concrete distributions provide prompts, examples, and policy packs instead of hard-coded kernel pipelines
 - Supervisor hierarchy semantics: the top Supervisor is `S0`, delegated Supervisors increment the level (`S1`, `S2`, ...), and every delegation records a durable invocation edge for replay and audit

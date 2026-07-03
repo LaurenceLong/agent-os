@@ -62,6 +62,11 @@ fn app_protocol_export_freezes_current_agent_os_method_families() {
         "initialize",
         "thread/start",
         "thread/read",
+        "thread/turns/read",
+        "thread/items/read",
+        "thread/fork",
+        "thread/rollback",
+        "thread/compact",
         "thread/list",
         "thread/search",
         "thread/archive",
@@ -95,8 +100,6 @@ fn app_protocol_export_freezes_current_agent_os_method_families() {
         );
     }
     for absent in [
-        "thread/fork",
-        "thread/rollback",
         "config/write",
         "config/batch",
         "skills/list",

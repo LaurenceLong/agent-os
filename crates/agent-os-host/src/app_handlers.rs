@@ -1,7 +1,10 @@
 use crate::AgentOsHost;
 use agent_os_app_server::AppKernelService;
 use agent_os_config::{ModelEntry, ProviderCatalog, ProviderEntry, ResolvedAgentOsConfig};
-use agent_os_kernel::{RecordApprovalInput, RegisterGoalInput, SpawnAgentInput, SpawnTaskInput};
+use agent_os_kernel::{
+    CompactContextInput, ForkThreadInput, RecordApprovalInput, RegisterGoalInput,
+    RollbackThreadInput, SpawnAgentInput, SpawnTaskInput,
+};
 use agent_os_sys::{
     AgentOsError, AgentOsResult, AppConfigProjection, AppConfigRecoveryProjection,
     AppCredentialProjection, AppEcosystemProjection, AppEcosystemSourceProjection,
@@ -28,6 +31,47 @@ impl AppKernelService for AgentOsHost {
             }
             AppRequest::ThreadResume { client_thread_id } => self.thread_resume(&client_thread_id),
             AppRequest::ThreadRead { client_thread_id } => self.thread_read(&client_thread_id),
+            AppRequest::ThreadTurnsRead {
+                client_thread_id,
+                offset,
+                limit,
+            } => self.thread_turns_read(&client_thread_id, offset, limit),
+            AppRequest::ThreadItemsRead {
+                client_thread_id,
+                offset,
+                limit,
+            } => self.thread_items_read(&client_thread_id, offset, limit),
+            AppRequest::ThreadFork {
+                client_thread_id,
+                from_turn_id,
+                title,
+                goal,
+            } => self.thread_fork(client, &client_thread_id, from_turn_id, title, goal),
+            AppRequest::ThreadRollback {
+                client_thread_id,
+                target_turn_id,
+                target_item_id,
+                target_event_id,
+                reason,
+            } => self.thread_rollback(
+                client,
+                &client_thread_id,
+                target_turn_id,
+                target_item_id,
+                target_event_id,
+                reason,
+            ),
+            AppRequest::ThreadCompact {
+                client_thread_id,
+                summary_artifact_id,
+                superseded_refs,
+                token_estimate,
+            } => self.thread_compact(
+                &client_thread_id,
+                summary_artifact_id,
+                superseded_refs,
+                token_estimate,
+            ),
             AppRequest::ThreadList { archived } => self.thread_list(archived),
             AppRequest::ThreadSearch { query } => self.thread_search(&query),
             AppRequest::ThreadArchive { client_thread_id } => {
@@ -161,6 +205,106 @@ impl AgentOsHost {
     fn thread_read(&self, client_thread_id: &str) -> AgentOsResult<AppResponse> {
         self.spawn_configured_runtime_job_for_ready_thread(client_thread_id)?;
         self.thread_read_projection(client_thread_id)
+    }
+
+    fn thread_turns_read(
+        &self,
+        client_thread_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> AgentOsResult<AppResponse> {
+        self.thread_by_id(client_thread_id)?;
+        let turns = self
+            .kernel()
+            .store()
+            .turn_summaries()?
+            .into_iter()
+            .filter(|turn| turn.client_thread_id.as_deref() == Some(client_thread_id))
+            .collect::<Vec<_>>();
+        accepted("turns", page_projection(turns, offset, limit)?)
+    }
+
+    fn thread_items_read(
+        &self,
+        client_thread_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> AgentOsResult<AppResponse> {
+        self.thread_by_id(client_thread_id)?;
+        let items = self
+            .kernel()
+            .store()
+            .timeline_items(Some(client_thread_id))?;
+        accepted("items", page_projection(items, offset, limit)?)
+    }
+
+    fn thread_fork(
+        &self,
+        client: &ClientConnection,
+        client_thread_id: &str,
+        from_turn_id: Option<String>,
+        title: Option<String>,
+        goal: Option<String>,
+    ) -> AgentOsResult<AppResponse> {
+        let (fork, forked) = self.kernel().fork_thread(ForkThreadInput {
+            source_thread_id: client_thread_id.to_string(),
+            from_turn_id,
+            created_by_client_id: client.client_id.clone(),
+            title,
+            goal,
+        })?;
+        Ok(AppResponse::Accepted(json!({
+            "fork": fork,
+            "thread": self.thread_by_id(&forked.thread_id)?,
+        })))
+    }
+
+    fn thread_rollback(
+        &self,
+        client: &ClientConnection,
+        client_thread_id: &str,
+        target_turn_id: Option<String>,
+        target_item_id: Option<String>,
+        target_event_id: Option<String>,
+        reason: String,
+    ) -> AgentOsResult<AppResponse> {
+        let (rollback, _) = self.kernel().rollback_thread(RollbackThreadInput {
+            thread_id: client_thread_id.to_string(),
+            target_turn_id,
+            target_item_id,
+            target_event_id,
+            reason,
+            created_by_client_id: client.client_id.clone(),
+        })?;
+        Ok(AppResponse::Accepted(json!({
+            "rollback": rollback,
+            "thread": self.thread_by_id(client_thread_id)?,
+        })))
+    }
+
+    fn thread_compact(
+        &self,
+        client_thread_id: &str,
+        summary_artifact_id: Option<String>,
+        superseded_refs: Vec<String>,
+        token_estimate: u64,
+    ) -> AgentOsResult<AppResponse> {
+        let thread = self
+            .kernel()
+            .state_snapshot()?
+            .threads
+            .get(client_thread_id)
+            .cloned()
+            .ok_or_else(|| AgentOsError::NotFound(format!("thread {client_thread_id}")))?;
+        let compaction = self.kernel().compact_context(CompactContextInput {
+            thread_id: client_thread_id.to_string(),
+            agent_id: thread.agent_id,
+            task_id: thread.task.task_id,
+            summary_artifact_id,
+            superseded_refs,
+            token_estimate,
+        })?;
+        accepted("compaction", compaction)
     }
 
     fn thread_list(&self, archived: Option<bool>) -> AgentOsResult<AppResponse> {
@@ -486,6 +630,33 @@ fn accepted(key: &str, value: impl Serialize) -> AgentOsResult<AppResponse> {
     let mut body = serde_json::Map::new();
     body.insert(key.to_string(), serde_json::to_value(value)?);
     Ok(AppResponse::Accepted(Value::Object(body)))
+}
+
+#[derive(Debug, Serialize)]
+struct PageProjection<T> {
+    offset: usize,
+    limit: usize,
+    total: usize,
+    items: Vec<T>,
+}
+
+fn page_projection<T>(
+    items: Vec<T>,
+    offset: usize,
+    limit: usize,
+) -> AgentOsResult<PageProjection<T>> {
+    if limit == 0 || limit > 500 {
+        return Err(AgentOsError::Validation(
+            "page limit must be between 1 and 500".to_string(),
+        ));
+    }
+    let total = items.len();
+    Ok(PageProjection {
+        offset,
+        limit,
+        total,
+        items: items.into_iter().skip(offset).take(limit).collect(),
+    })
 }
 
 fn load_config(workspace: Option<String>) -> AgentOsResult<ResolvedAgentOsConfig> {

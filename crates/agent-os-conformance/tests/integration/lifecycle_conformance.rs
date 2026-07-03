@@ -21,6 +21,99 @@ fn invalid_lifecycle_transition_is_rejected() {
 }
 
 #[test]
+fn branchable_thread_lifecycle_records_fork_rollback_and_compaction() {
+    let fx = fixture();
+    let started = fx.kernel.start_turn(&fx.worker.thread_id).unwrap();
+    let turn_id = started.active_turn.turn_id.clone().unwrap();
+
+    let (fork, forked) = fx
+        .kernel
+        .fork_thread(ForkThreadInput {
+            source_thread_id: fx.worker.thread_id.clone(),
+            from_turn_id: Some(turn_id.clone()),
+            created_by_client_id: "tester".to_string(),
+            title: Some("forked branch".to_string()),
+            goal: Some("try forked branch".to_string()),
+        })
+        .unwrap();
+    assert_eq!(fork.source_thread_id, fx.worker.thread_id);
+    assert_eq!(fork.forked_thread_id, forked.thread_id);
+    assert_eq!(fork.from_turn_id.as_deref(), Some(turn_id.as_str()));
+
+    let compaction = fx
+        .kernel
+        .compact_context(CompactContextInput {
+            thread_id: fx.worker.thread_id.clone(),
+            agent_id: fx.worker.agent_id.clone(),
+            task_id: fx.worker.task.task_id.clone(),
+            summary_artifact_id: None,
+            superseded_refs: vec![format!("turn:{turn_id}")],
+            token_estimate: 256,
+        })
+        .unwrap();
+    assert_eq!(compaction.thread_id, fx.worker.thread_id);
+
+    let (rollback, thread) = fx
+        .kernel
+        .rollback_thread(RollbackThreadInput {
+            thread_id: fx.worker.thread_id.clone(),
+            target_turn_id: Some(turn_id.clone()),
+            target_item_id: None,
+            target_event_id: None,
+            reason: "return to the branch point".to_string(),
+            created_by_client_id: "tester".to_string(),
+        })
+        .unwrap();
+    assert_eq!(rollback.target_turn_id.as_deref(), Some(turn_id.as_str()));
+    assert_eq!(thread.status, ThreadStatus::Ready);
+
+    let empty_boundary = fx
+        .kernel
+        .rollback_thread(RollbackThreadInput {
+            thread_id: fx.worker.thread_id.clone(),
+            target_turn_id: None,
+            target_item_id: None,
+            target_event_id: None,
+            reason: "missing boundary".to_string(),
+            created_by_client_id: "tester".to_string(),
+        })
+        .unwrap_err();
+    assert!(matches!(empty_boundary, AgentOsError::Validation(_)));
+
+    let state = fx.kernel.state_snapshot().unwrap();
+    assert!(state.thread_forks.contains_key(&fork.fork_id));
+    assert!(state.thread_rollbacks.contains_key(&rollback.rollback_id));
+    assert!(state
+        .context_compactions
+        .contains_key(&compaction.compaction_id));
+
+    let replayed = Kernel::from_events(&fx.kernel.events().unwrap()).unwrap();
+    let replayed_state = replayed.state_snapshot().unwrap();
+    assert!(replayed_state.thread_forks.contains_key(&fork.fork_id));
+    assert!(replayed_state
+        .thread_rollbacks
+        .contains_key(&rollback.rollback_id));
+
+    let summaries = fx
+        .kernel
+        .store()
+        .timeline_items(Some(&fx.worker.thread_id))
+        .unwrap()
+        .into_iter()
+        .map(|item| item.summary)
+        .collect::<Vec<_>>();
+    assert!(summaries
+        .iter()
+        .any(|summary| summary.contains("forked to")));
+    assert!(summaries
+        .iter()
+        .any(|summary| summary.contains("context compacted")));
+    assert!(summaries
+        .iter()
+        .any(|summary| summary.contains("rolled back")));
+}
+
+#[test]
 fn state_replay_rebuilds_kernel_projection() {
     let fx = fixture();
     let evidence = fx

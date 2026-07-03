@@ -1105,6 +1105,114 @@ mod tests {
     }
 
     #[test]
+    fn app_server_exposes_branchable_thread_lifecycle_projection() {
+        let mut server = initialized_server();
+        let thread_id = start_thread(&mut server);
+
+        let started = request(
+            &mut server,
+            "req_branch_turn_start",
+            AppRequest::TurnStart {
+                client_thread_id: thread_id.clone(),
+                input: "establish branch point".to_string(),
+            },
+        );
+        let turn_id = accepted_body(started)["turn"]["turn_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let turns = request(
+            &mut server,
+            "req_branch_turns_page",
+            AppRequest::ThreadTurnsRead {
+                client_thread_id: thread_id.clone(),
+                offset: 0,
+                limit: 10,
+            },
+        );
+        let turns_body = accepted_body(turns);
+        assert_eq!(turns_body["turns"]["total"], 1);
+        assert_eq!(turns_body["turns"]["items"][0]["turn_id"], turn_id);
+
+        let forked = request(
+            &mut server,
+            "req_branch_thread_fork",
+            AppRequest::ThreadFork {
+                client_thread_id: thread_id.clone(),
+                from_turn_id: Some(turn_id.clone()),
+                title: Some("branch option".to_string()),
+                goal: Some("continue from the branch point".to_string()),
+            },
+        );
+        let forked_body = accepted_body(forked);
+        let forked_thread_id = forked_body["thread"]["client_thread_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(forked_body["fork"]["source_thread_id"], thread_id);
+        assert_eq!(forked_body["fork"]["forked_thread_id"], forked_thread_id);
+        assert_eq!(forked_body["fork"]["from_turn_id"], turn_id);
+
+        let compacted = request(
+            &mut server,
+            "req_branch_thread_compact",
+            AppRequest::ThreadCompact {
+                client_thread_id: thread_id.clone(),
+                summary_artifact_id: None,
+                superseded_refs: vec![format!("turn:{turn_id}")],
+                token_estimate: 128,
+            },
+        );
+        assert_eq!(
+            accepted_body(compacted)["compaction"]["superseded_refs"][0],
+            format!("turn:{turn_id}")
+        );
+
+        let rolled_back = request(
+            &mut server,
+            "req_branch_thread_rollback",
+            AppRequest::ThreadRollback {
+                client_thread_id: thread_id.clone(),
+                target_turn_id: Some(turn_id.clone()),
+                target_item_id: None,
+                target_event_id: None,
+                reason: "try a different branch".to_string(),
+            },
+        );
+        let rollback_body = accepted_body(rolled_back);
+        assert_eq!(rollback_body["rollback"]["thread_id"], thread_id);
+        assert_eq!(rollback_body["rollback"]["target_turn_id"], turn_id);
+        assert_eq!(rollback_body["thread"]["status"], "Ready");
+
+        let items = request(
+            &mut server,
+            "req_branch_items_page",
+            AppRequest::ThreadItemsRead {
+                client_thread_id: thread_id,
+                offset: 0,
+                limit: 50,
+            },
+        );
+        let items_body = accepted_body(items);
+        let item_summaries = items_body["items"]["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|item| item["summary"].as_str().map(str::to_string))
+            .collect::<Vec<_>>();
+        assert!(item_summaries
+            .iter()
+            .any(|summary| summary.contains("forked to")));
+        assert!(item_summaries
+            .iter()
+            .any(|summary| summary.contains("context compacted")));
+        assert!(item_summaries
+            .iter()
+            .any(|summary| summary.contains("rolled back")));
+    }
+
+    #[test]
     fn host_runs_next_queued_runtime_job_and_updates_job_state() {
         let workspace = temp_workspace("runtime-worker");
         let host = AgentOsHost::in_memory();

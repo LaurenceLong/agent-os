@@ -44,7 +44,8 @@ runtime:
 - `agent-os-distro` owns packaged distribution prompts, workflow labels,
   examples, and policy builders for the software-engineering distribution.
 - `agent-os-app-server` owns the JSONL app protocol and typed projections for
-  thread, turn, stats, notifications, automations, and task bundle export.
+  thread read/list/search/archive, fork, rollback, compact, paged turn and
+  timeline reads, stats, notifications, automations, and task bundle export.
 - `agent-os-host` opens the SQLite-backed kernel store, owns runtime job
   records and background workers, launches configured Agent Thread Runtime
   jobs, serves app projections, and recovers queued jobs after process restart.

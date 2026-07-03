@@ -151,7 +151,9 @@ flowchart TB
 ## 3. Reading Guide
 
 - App clients and `agent-os-cli` talk through the `agent-os-app-server` JSONL protocol. The CLI starts or connects to `agent-os-hostd --stdio` and sends typed `AppRequest` envelopes.
-- `agent-os-app-server` owns app-facing protocol and response shapes, including `thread/read`. The host provides raw read-model inputs and runtime job state.
+- `agent-os-app-server` owns app-facing protocol and response shapes, including
+  `thread/read`, paged turn/timeline reads, fork, rollback, and compact. The
+  host provides raw read-model inputs and runtime job state.
 - `agent-os-config` owns global config, project overrides, cross-platform path resolution, and the global runtime-data contract.
 - `agent-os-ecosystem` discovers global and project instructions, skills, commands, agents, and MCP declarations from `.claude`, `.agents`, `.agent-os`, `AGENTS.md`, and `CLAUDE.md`, then returns a typed catalog for the host to import.
 - `agent-os-host` is the long-running host boundary. It opens the global SQLite-backed kernel store, owns `AgentOsHost`, manages runtime job records and worker threads, combines app-server/config/ecosystem/kernel/store/thread components, and emits cursor-based notifications.

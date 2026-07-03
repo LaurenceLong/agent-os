@@ -1,9 +1,10 @@
 use agent_os_sys::{
     AgentControlBlock, AgentGoalCompletion, AgentOsResult, Approval, ApprovalQueueProjection,
     ApprovalStatus, Artifact, ArtifactIndexProjection, AutomationRun, AutomationRunProjection,
-    AutomationSchedule, AutomationScheduleProjection, BudgetLedger, ClientThread, EventEnvelope,
-    Evidence, EvidenceIndexProjection, ProjectionCheckpoint, ProviderStreamSession, ResourceLease,
-    ResourceSession, ResourceSessionProjection, StatsSnapshot, TimelineItem, TimelineItemType,
+    AutomationSchedule, AutomationScheduleProjection, BudgetLedger, ClientThread,
+    ContextCompaction, EventEnvelope, Evidence, EvidenceIndexProjection, ProjectionCheckpoint,
+    ProviderStreamSession, ResourceLease, ResourceSession, ResourceSessionProjection,
+    StatsSnapshot, ThreadForkRecord, ThreadRollbackRecord, TimelineItem, TimelineItemType,
     ToolCallStatus, ToolInvocation, TurnInputRecord, TurnRecord, TurnStatus,
 };
 use std::collections::BTreeMap;
@@ -85,6 +86,18 @@ impl ProjectionState {
             "TurnInputRecorded" => {
                 let input: TurnInputRecord = serde_json::from_value(event.payload.clone())?;
                 self.apply_turn_input(&input, event);
+            }
+            "ThreadForked" => {
+                let record: ThreadForkRecord = serde_json::from_value(event.payload.clone())?;
+                self.apply_thread_fork(&record, event);
+            }
+            "ThreadRolledBack" => {
+                let record: ThreadRollbackRecord = serde_json::from_value(event.payload.clone())?;
+                self.apply_thread_rollback(&record, event);
+            }
+            "ContextCompacted" => {
+                let compaction: ContextCompaction = serde_json::from_value(event.payload.clone())?;
+                self.apply_context_compaction(&compaction, event);
             }
             "ProviderStreamFailed" | "ProviderStreamCancelled" => {
                 self.stats.provider_errors += 1;
@@ -240,6 +253,51 @@ impl ProjectionState {
                 task_id: event.task_id.clone(),
                 turn_id: Some(input.turn_id.clone()),
                 summary: format!("turn input {:?}", input.kind),
+            },
+        );
+    }
+
+    fn apply_thread_fork(&mut self, record: &ThreadForkRecord, event: &EventEnvelope) {
+        self.push_timeline_item(
+            event,
+            TimelineDraft {
+                item_type: TimelineItemType::ThreadChanged,
+                client_thread_id: Some(record.source_thread_id.clone()),
+                agent_id: event.agent_id.clone(),
+                task_id: event.task_id.clone(),
+                turn_id: record.from_turn_id.clone(),
+                summary: format!(
+                    "thread {} forked to {}",
+                    record.source_thread_id, record.forked_thread_id
+                ),
+            },
+        );
+    }
+
+    fn apply_thread_rollback(&mut self, record: &ThreadRollbackRecord, event: &EventEnvelope) {
+        self.push_timeline_item(
+            event,
+            TimelineDraft {
+                item_type: TimelineItemType::ThreadChanged,
+                client_thread_id: Some(record.thread_id.clone()),
+                agent_id: event.agent_id.clone(),
+                task_id: event.task_id.clone(),
+                turn_id: record.target_turn_id.clone(),
+                summary: format!("thread {} rolled back", record.thread_id),
+            },
+        );
+    }
+
+    fn apply_context_compaction(&mut self, compaction: &ContextCompaction, event: &EventEnvelope) {
+        self.push_timeline_item(
+            event,
+            TimelineDraft {
+                item_type: TimelineItemType::ThreadChanged,
+                client_thread_id: Some(compaction.thread_id.clone()),
+                agent_id: Some(compaction.agent_id.clone()),
+                task_id: Some(compaction.task_id.clone()),
+                turn_id: None,
+                summary: format!("context compacted {}", compaction.compaction_id),
             },
         );
     }

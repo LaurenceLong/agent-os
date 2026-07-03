@@ -325,6 +325,40 @@ pub enum AppRequest {
     ThreadResume { client_thread_id: String },
     #[serde(rename = "thread/read")]
     ThreadRead { client_thread_id: String },
+    #[serde(rename = "thread/turns/read")]
+    ThreadTurnsRead {
+        client_thread_id: String,
+        offset: usize,
+        limit: usize,
+    },
+    #[serde(rename = "thread/items/read")]
+    ThreadItemsRead {
+        client_thread_id: String,
+        offset: usize,
+        limit: usize,
+    },
+    #[serde(rename = "thread/fork")]
+    ThreadFork {
+        client_thread_id: String,
+        from_turn_id: Option<String>,
+        title: Option<String>,
+        goal: Option<String>,
+    },
+    #[serde(rename = "thread/rollback")]
+    ThreadRollback {
+        client_thread_id: String,
+        target_turn_id: Option<String>,
+        target_item_id: Option<String>,
+        target_event_id: Option<String>,
+        reason: String,
+    },
+    #[serde(rename = "thread/compact")]
+    ThreadCompact {
+        client_thread_id: String,
+        summary_artifact_id: Option<String>,
+        superseded_refs: Vec<String>,
+        token_estimate: u64,
+    },
     #[serde(rename = "thread/list")]
     ThreadList { archived: Option<bool> },
     #[serde(rename = "thread/search")]

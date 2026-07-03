@@ -11,6 +11,8 @@ pub struct KernelState {
     pub tasks: HashMap<String, Task>,
     pub threads: HashMap<String, AgentControlBlock>,
     pub agent_invocations: HashMap<String, AgentInvocation>,
+    pub thread_forks: HashMap<String, ThreadForkRecord>,
+    pub thread_rollbacks: HashMap<String, ThreadRollbackRecord>,
     pub agent_hooks: HashMap<String, AgentHook>,
     pub agent_control_commands: HashMap<String, AgentControlCommand>,
     pub permission_requests: HashMap<String, PermissionRequest>,
@@ -195,6 +197,8 @@ fn clear_event_projection(state: &mut KernelState) {
     state.tasks.clear();
     state.threads.clear();
     state.agent_invocations.clear();
+    state.thread_forks.clear();
+    state.thread_rollbacks.clear();
     state.agent_hooks.clear();
     state.agent_control_commands.clear();
     state.permission_requests.clear();

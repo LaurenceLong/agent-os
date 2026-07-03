@@ -169,6 +169,201 @@ impl Kernel {
         Ok(record)
     }
 
+    pub fn fork_thread(
+        &self,
+        input: ForkThreadInput,
+    ) -> AgentOsResult<(ThreadForkRecord, AgentControlBlock)> {
+        let source = self
+            .read_state()?
+            .threads
+            .get(&input.source_thread_id)
+            .cloned()
+            .ok_or_else(|| AgentOsError::NotFound(format!("thread {}", input.source_thread_id)))?;
+        if let Some(turn_id) = &input.from_turn_id {
+            let belongs_to_source = self.store().turn_summaries()?.into_iter().any(|turn| {
+                turn.turn_id == *turn_id
+                    && turn.client_thread_id.as_deref() == Some(input.source_thread_id.as_str())
+            });
+            if !belongs_to_source {
+                return Err(AgentOsError::Validation(format!(
+                    "turn {turn_id} does not belong to thread {}",
+                    input.source_thread_id
+                )));
+            }
+        }
+        let goal_text = input
+            .goal
+            .filter(|goal| !goal.trim().is_empty())
+            .unwrap_or_else(|| source.task.goal.clone());
+        let title = input
+            .title
+            .filter(|title| !title.trim().is_empty())
+            .unwrap_or_else(|| goal_text.clone());
+        let acceptance_criteria = if source.task.success_criteria.is_empty() {
+            vec!["forked agent thread reaches a final response".to_string()]
+        } else {
+            source.task.success_criteria.clone()
+        };
+        let goal = self.register_goal(RegisterGoalInput {
+            namespace: "thread_fork".to_string(),
+            created_by: input.created_by_client_id.clone(),
+            title: title.clone(),
+            description: goal_text.clone(),
+            acceptance_criteria: acceptance_criteria.clone(),
+            constraints: Vec::new(),
+            risk_level: 0,
+            deadline: None,
+        })?;
+        let task = self.spawn_task(SpawnTaskInput {
+            goal_id: goal.goal_id,
+            parent_task_id: Some(source.task.task_id.clone()),
+            title,
+            description: goal_text.clone(),
+            depends_on: Vec::new(),
+            required_artifact_types: Vec::new(),
+            required_evidence_types: Vec::new(),
+            priority: 10,
+            risk_level: 0,
+        })?;
+        let role_profile_id = source
+            .config_snapshot
+            .effective_binding
+            .role_profile_id
+            .clone();
+        let forked = self.spawn_agent(SpawnAgentInput {
+            task_id: task.task_id,
+            role_profile_id,
+            owner: input.created_by_client_id.clone(),
+            goal: goal_text,
+            success_criteria: acceptance_criteria,
+            failure_criteria: source.task.failure_criteria.clone(),
+            parent_thread_id: None,
+            workspace_roots: source.config_snapshot.workspace_roots.clone(),
+        })?;
+        let record = ThreadForkRecord {
+            fork_id: new_id("fork_"),
+            source_thread_id: source.thread_id,
+            forked_thread_id: forked.thread_id.clone(),
+            from_turn_id: input.from_turn_id,
+            created_by_client_id: input.created_by_client_id,
+            created_at: now_rfc3339(),
+        };
+        self.emit(
+            "ThreadForked",
+            "thread_fork",
+            &record.fork_id,
+            Some(forked.agent_id.clone()),
+            Some(forked.task.task_id.clone()),
+            None,
+            Some(forked.task.goal_id.clone()),
+            &record,
+        )?;
+        Ok((record, forked))
+    }
+
+    pub fn rollback_thread(
+        &self,
+        input: RollbackThreadInput,
+    ) -> AgentOsResult<(ThreadRollbackRecord, AgentControlBlock)> {
+        if input.reason.trim().is_empty() {
+            return Err(AgentOsError::Validation(
+                "thread rollback reason must not be empty".to_string(),
+            ));
+        }
+        if input.target_turn_id.is_none()
+            && input.target_item_id.is_none()
+            && input.target_event_id.is_none()
+        {
+            return Err(AgentOsError::Validation(
+                "thread rollback requires a target turn, item, or event boundary".to_string(),
+            ));
+        }
+        let thread = self
+            .read_state()?
+            .threads
+            .get(&input.thread_id)
+            .cloned()
+            .ok_or_else(|| AgentOsError::NotFound(format!("thread {}", input.thread_id)))?;
+        if !valid_thread_transition(thread.status, ThreadStatus::Ready) {
+            return Err(AgentOsError::InvalidTransition(format!(
+                "thread {:?} -> {:?}",
+                thread.status,
+                ThreadStatus::Ready
+            )));
+        }
+        if let Some(turn_id) = &input.target_turn_id {
+            let belongs_to_thread = self.store().turn_summaries()?.into_iter().any(|turn| {
+                turn.turn_id == *turn_id
+                    && turn.client_thread_id.as_deref() == Some(input.thread_id.as_str())
+            });
+            if !belongs_to_thread {
+                return Err(AgentOsError::Validation(format!(
+                    "turn {turn_id} does not belong to thread {}",
+                    input.thread_id
+                )));
+            }
+        }
+        if let Some(item_id) = &input.target_item_id {
+            let belongs_to_thread = self
+                .store()
+                .timeline_items(Some(&input.thread_id))?
+                .into_iter()
+                .any(|item| item.item_id == *item_id);
+            if !belongs_to_thread {
+                return Err(AgentOsError::Validation(format!(
+                    "timeline item {item_id} does not belong to thread {}",
+                    input.thread_id
+                )));
+            }
+        }
+        if let Some(event_id) = &input.target_event_id {
+            self.store().event_ordinal(event_id)?;
+            let belongs_to_thread = self
+                .store()
+                .timeline_items(Some(&input.thread_id))?
+                .into_iter()
+                .any(|item| item.event_id == *event_id)
+                || self
+                    .store()
+                    .events_by_aggregate(&input.thread_id)?
+                    .into_iter()
+                    .any(|event| event.event_id == *event_id);
+            if !belongs_to_thread {
+                return Err(AgentOsError::Validation(format!(
+                    "event {event_id} does not belong to thread {}",
+                    input.thread_id
+                )));
+            }
+        }
+        let record = ThreadRollbackRecord {
+            rollback_id: new_id("rollback_"),
+            thread_id: input.thread_id,
+            target_turn_id: input.target_turn_id,
+            target_item_id: input.target_item_id,
+            target_event_id: input.target_event_id,
+            reason: input.reason,
+            created_by_client_id: input.created_by_client_id,
+            created_at: now_rfc3339(),
+        };
+        let event = self.emit(
+            "ThreadRolledBack",
+            "thread_rollback",
+            &record.rollback_id,
+            Some(thread.agent_id.clone()),
+            Some(thread.task.task_id.clone()),
+            None,
+            Some(thread.task.goal_id.clone()),
+            &record,
+        )?;
+        let updated = self.transition_thread_with_cause(
+            &record.thread_id,
+            ThreadStatus::Ready,
+            Some(format!("rollback: {}", record.reason)),
+            Some(event.event_id),
+        )?;
+        Ok((record, updated))
+    }
+
     fn thread_for_app_update(&self, thread_id: &str) -> AgentOsResult<AgentControlBlock> {
         let acb = self
             .read_state()?

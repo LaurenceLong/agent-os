@@ -133,6 +133,16 @@ impl Kernel {
                     .agent_invocations
                     .insert(invocation.invocation_id.clone(), invocation);
             }
+            "ThreadForked" => {
+                let record: ThreadForkRecord = parse_payload(&event.payload)?;
+                state.thread_forks.insert(record.fork_id.clone(), record);
+            }
+            "ThreadRolledBack" => {
+                let record: ThreadRollbackRecord = parse_payload(&event.payload)?;
+                state
+                    .thread_rollbacks
+                    .insert(record.rollback_id.clone(), record);
+            }
             "AgentHookConfigured" | "AgentHookUpdated" => {
                 let hook: AgentHook = parse_payload(&event.payload)?;
                 state.agent_hooks.insert(hook.hook_id.clone(), hook);

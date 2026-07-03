@@ -320,6 +320,28 @@ pub struct AgentGoalCompletion {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreadForkRecord {
+    pub fork_id: String,
+    pub source_thread_id: String,
+    pub forked_thread_id: String,
+    pub from_turn_id: Option<String>,
+    pub created_by_client_id: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreadRollbackRecord {
+    pub rollback_id: String,
+    pub thread_id: String,
+    pub target_turn_id: Option<String>,
+    pub target_item_id: Option<String>,
+    pub target_event_id: Option<String>,
+    pub reason: String,
+    pub created_by_client_id: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentControlCommand {
     pub command_id: String,
     pub action: AgentControlAction,
