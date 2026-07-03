@@ -2546,6 +2546,20 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
             risk_level: 6,
         })
         .unwrap();
+    let permission_task = lifecycle_kernel
+        .spawn_task(SpawnTaskInput {
+            goal_id: lifecycle_goal.goal_id.clone(),
+            parent_task_id: None,
+            title: "Live agent control permission".to_string(),
+            description: "Live LLM must exercise permission decision agent_control actions"
+                .to_string(),
+            depends_on: Vec::new(),
+            required_artifact_types: Vec::new(),
+            required_evidence_types: Vec::new(),
+            priority: 10,
+            risk_level: 4,
+        })
+        .unwrap();
     let status_supervisor = lifecycle_kernel
         .spawn_agent(SpawnAgentInput {
             task_id: status_task.task_id.clone(),
@@ -2803,7 +2817,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
     .unwrap();
     let process_approval_id =
         approve_live_tool_risk(&lifecycle_kernel, &process_task, &process_supervisor);
-    let process_client = OpenAiModelClient::new(api_key, model.clone())
+    let process_client = OpenAiModelClient::new(api_key.clone(), model.clone())
         .with_api_base(api_base.clone())
         .with_endpoint(endpoint)
         .with_max_tokens(2048)
@@ -2850,6 +2864,88 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
     );
     let _ = lifecycle_kernel.terminate_process_session(&output_process_id, "live e2e cleanup");
     let _ = lifecycle_kernel.terminate_process_session(&send_process_id, "live e2e cleanup");
+
+    let permission_supervisor = lifecycle_kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: permission_task.task_id.clone(),
+            role_profile_id: "role_supervisor".to_string(),
+            owner: "agent-os-thread-live-test".to_string(),
+            goal: "Complete this focused agent_control permission validation. Read agent_control_permission_seed.md, then call agent_control approve_permission with payload.permission_request_id set to approve_permission_request_id, payload.decision_reason exactly Approved for bounded read_file validation., and payload.permissions containing max_risk_level 2, allowed_syscalls [tool.invoke], resource_scopes [tool:read_file], allowed_tool_names [read_file], allowed_tool_driver_classes [filesystem], approval_required_above 2, and requires_evidence_for [read_file]. Then call agent_control deny_permission with payload.permission_request_id set to deny_permission_request_id and payload.decision_reason exactly Denied for live permission branch validation. Then submit_final with summary exactly Agent control permission surface complete., evidence_map citing evidence_ids from completed tool results, tests_run containing agent_control permission decisions, and known_risks as an empty array. submit_final must be the last tool call.".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: vec![tmp.to_string_lossy().to_string()],
+        })
+        .unwrap();
+    let approve_request_child = live_child_agent(
+        &lifecycle_kernel,
+        &lifecycle_target_task.task_id,
+        &permission_supervisor,
+        "approve permission request child",
+        &tmp,
+    );
+    let deny_request_child = live_child_agent(
+        &lifecycle_kernel,
+        &lifecycle_target_task.task_id,
+        &permission_supervisor,
+        "deny permission request child",
+        &tmp,
+    );
+    let approve_permission_request_id = create_live_permission_request(
+        &lifecycle_kernel,
+        &approve_request_child,
+        "Need read_file for live approval branch.",
+        live_read_file_permission_set(),
+    );
+    let deny_permission_request_id = create_live_permission_request(
+        &lifecycle_kernel,
+        &deny_request_child,
+        "Need run_command for live denial branch.",
+        live_run_command_permission_set(),
+    );
+    std::fs::write(
+        tmp.join("agent_control_permission_seed.md"),
+        format!(
+            "Agent control permission seed\napprove_permission_request_id: {}\ndeny_permission_request_id: {}\nUse agent_control permission actions only for these request ids.\n",
+            approve_permission_request_id, deny_permission_request_id
+        ),
+    )
+    .unwrap();
+    let permission_client = OpenAiModelClient::new(api_key, model.clone())
+        .with_api_base(api_base.clone())
+        .with_endpoint(endpoint)
+        .with_max_tokens(2048)
+        .with_audit_log(audit_log_path.clone());
+    let mut permission_runtime = ThreadRuntime::new(
+        lifecycle_kernel.clone(),
+        permission_supervisor.thread_id.clone(),
+        permission_client,
+    );
+    let permission_config = live_runtime_config(&tmp, 8);
+    let permission_report = permission_runtime
+        .run_to_completion(permission_config)
+        .unwrap();
+    assert!(permission_report.final_submitted);
+    assert_all_tool_calls_completed(&permission_report);
+    assert_live_goal_tools(
+        &audit_log_path,
+        provider,
+        "full_tool_surface_agent_control_permission",
+        &permission_report,
+        &["read_file", "agent_control", "submit_final"],
+    );
+    assert_agent_control_actions(
+        &audit_log_path,
+        provider,
+        "full_tool_surface_agent_control_permission",
+        &permission_report,
+        &["approve_permission", "deny_permission"],
+    );
+    assert_agent_control_permission_parameters_observed(
+        &permission_report,
+        &approve_permission_request_id,
+        &deny_permission_request_id,
+    );
     println!(
         "live_goal_full_tool_surface_log={}",
         audit_log_path.display()
@@ -3285,6 +3381,121 @@ fn find_agent_control_record<'a>(
         })
 }
 
+fn assert_agent_control_permission_parameters_observed(
+    report: &RuntimeRunReport,
+    approve_permission_request_id: &str,
+    deny_permission_request_id: &str,
+) {
+    let approve_record = find_agent_control_record(report, "approve permission", |record| {
+        record
+            .input
+            .as_ref()
+            .and_then(|input| input.get("action"))
+            .and_then(Value::as_str)
+            == Some("approve_permission")
+            && record
+                .input
+                .as_ref()
+                .and_then(|input| input.pointer("/payload/permission_request_id"))
+                .and_then(Value::as_str)
+                == Some(approve_permission_request_id)
+            && record
+                .input
+                .as_ref()
+                .and_then(|input| input.pointer("/payload/decision_reason"))
+                .and_then(Value::as_str)
+                == Some("Approved for bounded read_file validation.")
+    });
+    let approve_permissions = approve_record
+        .input
+        .as_ref()
+        .and_then(|input| input.pointer("/payload/permissions"))
+        .unwrap_or_else(|| panic!("missing approve permissions payload: {approve_record:?}"));
+    assert_eq!(
+        approve_permissions
+            .get("max_risk_level")
+            .and_then(Value::as_u64),
+        Some(2)
+    );
+    assert_eq!(
+        approve_permissions.pointer("/allowed_syscalls/0"),
+        Some(&json!("tool.invoke"))
+    );
+    assert_eq!(
+        approve_permissions.pointer("/resource_scopes/0"),
+        Some(&json!("tool:read_file"))
+    );
+    assert_eq!(
+        approve_permissions.pointer("/allowed_tool_names/0"),
+        Some(&json!("read_file"))
+    );
+    assert_eq!(
+        approve_permissions.pointer("/allowed_tool_driver_classes/0"),
+        Some(&json!("filesystem"))
+    );
+    assert_eq!(
+        approve_permissions
+            .get("approval_required_above")
+            .and_then(Value::as_u64),
+        Some(2)
+    );
+    assert_eq!(
+        approve_permissions.pointer("/requires_evidence_for/0"),
+        Some(&json!("read_file"))
+    );
+    assert_eq!(
+        approve_record
+            .output
+            .as_ref()
+            .and_then(|output| output.get("permission_request_id"))
+            .and_then(Value::as_str),
+        Some(approve_permission_request_id)
+    );
+    assert!(approve_record
+        .output
+        .as_ref()
+        .and_then(|output| output.get("permission_grant_id"))
+        .and_then(Value::as_str)
+        .is_some());
+
+    let deny_record = find_agent_control_record(report, "deny permission", |record| {
+        record
+            .input
+            .as_ref()
+            .and_then(|input| input.get("action"))
+            .and_then(Value::as_str)
+            == Some("deny_permission")
+            && record
+                .input
+                .as_ref()
+                .and_then(|input| input.pointer("/payload/permission_request_id"))
+                .and_then(Value::as_str)
+                == Some(deny_permission_request_id)
+            && record
+                .input
+                .as_ref()
+                .and_then(|input| input.pointer("/payload/decision_reason"))
+                .and_then(Value::as_str)
+                == Some("Denied for live permission branch validation.")
+    });
+    assert_eq!(
+        deny_record
+            .output
+            .as_ref()
+            .and_then(|output| output.get("permission_request_id"))
+            .and_then(Value::as_str),
+        Some(deny_permission_request_id)
+    );
+    assert_eq!(
+        deny_record
+            .output
+            .as_ref()
+            .and_then(|output| output.get("permission_grant_id"))
+            .and_then(Value::as_str),
+        None
+    );
+}
+
 fn write_full_surface_verifier(workspace: &Path) -> String {
     if cfg!(windows) {
         std::fs::write(
@@ -3441,6 +3652,74 @@ fn wait_process_stdout_contains(kernel: &Kernel, process_id: &str, marker: &str)
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
     panic!("process {process_id} stdout did not contain marker {marker}");
+}
+
+fn create_live_permission_request(
+    kernel: &Kernel,
+    child: &AgentControlBlock,
+    reason: &str,
+    permissions: Value,
+) -> String {
+    let capability = kernel
+        .grant_capability(
+            &child.agent_id,
+            &child.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:request_permissions".to_string()],
+            1,
+            None,
+        )
+        .unwrap();
+    let invocation = kernel
+        .invoke_tool(
+            &child.agent_id,
+            &child.task.task_id,
+            &child.session_id,
+            capability.capability_id,
+            1,
+            ToolInvokeInput {
+                tool_name: "request_permissions".to_string(),
+                input: json!({
+                    "reason": reason,
+                    "scope": "session",
+                    "permissions": permissions
+                }),
+                evidence_claim: Some("live permission request created".to_string()),
+            },
+        )
+        .unwrap();
+    assert_eq!(invocation.status, ToolCallStatus::Completed);
+    invocation
+        .output
+        .as_ref()
+        .and_then(|output| output.get("permission_request_id"))
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("request_permissions omitted id: {invocation:?}"))
+        .to_string()
+}
+
+fn live_read_file_permission_set() -> Value {
+    json!({
+        "max_risk_level": 2,
+        "allowed_syscalls": ["tool.invoke"],
+        "resource_scopes": ["tool:read_file"],
+        "allowed_tool_names": ["read_file"],
+        "allowed_tool_driver_classes": ["filesystem"],
+        "approval_required_above": 2,
+        "requires_evidence_for": ["read_file"]
+    })
+}
+
+fn live_run_command_permission_set() -> Value {
+    json!({
+        "max_risk_level": 4,
+        "allowed_syscalls": ["tool.invoke"],
+        "resource_scopes": ["tool:run_command"],
+        "allowed_tool_names": ["run_command"],
+        "allowed_tool_driver_classes": ["shell"],
+        "approval_required_above": 4,
+        "requires_evidence_for": ["run_command"]
+    })
 }
 
 fn approve_live_tool_risk(kernel: &Kernel, task: &Task, supervisor: &AgentControlBlock) -> String {
