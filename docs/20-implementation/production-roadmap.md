@@ -48,7 +48,7 @@ runtime:
 - `agent-os-host` opens the SQLite-backed kernel store, owns runtime job
   records and background workers, launches configured Agent Thread Runtime
   jobs, serves app projections, and recovers queued jobs after process restart.
-- `agent-os-cli` provides demo, run, code, chat, status, and resume entrypoints.
+- `agent-os-cli` provides run, code, chat, status, and resume entrypoints.
   `chat` starts `agent-os-hostd --stdio`, resolves the selected
   `provider/model` from the user's global config plus project overrides, and
   lets the host run provider-backed runtime jobs.

@@ -1,7 +1,6 @@
 mod args;
 mod chat;
 mod code;
-mod demo;
 mod resume;
 mod run;
 mod status;
@@ -23,15 +22,27 @@ fn main() -> AgentOsResult<()> {
 
 fn dispatch(args: &[String]) -> AgentOsResult<Value> {
     match args.first().map(String::as_str) {
-        None | Some("demo") => demo::run_demo(),
+        None | Some("--help") | Some("-h") | Some("help") => Ok(usage_json()),
         Some("chat") => chat::run_chat(&ChatOptions::parse(&args[1..])?),
         Some("run") => run::run_e2e_task(&RunOptions::parse(&args[1..])?),
         Some("code") => code::run_code_task(&CodeOptions::parse(&args[1..])?),
         Some("status") => status::run_status(&StatusOptions::parse(&args[1..])?),
         Some("resume") => resume::run_resume(&ResumeOptions::parse(&args[1..])?),
-        Some("--help") | Some("-h") | Some("help") => Ok(usage_json()),
         Some(other) => Err(AgentOsError::Validation(format!(
             "unknown command {other}; use `agent-os help`"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_invocation_returns_usage_without_demo_command() {
+        let output = dispatch(&[]).unwrap();
+
+        assert!(output["commands"]["chat"].is_string());
+        assert!(output["commands"]["demo"].is_null());
     }
 }

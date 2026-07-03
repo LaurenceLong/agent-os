@@ -29,7 +29,7 @@ crates/
   agent-os-app-server/   # JSONL app protocol and app-facing projection shape
   agent-os-host/         # thin host for persisted kernel state and runtime jobs
   agent-os-conformance/  # conformance tests for the normative docs
-  agent-os-cli/          # demo, run, code, chat, status, and resume entrypoints
+  agent-os-cli/          # run, code, chat, status, and resume entrypoints
 ```
 
 Implemented kernel surfaces include:

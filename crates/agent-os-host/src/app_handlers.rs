@@ -4,11 +4,12 @@ use agent_os_config::{ModelEntry, ProviderCatalog, ProviderEntry, ResolvedAgentO
 use agent_os_kernel::{RecordApprovalInput, RegisterGoalInput, SpawnAgentInput, SpawnTaskInput};
 use agent_os_sys::{
     AgentOsError, AgentOsResult, AppConfigProjection, AppConfigRecoveryProjection,
-    AppCredentialProjection, AppModelProjection, AppNotificationEnvelope, AppProjectProjection,
+    AppCredentialProjection, AppEcosystemProjection, AppEcosystemSourceProjection,
+    AppModelProjection, AppNotificationEnvelope, AppProjectProjection,
     AppProviderCapabilitiesProjection, AppProviderProjection, AppProviderUsageProjection,
     AppRequest, AppResponse, ApprovalStatus, ClientConnection, CreateAutomationScheduleInput,
-    CredentialSource, OpenResourceSessionInput, PermissionProfile, ProjectionCursor,
-    ResourceSessionType, StatsQuery, ThreadStatus, TurnInputKind,
+    CredentialSource, EcosystemSource, OpenResourceSessionInput, PermissionProfile,
+    ProjectionCursor, ResourceSessionType, StatsQuery, ThreadStatus, TurnInputKind,
 };
 use agent_os_thread::{RuntimeJob, RuntimeJobRecord};
 use serde::Serialize;
@@ -208,7 +209,7 @@ impl AgentOsHost {
     }
 
     fn config_read(&self, workspace: Option<String>) -> AgentOsResult<AppResponse> {
-        let config = config_projection(load_config(workspace)?)?;
+        let config = config_projection(load_config(workspace)?, self.ecosystem_projection()?)?;
         accepted("config", config)
     }
 
@@ -438,6 +439,47 @@ impl AgentOsHost {
             .collect::<Vec<_>>();
         accepted("automation_runs", runs)
     }
+
+    fn ecosystem_projection(&self) -> AgentOsResult<AppEcosystemProjection> {
+        let state = self.kernel().state_snapshot()?;
+        let mut projection = AppEcosystemProjection::default();
+        for document in state.instruction_documents.values() {
+            projection.instructions += 1;
+            source_projection_mut(
+                &mut projection.sources,
+                &document.source,
+                Some(document.precedence_rank),
+            )
+            .instructions += 1;
+        }
+        for skill in state.skill_definitions.values() {
+            projection.skills += 1;
+            source_projection_mut(&mut projection.sources, &skill.source, None).skills += 1;
+        }
+        for command in state.command_definitions.values() {
+            projection.commands += 1;
+            source_projection_mut(&mut projection.sources, &command.source, None).commands += 1;
+        }
+        for server in state.mcp_servers.values() {
+            projection.mcp_servers += 1;
+            source_projection_mut(&mut projection.sources, &server.source, None).mcp_servers += 1;
+        }
+        for tool in state.mcp_tools.values() {
+            projection.mcp_tools += 1;
+            source_projection_mut(&mut projection.sources, &tool.source, None).mcp_tools += 1;
+        }
+        for profile in state.imported_agent_profiles.values() {
+            projection.agents += 1;
+            source_projection_mut(&mut projection.sources, &profile.source, None).agents += 1;
+        }
+        projection.sources.sort_by(|left, right| {
+            left.precedence_rank
+                .unwrap_or(u32::MAX)
+                .cmp(&right.precedence_rank.unwrap_or(u32::MAX))
+                .then_with(|| left.source_path.cmp(&right.source_path))
+        });
+        Ok(projection)
+    }
 }
 
 fn accepted(key: &str, value: impl Serialize) -> AgentOsResult<AppResponse> {
@@ -451,7 +493,10 @@ fn load_config(workspace: Option<String>) -> AgentOsResult<ResolvedAgentOsConfig
     ResolvedAgentOsConfig::load(workspace.as_deref())
 }
 
-fn config_projection(config: ResolvedAgentOsConfig) -> AgentOsResult<AppConfigProjection> {
+fn config_projection(
+    config: ResolvedAgentOsConfig,
+    ecosystem: AppEcosystemProjection,
+) -> AgentOsResult<AppConfigProjection> {
     Ok(AppConfigProjection {
         config_path: path_string(config.paths.config_file()),
         data_dir: path_string(config.paths.data_dir),
@@ -463,6 +508,7 @@ fn config_projection(config: ResolvedAgentOsConfig) -> AgentOsResult<AppConfigPr
             slug: project.slug,
             hash: project.hash,
         }),
+        ecosystem,
         model: config.providers.model.clone(),
         small_model: config.providers.small_model.clone(),
         providers: provider_projections(&config.providers)?,
@@ -474,6 +520,44 @@ fn config_projection(config: ResolvedAgentOsConfig) -> AgentOsResult<AppConfigPr
             }
         }),
     })
+}
+
+fn source_projection_mut<'a>(
+    sources: &'a mut Vec<AppEcosystemSourceProjection>,
+    source: &EcosystemSource,
+    precedence_rank: Option<u32>,
+) -> &'a mut AppEcosystemSourceProjection {
+    if let Some(index) = sources.iter().position(|candidate| {
+        candidate.source_kind == source.source_kind
+            && candidate.source_scope == source.source_scope
+            && candidate.source_path == source.source_path
+    }) {
+        let projection = &mut sources[index];
+        match (projection.precedence_rank, precedence_rank) {
+            (Some(current), Some(next)) if next < current => {
+                projection.precedence_rank = Some(next);
+            }
+            (None, Some(next)) => {
+                projection.precedence_rank = Some(next);
+            }
+            _ => {}
+        }
+        return projection;
+    }
+    sources.push(AppEcosystemSourceProjection {
+        source_kind: source.source_kind,
+        source_scope: source.source_scope,
+        source_path: source.source_path.clone(),
+        precedence_rank,
+        instructions: 0,
+        skills: 0,
+        commands: 0,
+        mcp_servers: 0,
+        mcp_tools: 0,
+        agents: 0,
+    });
+    let index = sources.len() - 1;
+    &mut sources[index]
 }
 
 fn provider_projections(catalog: &ProviderCatalog) -> AgentOsResult<Vec<AppProviderProjection>> {
@@ -567,7 +651,10 @@ mod tests {
     use agent_os_config::{
         AgentOsConfigFile, AgentOsPaths, ModelConfigEntry, ProviderConfigEntry, ProviderOptions,
     };
-    use agent_os_sys::{LlmApiStyle, ModelCapabilities, ModelLimit};
+    use agent_os_sys::{
+        EcosystemSourceKind, EcosystemSourceScope, InstructionDocument, LlmApiStyle,
+        ModelCapabilities, ModelLimit, SkillDefinition,
+    };
     use std::collections::BTreeMap;
 
     #[test]
@@ -615,20 +702,23 @@ mod tests {
         })
         .unwrap();
         let root = PathBuf::from("D:/agent-os-test");
-        let projection = config_projection(ResolvedAgentOsConfig {
-            paths: AgentOsPaths {
-                home: root.clone(),
-                config_dir: root.join("config"),
-                data_dir: root.join("data"),
-                state_dir: root.join("state"),
-                cache_dir: root.join("cache"),
-                log_dir: root.join("log"),
-                bin_dir: root.join("cache").join("bin"),
+        let projection = config_projection(
+            ResolvedAgentOsConfig {
+                paths: AgentOsPaths {
+                    home: root.clone(),
+                    config_dir: root.join("config"),
+                    data_dir: root.join("data"),
+                    state_dir: root.join("state"),
+                    cache_dir: root.join("cache"),
+                    log_dir: root.join("log"),
+                    bin_dir: root.join("cache").join("bin"),
+                },
+                project: None,
+                providers,
+                global_config_recovery: None,
             },
-            project: None,
-            providers,
-            global_config_recovery: None,
-        })
+            AppEcosystemProjection::default(),
+        )
         .unwrap();
 
         let encoded = serde_json::to_string(&projection).unwrap();
@@ -647,5 +737,57 @@ mod tests {
             LlmApiStyle::OpenAiResponses
         );
         assert_eq!(projection.providers[0].models[0].id, "openai/gpt-4o");
+    }
+
+    #[test]
+    fn ecosystem_projection_groups_imported_kernel_sources() {
+        let host = AgentOsHost::in_memory();
+        let source = EcosystemSource {
+            source_kind: EcosystemSourceKind::Agents,
+            source_scope: EcosystemSourceScope::Project,
+            source_path: "D:/repo/AGENTS.md".to_string(),
+        };
+        host.kernel()
+            .import_instruction_document(InstructionDocument {
+                instruction_id: "inst_agents".to_string(),
+                source: source.clone(),
+                precedence_rank: 7,
+                content: "project rule".to_string(),
+                content_hash: "hash_inst".to_string(),
+                created_at: "2026-07-03T00:00:00Z".to_string(),
+            })
+            .unwrap();
+        host.kernel()
+            .import_skill_definition(SkillDefinition {
+                skill_id: "skill_agents".to_string(),
+                name: "agents-source".to_string(),
+                description: "Agents source skill".to_string(),
+                root_path: "D:/repo/.agents/skills/agents-source".to_string(),
+                skill_file_path: "D:/repo/.agents/skills/agents-source/SKILL.md".to_string(),
+                source: source.clone(),
+                content: "Use the project rule.".to_string(),
+                metadata: BTreeMap::new(),
+                content_hash: "hash_skill".to_string(),
+                created_at: "2026-07-03T00:00:00Z".to_string(),
+            })
+            .unwrap();
+
+        let projection = host.ecosystem_projection().unwrap();
+        let source_projection = projection
+            .sources
+            .iter()
+            .find(|candidate| candidate.source_path == source.source_path)
+            .unwrap();
+
+        assert_eq!(projection.instructions, 1);
+        assert_eq!(projection.skills, 1);
+        assert_eq!(source_projection.source_kind, EcosystemSourceKind::Agents);
+        assert_eq!(
+            source_projection.source_scope,
+            EcosystemSourceScope::Project
+        );
+        assert_eq!(source_projection.precedence_rank, Some(7));
+        assert_eq!(source_projection.instructions, 1);
+        assert_eq!(source_projection.skills, 1);
     }
 }

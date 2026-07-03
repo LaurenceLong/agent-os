@@ -17,7 +17,7 @@ impl Kernel {
                 "automation schedule prompt must not be empty".to_string(),
             ));
         }
-        if input.kind == AutomationScheduleKind::ThreadWakeup && input.target_thread_id.is_none() {
+        if input.target_thread_id.is_none() {
             return Err(AgentOsError::Validation(
                 "thread wakeup automation requires target_thread_id".to_string(),
             ));

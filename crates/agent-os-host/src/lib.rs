@@ -18,9 +18,9 @@ use agent_os_kernel::Kernel;
 use agent_os_store::LocalBlobStore;
 use agent_os_store_sqlite::SqliteStore;
 use agent_os_sys::{
-    now_rfc3339, AgentOsError, AgentOsResult, AutomationRun, AutomationScheduleKind,
-    AutomationScheduleStatus, ClientConnection, ClientKind, ClientThread, ModelCapabilities,
-    ModelLimit, SecurityLevel, StatsSnapshot, ThreadStatus, TurnInputKind, TurnRecord,
+    now_rfc3339, AgentOsError, AgentOsResult, AutomationRun, AutomationScheduleStatus,
+    ClientConnection, ClientKind, ClientThread, ModelCapabilities, ModelLimit, SecurityLevel,
+    StatsSnapshot, ThreadStatus, TurnInputKind, TurnRecord,
 };
 use agent_os_thread::{
     ModelClient, RuntimeConfig, RuntimeJob, RuntimeJobRecord, RuntimeRunReport, ThreadRuntime,
@@ -146,21 +146,17 @@ impl AgentOsHost {
             if due_at > now_instant {
                 continue;
             }
-            if schedule.kind == AutomationScheduleKind::ThreadWakeup {
-                let Some(thread_id) = &schedule.target_thread_id else {
-                    return Err(AgentOsError::Validation(format!(
-                        "thread wakeup automation {} has no target_thread_id",
-                        schedule.schedule_id
-                    )));
-                };
-                self.thread_by_id(thread_id)?;
-            }
+            let Some(thread_id) = &schedule.target_thread_id else {
+                return Err(AgentOsError::Validation(format!(
+                    "thread wakeup automation {} has no target_thread_id",
+                    schedule.schedule_id
+                )));
+            };
+            self.thread_by_id(thread_id)?;
             let run = self
                 .kernel
                 .queue_automation_run(&schedule.schedule_id, next_run_at.clone())?;
-            if run.kind == AutomationScheduleKind::ThreadWakeup {
-                self.enqueue_thread_wakeup_job(&run)?;
-            }
+            self.enqueue_thread_wakeup_job(&run)?;
             runs.push(run);
         }
         Ok(runs)
@@ -300,33 +296,26 @@ impl AgentOsHost {
         &self,
         catalog: &EcosystemCatalog,
     ) -> AgentOsResult<EcosystemImportReport> {
-        let mut report = EcosystemImportReport::default();
         for document in &catalog.instruction_documents {
             self.kernel.import_instruction_document(document.clone())?;
-            report.instructions += 1;
         }
         for skill in &catalog.skill_definitions {
             self.kernel.import_skill_definition(skill.clone())?;
-            report.skills += 1;
         }
         for command in &catalog.command_definitions {
             self.kernel.import_command_definition(command.clone())?;
-            report.commands += 1;
         }
         for profile in &catalog.imported_agent_profiles {
             self.kernel
                 .register_imported_agent_profile(profile.clone())?;
-            report.agents += 1;
         }
         for server in &catalog.mcp_servers {
             self.kernel.register_mcp_server_spec(server.clone())?;
-            report.mcp_servers += 1;
         }
         for tool in &catalog.mcp_tools {
             self.kernel.register_mcp_tool_definition(tool.clone())?;
-            report.mcp_tools += 1;
         }
-        Ok(report)
+        Ok(catalog.import_report())
     }
 
     pub fn spawn_runtime_job_worker<C>(

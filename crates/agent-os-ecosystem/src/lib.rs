@@ -21,6 +21,21 @@ pub struct EcosystemImportReport {
     pub mcp_servers: usize,
     pub mcp_tools: usize,
     pub agents: usize,
+    pub sources: Vec<EcosystemSourceImportReport>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EcosystemSourceImportReport {
+    pub source_kind: EcosystemSourceKind,
+    pub source_scope: EcosystemSourceScope,
+    pub source_path: String,
+    pub precedence_rank: Option<u32>,
+    pub instructions: usize,
+    pub skills: usize,
+    pub commands: usize,
+    pub mcp_servers: usize,
+    pub mcp_tools: usize,
+    pub agents: usize,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -31,6 +46,48 @@ pub struct EcosystemCatalog {
     pub mcp_servers: Vec<McpServerSpec>,
     pub mcp_tools: Vec<McpToolDefinition>,
     pub imported_agent_profiles: Vec<ImportedAgentProfile>,
+}
+
+impl EcosystemCatalog {
+    pub fn import_report(&self) -> EcosystemImportReport {
+        let mut report = EcosystemImportReport::default();
+        for document in &self.instruction_documents {
+            report.instructions += 1;
+            source_report_mut(
+                &mut report.sources,
+                &document.source,
+                Some(document.precedence_rank),
+            )
+            .instructions += 1;
+        }
+        for skill in &self.skill_definitions {
+            report.skills += 1;
+            source_report_mut(&mut report.sources, &skill.source, None).skills += 1;
+        }
+        for command in &self.command_definitions {
+            report.commands += 1;
+            source_report_mut(&mut report.sources, &command.source, None).commands += 1;
+        }
+        for server in &self.mcp_servers {
+            report.mcp_servers += 1;
+            source_report_mut(&mut report.sources, &server.source, None).mcp_servers += 1;
+        }
+        for tool in &self.mcp_tools {
+            report.mcp_tools += 1;
+            source_report_mut(&mut report.sources, &tool.source, None).mcp_tools += 1;
+        }
+        for profile in &self.imported_agent_profiles {
+            report.agents += 1;
+            source_report_mut(&mut report.sources, &profile.source, None).agents += 1;
+        }
+        report.sources.sort_by(|left, right| {
+            left.precedence_rank
+                .unwrap_or(u32::MAX)
+                .cmp(&right.precedence_rank.unwrap_or(u32::MAX))
+                .then_with(|| left.source_path.cmp(&right.source_path))
+        });
+        report
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -133,6 +190,44 @@ pub fn expand_command_template(template: &str, args: &[String], raw_arguments: &
         expanded = expanded.replace(&token, value);
     }
     expanded
+}
+
+fn source_report_mut<'a>(
+    sources: &'a mut Vec<EcosystemSourceImportReport>,
+    source: &EcosystemSource,
+    precedence_rank: Option<u32>,
+) -> &'a mut EcosystemSourceImportReport {
+    if let Some(index) = sources.iter().position(|candidate| {
+        candidate.source_kind == source.source_kind
+            && candidate.source_scope == source.source_scope
+            && candidate.source_path == source.source_path
+    }) {
+        let report = &mut sources[index];
+        match (report.precedence_rank, precedence_rank) {
+            (Some(current), Some(next)) if next < current => {
+                report.precedence_rank = Some(next);
+            }
+            (None, Some(next)) => {
+                report.precedence_rank = Some(next);
+            }
+            _ => {}
+        }
+        return report;
+    }
+    sources.push(EcosystemSourceImportReport {
+        source_kind: source.source_kind,
+        source_scope: source.source_scope,
+        source_path: source.source_path.clone(),
+        precedence_rank,
+        instructions: 0,
+        skills: 0,
+        commands: 0,
+        mcp_servers: 0,
+        mcp_tools: 0,
+        agents: 0,
+    });
+    let index = sources.len() - 1;
+    &mut sources[index]
 }
 
 fn ecosystem_roots(workspace_root: &Path, paths: &AgentOsPaths) -> Vec<EcosystemRoot> {
@@ -260,7 +355,7 @@ fn instruction_candidates_for_root(root: &EcosystemRoot) -> Vec<PathBuf> {
     match root.kind {
         EcosystemSourceKind::Claude => vec![root.path.join("CLAUDE.md")],
         EcosystemSourceKind::Agents => vec![root.path.join("AGENTS.md")],
-        EcosystemSourceKind::AgentOs | EcosystemSourceKind::ExternalAgent => {
+        EcosystemSourceKind::AgentOs => {
             vec![root.path.join("AGENTS.md"), root.path.join("CLAUDE.md")]
         }
     }
@@ -773,6 +868,69 @@ mod tests {
         assert!(body.contains("global instruction"));
         assert!(body.contains("project claude"));
         assert!(body.contains("project agents"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn import_report_records_agents_and_claude_migration_sources() {
+        let root = temp_dir("agent-os-ecosystem-source-report");
+        let home = root.join("home");
+        let workspace = root.join("workspace");
+        fs::create_dir_all(home.join("config")).unwrap();
+        fs::create_dir_all(workspace.join(".claude/skills/claude-only")).unwrap();
+        fs::create_dir_all(workspace.join(".agents/skills/agents-only")).unwrap();
+        fs::write(workspace.join("CLAUDE.md"), "claude migration rule\n").unwrap();
+        fs::write(workspace.join("AGENTS.md"), "agents project rule\n").unwrap();
+        write_skill(
+            &workspace.join(".claude/skills/claude-only/SKILL.md"),
+            "claude-only",
+            "claude migration",
+        );
+        write_skill(
+            &workspace.join(".agents/skills/agents-only/SKILL.md"),
+            "agents-only",
+            "agents migration",
+        );
+
+        let catalog = discover_ecosystem(&EcosystemDiscoverOptions {
+            workspace_root: workspace.clone(),
+            paths: test_paths(&home),
+        })
+        .unwrap();
+        let report = catalog.import_report();
+
+        assert!(catalog
+            .skill_definitions
+            .iter()
+            .any(|skill| skill.name == "claude-only"));
+        assert!(catalog
+            .skill_definitions
+            .iter()
+            .any(|skill| skill.name == "agents-only"));
+        assert!(report.sources.iter().any(|source| {
+            source.source_kind == EcosystemSourceKind::Claude
+                && source.source_scope == EcosystemSourceScope::Project
+                && source.source_path.ends_with("CLAUDE.md")
+                && source.instructions == 1
+        }));
+        assert!(report.sources.iter().any(|source| {
+            source.source_kind == EcosystemSourceKind::Agents
+                && source.source_scope == EcosystemSourceScope::Project
+                && source.source_path.ends_with("AGENTS.md")
+                && source.instructions == 1
+        }));
+        assert!(report.sources.iter().any(|source| {
+            source.source_kind == EcosystemSourceKind::Claude
+                && source.source_scope == EcosystemSourceScope::Project
+                && source.source_path.ends_with("SKILL.md")
+                && source.skills == 1
+        }));
+        assert!(report.sources.iter().any(|source| {
+            source.source_kind == EcosystemSourceKind::Agents
+                && source.source_scope == EcosystemSourceScope::Project
+                && source.source_path.ends_with("SKILL.md")
+                && source.skills == 1
+        }));
         let _ = fs::remove_dir_all(root);
     }
 

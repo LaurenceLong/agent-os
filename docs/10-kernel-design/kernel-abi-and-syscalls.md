@@ -320,7 +320,7 @@ Agent packages and distribution packages SHOULD include:
 ```yaml
 manifest_version: "0.1"
 package_name: string
-package_type: agent | tool-driver | policy-pack | distro | memory-driver
+package_type: agent | policy-pack | distro
 version: string
 entrypoint: string
 required_kernel_version: string

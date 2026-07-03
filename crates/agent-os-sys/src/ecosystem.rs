@@ -7,7 +7,6 @@ use std::collections::BTreeMap;
 #[serde(rename_all = "snake_case")]
 pub enum EcosystemSourceKind {
     AgentOs,
-    ExternalAgent,
     Claude,
     Agents,
 }

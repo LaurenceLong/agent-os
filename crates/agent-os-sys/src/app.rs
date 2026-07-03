@@ -1,6 +1,7 @@
 use crate::{
-    AutomationScheduleKind, CredentialSource, LlmApiStyle, ModelCapabilities, ModelLimit,
-    ResourceSessionType, SecurityLevel, ThreadStatus, TurnStatus,
+    AutomationScheduleKind, CredentialSource, EcosystemSourceKind, EcosystemSourceScope,
+    LlmApiStyle, ModelCapabilities, ModelLimit, ResourceSessionType, SecurityLevel, ThreadStatus,
+    TurnStatus,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -197,10 +198,36 @@ pub struct AppConfigProjection {
     pub cache_dir: String,
     pub log_dir: String,
     pub project: Option<AppProjectProjection>,
+    pub ecosystem: AppEcosystemProjection,
     pub model: String,
     pub small_model: Option<String>,
     pub providers: Vec<AppProviderProjection>,
     pub global_config_recovery: Option<AppConfigRecoveryProjection>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppEcosystemProjection {
+    pub instructions: usize,
+    pub skills: usize,
+    pub commands: usize,
+    pub mcp_servers: usize,
+    pub mcp_tools: usize,
+    pub agents: usize,
+    pub sources: Vec<AppEcosystemSourceProjection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppEcosystemSourceProjection {
+    pub source_kind: EcosystemSourceKind,
+    pub source_scope: EcosystemSourceScope,
+    pub source_path: String,
+    pub precedence_rank: Option<u32>,
+    pub instructions: usize,
+    pub skills: usize,
+    pub commands: usize,
+    pub mcp_servers: usize,
+    pub mcp_tools: usize,
+    pub agents: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

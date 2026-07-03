@@ -489,32 +489,25 @@ fn import_catalog(
     kernel: &Kernel,
     catalog: &EcosystemCatalog,
 ) -> AgentOsResult<EcosystemImportReport> {
-    let mut report = EcosystemImportReport::default();
     for document in &catalog.instruction_documents {
         kernel.import_instruction_document(document.clone())?;
-        report.instructions += 1;
     }
     for skill in &catalog.skill_definitions {
         kernel.import_skill_definition(skill.clone())?;
-        report.skills += 1;
     }
     for command in &catalog.command_definitions {
         kernel.import_command_definition(command.clone())?;
-        report.commands += 1;
     }
     for profile in &catalog.imported_agent_profiles {
         kernel.register_imported_agent_profile(profile.clone())?;
-        report.agents += 1;
     }
     for server in &catalog.mcp_servers {
         kernel.register_mcp_server_spec(server.clone())?;
-        report.mcp_servers += 1;
     }
     for tool in &catalog.mcp_tools {
         kernel.register_mcp_tool_definition(tool.clone())?;
-        report.mcp_tools += 1;
     }
-    Ok(report)
+    Ok(catalog.import_report())
 }
 
 fn test_paths(workspace: &std::path::Path) -> AgentOsPaths {

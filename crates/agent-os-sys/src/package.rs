@@ -4,10 +4,8 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "kebab-case")]
 pub enum PackageType {
     Agent,
-    ToolDriver,
     PolicyPack,
     Distro,
-    MemoryDriver,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

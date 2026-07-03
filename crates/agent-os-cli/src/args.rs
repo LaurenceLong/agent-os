@@ -488,7 +488,6 @@ pub(crate) fn usage_json() -> Value {
     json!({
         "commands": {
             "chat": "Interactive coding agent powered by a configured provider model.",
-            "demo": "Run the kernel lifecycle demo.",
             "run": "Run a deterministic end-to-end Agent-OS task.",
             "code": "Apply an exact repository edit and run a test command through Agent-OS.",
             "status": "Inspect a SQLite-backed Agent-OS state database.",
