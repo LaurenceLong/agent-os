@@ -3,6 +3,7 @@ use crate::ModelTurnRequest;
 
 pub(crate) fn default_system_prompt(request: &ModelTurnRequest, workspace_root: &str) -> String {
     let role = &request.thread.role;
+    let scoped_context = scoped_context(request);
     let ecosystem_context = ecosystem_context(request);
     let host_os = std::env::consts::OS;
     let visible_tools = visible_tools_section(request);
@@ -68,7 +69,7 @@ The provider tool definitions are the authoritative schema for these tools, incl
 - After required verification has passed and no requested work remains, submit_final is the only remaining action.
 - If verification was skipped, name exactly what was not run and why.
 - submit_final must include evidence_map entries. Each entry has a claim and evidence_refs, where evidence_refs are evidence_ids returned by completed tools.
-- Keep the summary short and factual. Avoid claiming success without evidence.{ecosystem_context}"#
+- Keep the summary short and factual. Avoid claiming success without evidence.{scoped_context}{ecosystem_context}"#
     )
 }
 
@@ -120,6 +121,75 @@ fn control_plane_rules(request: &ModelTurnRequest) -> String {
         return "- For agent_control, use one action per call. The start action must include goal and may include role_profile_id, workdir, timeout_seconds, output_policy, success_criteria, failure_criteria, and hooks in payload. For existing targets, use either an exact agent_id or an exact thread_id; do not invent an agent_id from a thread_id.\n- When answering a child permission request, approve only permissions that are both requested and within your own current authority. Never approve agent_control or set_goal for security_level >= 2 children.".to_string();
     }
     "- If agent_control or set_goal is not visible, coordinate with or escalate to the Supervisor through the visible communication and permission-request tools.".to_string()
+}
+
+fn scoped_context(request: &ModelTurnRequest) -> String {
+    let mut sections = Vec::new();
+    if !request.context.context_snapshots.is_empty() {
+        let body = request
+            .context
+            .context_snapshots
+            .iter()
+            .map(|snapshot| {
+                format!(
+                    "- loaded_refs [{}], freshness {:?}, tokens {}, pollution {:.2}",
+                    snapshot.loaded_refs.join(", "),
+                    snapshot.freshness,
+                    snapshot.token_estimate,
+                    snapshot.pollution_score
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        sections.push(format!("## Scoped Context Snapshots\n\n{body}"));
+    }
+    if !request.context.context_compactions.is_empty() {
+        let body = request
+            .context
+            .context_compactions
+            .iter()
+            .map(|compaction| {
+                let summary = compaction
+                    .summary_artifact_id
+                    .as_deref()
+                    .unwrap_or("no summary artifact");
+                format!(
+                    "- superseded_refs [{}], summary {}, tokens {}",
+                    compaction.superseded_refs.join(", "),
+                    summary,
+                    compaction.token_estimate
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        sections.push(format!("## Context Compactions\n\n{body}"));
+    }
+    if !request.context.memory_records.is_empty() {
+        let body = request
+            .context
+            .memory_records
+            .iter()
+            .filter(|memory| matches!(memory.status, agent_os_sys::MemoryStatus::Active))
+            .map(|memory| {
+                format!(
+                    "- {}: namespace {}, content {}",
+                    memory.memory_id, memory.namespace, memory.content
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !body.is_empty() {
+            sections.push(format!("## Active Memory Records\n\n{body}"));
+        }
+    }
+    if sections.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n\n# Scoped Context Projection\n\n{}",
+            sections.join("\n\n")
+        )
+    }
 }
 
 fn ecosystem_context(request: &ModelTurnRequest) -> String {

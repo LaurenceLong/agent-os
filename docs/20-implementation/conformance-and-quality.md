@@ -2,7 +2,7 @@
 
 Status: normative
 
-Last updated: 2026-07-03
+Last updated: 2026-07-04
 
 ## 1. Purpose
 
@@ -94,6 +94,10 @@ Runtime conformance tests MUST verify:
   requeue after foreground tool waits
 - host-backed runtime jobs preserve `Blocked` as a terminal runtime job
   status instead of converting model non-finalization into host failure
+- runtime model-context projection includes scoped context snapshots, context
+  compactions, and active memory records in provider-visible prompt content
+- runtime context-pruning events remain explicit and replayable when context
+  pressure supersedes older tool results, context snapshots, or memory records
 
 ## 5. Tool Driver Conformance
 
@@ -152,8 +156,32 @@ Tool driver tests MUST verify:
   `process stop|kill --process-id` exposes the same cleanup path
 - descriptor-declared evidence attachment for workspace, command, control-plane,
   and permission tools so final `evidence_map` entries can cite real evidence ids
+- model-visible tool parameters are covered by semantic branch rather than only
+  by one happy path, including target selection, optional pagination/cursor
+  fields, process-specific variants, permission/risk failure, invalid input, and
+  the returned fields the next model turn must consume
 
-## 5.1 Validation Gate Order
+## 5.1 Model Context Coverage
+
+The 60/25/15 unit/integration/live-e2e mix is measured by meaningful scenarios
+and assertions. It is not a line-count target.
+
+Every cross-boundary feature that can change model-visible context MUST have
+integration coverage for the real path. This includes runtime-to-kernel tool
+execution, kernel event and replay projection, store-backed restart behavior,
+app-server and CLI orchestration, provider request construction, ecosystem and
+config import into kernel state, and model-context projection.
+
+Every operation that can change what the model sees on the next turn MUST be
+reviewed as context-affecting. Examples include context load, compaction,
+pruning, memento and memory projection, thread fork/rollback/resume, session
+delete and purge, tool-result projection, imported instructions, skills,
+commands, MCP tools/resources, provider tool visibility, and final-submission
+evidence context. If a live model is expected to understand or invoke the
+behavior, add goal-driven live LLM e2e coverage in addition to deterministic
+unit or integration coverage.
+
+## 5.2 Validation Gate Order
 
 Changes that affect model-visible behavior, runtime behavior, tool behavior,
 prompts, provider adapters, storage/replay, or benchmark behavior MUST pass
@@ -168,7 +196,7 @@ The private benchmark gate MUST NOT start until the live e2e gate has passed.
 If a later gate fails, fix the root cause and restart from the earliest affected
 gate instead of treating the failure as a benchmark result.
 
-## 5.2 Ecosystem Conformance
+## 5.3 Ecosystem Conformance
 
 Ecosystem conformance tests MUST verify:
 
@@ -188,7 +216,7 @@ Ecosystem conformance tests MUST verify:
 - OpenAI-compatible and Anthropic-compatible model tool views project core and
   dynamic schemas from kernel `ToolDescriptor` records
 
-## 5.3 Current v0.3 Tool and Live Coverage
+## 5.4 Current v0.3 Tool and Live Coverage
 
 The current repo includes both deterministic mock/adapter tests and ignored live
 LLM e2e tests.
@@ -218,47 +246,60 @@ All ignored OpenAI/Anthropic live scenarios:
   expected coverage: simple file-writing e2e, workspace e2e, control-plane e2e, agent_control lifecycle e2e, full tool-surface e2e for OpenAI-compatible and Anthropic-compatible providers
 
 OpenAI-compatible workspace:
-  cargo test -p agent-os-thread live_openai_compatible_llm_goal_driven_workspace_e2e -- --ignored --nocapture
+  cargo test -p agent-os-thread live_openai_chat_completions_llm_goal_driven_workspace_e2e -- --ignored --nocapture
   expected coverage: read_file, apply_patch, run_command, accomplish_goal, submit_final
 
 OpenAI-compatible control plane:
-  cargo test -p agent-os-thread live_openai_compatible_llm_goal_driven_control_plane_e2e -- --ignored --nocapture
+  cargo test -p agent-os-thread live_openai_chat_completions_llm_goal_driven_control_plane_e2e -- --ignored --nocapture
   expected coverage: set_goal, accomplish_goal, update_checklist, record_evidence, report_supervisor, post_blackboard, ask_human, request_permissions, agent_control, read_file, submit_final
 
 Anthropic-compatible workspace:
-  cargo test -p agent-os-thread live_anthropic_compatible_llm_goal_driven_workspace_e2e -- --ignored --nocapture
+  cargo test -p agent-os-thread live_anthropic_messages_llm_goal_driven_workspace_e2e -- --ignored --nocapture
   expected coverage: read_file, apply_patch, run_command, accomplish_goal, submit_final
 
 Anthropic-compatible control plane:
-  cargo test -p agent-os-thread live_anthropic_compatible_llm_goal_driven_control_plane_e2e -- --ignored --nocapture
+  cargo test -p agent-os-thread live_anthropic_messages_llm_goal_driven_control_plane_e2e -- --ignored --nocapture
   expected coverage: set_goal, accomplish_goal, update_checklist, record_evidence, report_supervisor, post_blackboard, ask_human, request_permissions, agent_control, read_file, submit_final
 
+Scoped context projection:
+  cargo test -p agent-os-thread live_openai_chat_completions_llm_goal_driven_scoped_context_e2e -- --ignored --nocapture
+  cargo test -p agent-os-thread live_anthropic_messages_llm_goal_driven_scoped_context_e2e -- --ignored --nocapture
+  expected coverage: scoped context snapshots and context compactions projected into the normal provider prompt and used by the live model through apply_patch, run_command, and submit_final
+
 OpenAI-compatible image input:
-  cargo test -p agent-os-thread live_openai_compatible_llm_read_image_success_e2e -- --ignored --nocapture
-  cargo test -p agent-os-thread live_openai_compatible_llm_read_image_unsupported_e2e -- --ignored --nocapture
-  cargo test -p agent-os-thread live_openai_compatible_llm_switches_read_image_context_to_text_only_model -- --ignored --nocapture
+  cargo test -p agent-os-thread live_openai_chat_completions_llm_read_image_success_e2e -- --ignored --nocapture
+  cargo test -p agent-os-thread live_openai_chat_completions_llm_read_image_unsupported_e2e -- --ignored --nocapture
+  cargo test -p agent-os-thread live_openai_chat_completions_llm_switches_read_image_context_to_text_only_model -- --ignored --nocapture
   expected coverage: read_image success for image-capable aliases, hidden read_image for text-only aliases, and safe routing when prior image context is switched to a text-only alias
 
 Anthropic-compatible image input:
-  cargo test -p agent-os-thread live_anthropic_compatible_llm_read_image_success_e2e -- --ignored --nocapture
-  cargo test -p agent-os-thread live_anthropic_compatible_llm_read_image_unsupported_e2e -- --ignored --nocapture
-  cargo test -p agent-os-thread live_anthropic_compatible_llm_switches_read_image_context_to_text_only_model -- --ignored --nocapture
+  cargo test -p agent-os-thread live_anthropic_messages_llm_read_image_success_e2e -- --ignored --nocapture
+  cargo test -p agent-os-thread live_anthropic_messages_llm_read_image_unsupported_e2e -- --ignored --nocapture
+  cargo test -p agent-os-thread live_anthropic_messages_llm_switches_read_image_context_to_text_only_model -- --ignored --nocapture
   expected coverage: read_image success for image-capable aliases, hidden read_image for text-only aliases, and safe routing when prior image context is switched to a text-only alias
 ```
 
 Audit logs are emitted to:
 
 ```text
-target/agent-os-audit/live-openai-compatible-goal-workspace.jsonl
-target/agent-os-audit/live-openai-compatible-goal-control-plane.jsonl
-target/agent-os-audit/live-anthropic-compatible-goal-workspace.jsonl
-target/agent-os-audit/live-anthropic-compatible-goal-control-plane.jsonl
-target/agent-os-audit/live-openai-compatible-read-image-success.jsonl
-target/agent-os-audit/live-openai-compatible-read-image-unsupported.jsonl
-target/agent-os-audit/live-openai-compatible-read-image-switch-text-only.jsonl
-target/agent-os-audit/live-anthropic-compatible-read-image-success.jsonl
-target/agent-os-audit/live-anthropic-compatible-read-image-unsupported.jsonl
-target/agent-os-audit/live-anthropic-compatible-read-image-switch-text-only.jsonl
+target/agent-os-audit/live-openai_chat_completions-goal-workspace.jsonl
+target/agent-os-audit/live-openai_chat_completions-goal-control-plane.jsonl
+target/agent-os-audit/live-openai_chat_completions-goal-full-tool-surface.jsonl
+target/agent-os-audit/live-openai_chat_completions-goal-agent-control-lifecycle-success.jsonl
+target/agent-os-audit/live-openai_chat_completions-goal-ecosystem.jsonl
+target/agent-os-audit/live-openai_chat_completions-goal-scoped-context.jsonl
+target/agent-os-audit/live-anthropic_messages-goal-workspace.jsonl
+target/agent-os-audit/live-anthropic_messages-goal-control-plane.jsonl
+target/agent-os-audit/live-anthropic_messages-goal-full-tool-surface.jsonl
+target/agent-os-audit/live-anthropic_messages-goal-agent-control-lifecycle-success.jsonl
+target/agent-os-audit/live-anthropic_messages-goal-ecosystem.jsonl
+target/agent-os-audit/live-anthropic_messages-goal-scoped-context.jsonl
+target/agent-os-audit/live-openai_chat_completions-read-image-success.jsonl
+target/agent-os-audit/live-openai_chat_completions-read-image-unsupported.jsonl
+target/agent-os-audit/live-openai_chat_completions-read-image-switch-text-only.jsonl
+target/agent-os-audit/live-anthropic_messages-read-image-success.jsonl
+target/agent-os-audit/live-anthropic_messages-read-image-unsupported.jsonl
+target/agent-os-audit/live-anthropic_messages-read-image-switch-text-only.jsonl
 ```
 
 Each log should contain the generated system prompt, provider request messages,
@@ -267,7 +308,11 @@ provider responses, tool invocations, tool results, and a
 workspace scenarios and `9/9` for control-plane scenarios. Pretty JSON siblings
 may be generated for review, but secrets must remain redacted or absent.
 Image-input logs contain `live_read_image_*` summary records and provider
-message assertions for tool visibility and image payload projection.
+message assertions for tool visibility and image payload projection. The
+deterministic system-prompt export conformance additionally writes
+`target/agent-os-audit/model-visible-context-review/` and asserts that scoped
+context snapshots and context compactions appear in provider-visible prompt
+content.
 
 The 2026-06-30 long-running kernel refactor gate used the all-scenario command
 above from WSL with exported provider variables. The observed result was 10

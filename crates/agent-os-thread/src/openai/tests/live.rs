@@ -1,4 +1,4 @@
-﻿use super::support::*;
+use super::support::*;
 use super::*;
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
@@ -281,6 +281,32 @@ fn live_anthropic_messages_llm_goal_driven_ecosystem_e2e() {
 }
 
 #[test]
+#[ignore = "requires AGENT_OS_LIVE_OPENAI_API_KEY and a live openai_chat_completions endpoint"]
+fn live_openai_chat_completions_llm_goal_driven_scoped_context_e2e() {
+    run_live_llm_goal_driven_scoped_context_e2e(
+        "openai_chat_completions",
+        LlmApiStyle::OpenAiChatCompletions,
+        "AGENT_OS_LIVE_OPENAI_API_KEY",
+        "AGENT_OS_LIVE_OPENAI_MODEL",
+        "AGENT_OS_LIVE_OPENAI_BASE_URL",
+        "live-openai_chat_completions-goal-scoped-context.jsonl",
+    );
+}
+
+#[test]
+#[ignore = "requires AGENT_OS_LIVE_ANTHROPIC_API_KEY and a live anthropic_messages endpoint"]
+fn live_anthropic_messages_llm_goal_driven_scoped_context_e2e() {
+    run_live_llm_goal_driven_scoped_context_e2e(
+        "anthropic_messages",
+        LlmApiStyle::AnthropicMessages,
+        "AGENT_OS_LIVE_ANTHROPIC_API_KEY",
+        "AGENT_OS_LIVE_ANTHROPIC_MODEL",
+        "AGENT_OS_LIVE_ANTHROPIC_BASE_URL",
+        "live-anthropic_messages-goal-scoped-context.jsonl",
+    );
+}
+
+#[test]
 #[ignore = "requires a live openai_chat_completions image-capable model"]
 fn live_openai_chat_completions_llm_read_image_success_e2e() {
     run_live_llm_read_image_success_e2e(
@@ -484,6 +510,132 @@ fn run_live_llm_goal_driven_ecosystem_e2e(
     )
     .unwrap();
     println!("live_goal_ecosystem_log={}", audit_log_path.display());
+    let _ = std::fs::remove_dir_all(tmp);
+}
+
+fn run_live_llm_goal_driven_scoped_context_e2e(
+    provider: &str,
+    endpoint: LlmApiStyle,
+    api_key_env: &str,
+    model_env: &str,
+    base_env: &str,
+    log_file_name: &str,
+) {
+    let api_key = live_env_var(api_key_env);
+    let model = live_env_var(model_env);
+    let api_base = live_env_var(base_env);
+    let tmp = fresh_live_tmp("aos-live-goal-scoped-context", provider);
+    let audit_log_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/agent-os-audit")
+        .join(log_file_name);
+    let _ = std::fs::remove_file(&audit_log_path);
+    let verifier_name = if cfg!(windows) {
+        "verify_context.cmd"
+    } else {
+        "verify_context.sh"
+    };
+    let verifier_command = if cfg!(windows) {
+        format!(r#"command "{verifier_name}""#)
+    } else {
+        format!(r#"command "sh {verifier_name}""#)
+    };
+    if cfg!(windows) {
+        std::fs::write(
+            tmp.join(verifier_name),
+            "@echo off\r\nset RESULT=%~dp0context_result.txt\r\nfindstr /C:\"CONTEXT_PROJECTION_OK\" \"%RESULT%\" >nul || exit /b 1\r\nfindstr /C:\"prompt-review/context.md\" \"%RESULT%\" >nul || exit /b 1\r\nfindstr /C:\"context_snapshot:live-obsolete\" \"%RESULT%\" >nul || exit /b 1\r\necho CONTEXT_PROJECTION_VERIFIED\r\n",
+        )
+        .unwrap();
+    } else {
+        std::fs::write(
+            tmp.join(verifier_name),
+            "#!/bin/sh\ngrep -F \"CONTEXT_PROJECTION_OK\" context_result.txt >/dev/null || exit 1\ngrep -F \"prompt-review/context.md\" context_result.txt >/dev/null || exit 1\ngrep -F \"context_snapshot:live-obsolete\" context_result.txt >/dev/null || exit 1\necho CONTEXT_PROJECTION_VERIFIED\n",
+        )
+        .unwrap();
+    }
+    let goal = format!(
+        "Use the scoped context projection in your prompt to discover the loaded_refs value and the context compaction superseded_refs value. Create context_result.txt with three lines: CONTEXT_PROJECTION_OK, then the loaded_refs value, then the superseded_refs value. Do not write snapshot or compaction ids unless they appear inside those ref values. Verify it by calling run_command with {verifier_command}. Finish with submit_final and cite evidence_ids from completed tool results."
+    );
+    let kernel = live_kernel_with_blob_stores(&tmp);
+    let (kernel, request) = make_kernel_request_for_role_on_kernel_with_requirements(
+        kernel,
+        &tmp,
+        "role_producer",
+        &goal,
+        Vec::new(),
+        vec![ArtifactType::Patch],
+        vec![EvidenceType::DiffRef, EvidenceType::CommandLog],
+    );
+    kernel
+        .load_context(agent_os_kernel::LoadContextInput {
+            agent_id: request.thread.agent_id.clone(),
+            task_id: request.thread.task.task_id.clone(),
+            loaded_refs: vec!["prompt-review/context.md".to_string()],
+            summary_artifact_id: None,
+            freshness: ContextFreshness::Fresh,
+            pollution_score: 0.0,
+            token_estimate: 512,
+        })
+        .unwrap();
+    kernel
+        .compact_context(agent_os_kernel::CompactContextInput {
+            thread_id: request.thread.thread_id.clone(),
+            agent_id: request.thread.agent_id.clone(),
+            task_id: request.thread.task.task_id.clone(),
+            summary_artifact_id: None,
+            superseded_refs: vec!["context_snapshot:live-obsolete".to_string()],
+            token_estimate: 128,
+        })
+        .unwrap();
+    let client = OpenAiModelClient::new(api_key, model.clone())
+        .with_api_base(api_base.clone())
+        .with_endpoint(endpoint)
+        .with_max_tokens(2048)
+        .with_audit_log(audit_log_path.clone());
+    append_jsonl(
+        &audit_log_path,
+        &json!({
+            "type": "live_goal_driven_scoped_context_start",
+            "provider": provider,
+            "api_base": api_base,
+            "model": model,
+            "workspace": tmp,
+            "task_goal": request.thread.task.goal,
+        }),
+    )
+    .unwrap();
+
+    let mut runtime = ThreadRuntime::new(kernel.clone(), request.thread.thread_id.clone(), client);
+    let config = live_runtime_config(&tmp, 8);
+    let report = runtime.run_to_completion(config).unwrap();
+    assert!(report.final_submitted);
+    assert_completed_tool(&report, "apply_patch");
+    assert_completed_tool(&report, "run_command");
+    assert_completed_tool(&report, "submit_final");
+    assert_live_goal_tools(
+        &audit_log_path,
+        provider,
+        "scoped_context",
+        &report,
+        &["apply_patch", "run_command", "submit_final"],
+    );
+    let result = std::fs::read_to_string(tmp.join("context_result.txt")).unwrap();
+    assert!(result.contains("CONTEXT_PROJECTION_OK"));
+    assert!(result.contains("prompt-review/context.md"));
+    assert!(result.contains("context_snapshot:live-obsolete"));
+    assert_provider_request_contains_text(&audit_log_path, "# Scoped Context Projection");
+    assert_provider_request_contains_text(&audit_log_path, "prompt-review/context.md");
+    assert_provider_request_contains_text(&audit_log_path, "context_snapshot:live-obsolete");
+    append_jsonl(
+        &audit_log_path,
+        &json!({
+            "type": "live_goal_driven_scoped_context_summary",
+            "provider": provider,
+            "report": report,
+            "result": result,
+        }),
+    )
+    .unwrap();
+    println!("live_goal_scoped_context_log={}", audit_log_path.display());
     let _ = std::fs::remove_dir_all(tmp);
 }
 
@@ -1130,6 +1282,15 @@ fn assert_provider_requests_do_not_expose_tool(audit_log_path: &Path, tool_name:
     assert!(
         observed.iter().all(|name| name != tool_name),
         "provider requests exposed {tool_name} for text-only model; observed tools: {observed:?}"
+    );
+}
+
+fn assert_provider_request_contains_text(audit_log_path: &Path, expected: &str) {
+    let contents = std::fs::read_to_string(audit_log_path).unwrap();
+    assert!(
+        contents.contains(expected),
+        "provider request audit log did not contain {expected:?}: {}",
+        audit_log_path.display()
     );
 }
 

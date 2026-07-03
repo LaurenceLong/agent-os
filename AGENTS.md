@@ -117,6 +117,12 @@ forward-only system design.
   library orchestration. Organize new integration tests under
   `crates/agent-os-conformance/tests/integration/` with a small top-level test
   target that imports the directory modules.
+- Any feature whose behavior crosses crate or authority boundaries must have
+  integration coverage for the real path, not only unit coverage on each side.
+  Required cross-boundary paths include runtime-to-kernel tool execution, kernel
+  event and replay projection, store-backed restart behavior, app-server and CLI
+  orchestration, provider request construction, ecosystem/config import into
+  kernel state, and model-context projection.
 - E2E tests must be live LLM tests. They cover normal user or agent goals
   through the regular runtime loop, normal system prompt, normal model/provider
   adapter, normal capability grants, and realistic persisted state.
@@ -133,11 +139,28 @@ forward-only system design.
   `status`, `output`, `set_hook`, `send`, `resume`, `stop`, `set_timeout`,
   `export_trace`, `kill`, `delete_session`, and `purge_state`, including
   privileged success, denial, and append-only-store rejection paths.
+- Tool coverage must include parameter-level semantic branches, not just one
+  happy-path call per tool. Cover required fields, meaningful optional fields,
+  target-selection variants, permission and risk outcomes, invalid-input
+  failures, and the tool return values a model must use on the next turn.
+- Every operation that can change model-visible context must have focused
+  coverage at the right tier and a live goal-driven e2e scenario when a model is
+  expected to understand or invoke it. This includes context load, compaction,
+  pruning, memento and memory projection, thread fork/rollback/resume, session
+  delete and purge, tool-result projection, imported instructions, skills,
+  commands, MCP tools/resources, provider tool visibility, and final-submission
+  evidence context.
 - `submit_final` must be covered both as a kernel tool-broker integration path
   and as the model-visible final-submission path through the runtime loop.
 - Goal-driven live tests should use the normal system prompt and normal runtime
   loop. They may construct a workspace scenario and task goal, but must not add
   hidden per-tool instructions that force a specific call sequence.
+- Goal-driven live tests should assert auditable outcomes: provider request
+  shape, visible tool descriptors, selected tool calls and arguments, tool
+  return values, kernel state changes, replayable events, context projected to
+  the next turn, and final `evidence_map` references. Avoid assertions that
+  depend on exact natural-language phrasing unless the wording is the public
+  contract being tested.
 - Any change to prompts, tool schemas, parser behavior, runtime loop, provider
   adapters, storage schemas, migrations, or replay behavior must include focused
   tests at the right tier and should emit inspectable audit logs when the

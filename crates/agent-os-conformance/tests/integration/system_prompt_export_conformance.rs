@@ -139,10 +139,11 @@ fn runtime_exports_real_system_prompt_review_bundle_for_core_roles() {
             let captured_system_prompt =
                 system_prompt_from_raw_request(&captured_requests[0], provider);
             assert_eq!(system_prompt, captured_system_prompt);
+            let comparable_system_prompt = normalize_generated_context_ids(system_prompt);
             if let Some(expected) = &canonical_system_prompt {
-                assert_eq!(expected, system_prompt);
+                assert_eq!(expected, &comparable_system_prompt);
             } else {
-                canonical_system_prompt = Some(system_prompt.to_string());
+                canonical_system_prompt = Some(comparable_system_prompt);
             }
             assert!(system_prompt.contains("# Agent-OS Runtime Contract"));
             assert!(system_prompt.contains("## Visible Tool Summary"));
@@ -152,6 +153,11 @@ fn runtime_exports_real_system_prompt_review_bundle_for_core_roles() {
             assert!(system_prompt.contains("Project prompt review rule: preserve user work."));
             assert!(system_prompt.contains("prompt-review-skill: Inspect model-visible context."));
             assert!(system_prompt.contains(PROMPT_REVIEW_MCP_TOOL));
+            assert!(system_prompt.contains("# Scoped Context Projection"));
+            assert!(system_prompt.contains("## Scoped Context Snapshots"));
+            assert!(system_prompt.contains("prompt-review/context.md"));
+            assert!(system_prompt.contains("## Context Compactions"));
+            assert!(system_prompt.contains("context_snapshot:prompt-review-obsolete"));
             assert!(!system_prompt.contains("supervise and escalate"));
             if role.label == "producer" {
                 assert!(system_prompt.contains("Producer responsibility:"));
@@ -519,6 +525,27 @@ fn run_prompt_export_case(
             workspace_roots: vec![workspace.to_string_lossy().to_string()],
         })
         .unwrap();
+    kernel
+        .load_context(common::LoadContextInput {
+            agent_id: agent.agent_id.clone(),
+            task_id: agent.task.task_id.clone(),
+            loaded_refs: vec!["prompt-review/context.md".to_string()],
+            summary_artifact_id: None,
+            freshness: common::ContextFreshness::Fresh,
+            pollution_score: 0.1,
+            token_estimate: 512,
+        })
+        .unwrap();
+    kernel
+        .compact_context(common::CompactContextInput {
+            thread_id: agent.thread_id.clone(),
+            agent_id: agent.agent_id.clone(),
+            task_id: agent.task.task_id.clone(),
+            summary_artifact_id: None,
+            superseded_refs: vec!["context_snapshot:prompt-review-obsolete".to_string()],
+            token_estimate: 128,
+        })
+        .unwrap();
 
     let client = agent_os_thread::OpenAiModelClient::new("test-key", "prompt-export-model")
         .with_api_base(endpoint)
@@ -556,6 +583,24 @@ fn run_prompt_export_case(
 
 fn expected_request_count(_role: RoleCase) -> usize {
     4
+}
+
+fn normalize_generated_context_ids(prompt: &str) -> String {
+    prompt
+        .lines()
+        .map(|line| {
+            if line.starts_with("- ctx_") {
+                let rest = line.split_once(':').map(|(_, rest)| rest).unwrap_or("");
+                return format!("- <context_id>:{rest}");
+            }
+            if line.starts_with("- cmpct_") {
+                let rest = line.split_once(':').map(|(_, rest)| rest).unwrap_or("");
+                return format!("- <compaction_id>:{rest}");
+            }
+            line.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn import_prompt_review_instruction(kernel: &common::Kernel, workspace: &Path) {

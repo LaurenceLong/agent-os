@@ -146,6 +146,64 @@ fn default_system_prompt_projects_ecosystem_without_inlining_skill_body() {
 }
 
 #[test]
+fn default_system_prompt_projects_scoped_context_lifecycle() {
+    let tmp = std::env::temp_dir().join(format!("aos-openai-context-{}", new_id("t_")));
+    let mut request = make_request(&tmp);
+    request.context.context_snapshots.push(ContextSnapshot {
+        context_id: "ctx_current".to_string(),
+        agent_id: request.thread.agent_id.clone(),
+        task_id: request.thread.task.task_id.clone(),
+        loaded_refs: vec!["docs/design.md".to_string(), "src/lib.rs".to_string()],
+        summary_artifact_id: Some("art_context_summary".to_string()),
+        freshness: ContextFreshness::Fresh,
+        pollution_score: 0.25,
+        token_estimate: 2048,
+        created_at: now_rfc3339(),
+        invalidated_at: None,
+    });
+    request.context.context_compactions.push(ContextCompaction {
+        compaction_id: "cmpct_previous".to_string(),
+        thread_id: request.thread.thread_id.clone(),
+        agent_id: request.thread.agent_id.clone(),
+        task_id: request.thread.task.task_id.clone(),
+        summary_artifact_id: Some("art_compacted_summary".to_string()),
+        superseded_refs: vec![
+            "tool_result:call_old".to_string(),
+            "context_snapshot:ctx_old".to_string(),
+        ],
+        token_estimate: 4096,
+        created_at: now_rfc3339(),
+    });
+    request.context.memory_records.push(MemoryRecord {
+        memory_id: "mem_active".to_string(),
+        namespace: "task".to_string(),
+        status: MemoryStatus::Active,
+        content: serde_json::json!({"decision": "preserve scoped context"}),
+        source_evidence_ids: vec!["evd_context".to_string()],
+        created_by_agent_id: Some(request.thread.agent_id.clone()),
+        approved_by: None,
+        created_at: now_rfc3339(),
+        activated_at: Some(now_rfc3339()),
+        superseded_by: None,
+    });
+
+    let prompt = default_system_prompt(&request, tmp.to_str().unwrap());
+
+    assert!(prompt.contains("# Scoped Context Projection"));
+    assert!(prompt.contains("## Scoped Context Snapshots"));
+    assert!(prompt.contains("loaded_refs [docs/design.md, src/lib.rs]"));
+    assert!(prompt.contains("docs/design.md, src/lib.rs"));
+    assert!(prompt.contains("Fresh"));
+    assert!(prompt.contains("## Context Compactions"));
+    assert!(prompt.contains("superseded_refs [tool_result:call_old, context_snapshot:ctx_old]"));
+    assert!(prompt.contains("tool_result:call_old, context_snapshot:ctx_old"));
+    assert!(prompt.contains("art_compacted_summary"));
+    assert!(prompt.contains("## Active Memory Records"));
+    assert!(prompt.contains("mem_active"));
+    assert!(prompt.contains("preserve scoped context"));
+}
+
+#[test]
 fn build_messages_includes_tool_results() {
     let tmp = std::env::temp_dir().join(format!("aos-openai-tr-{}", new_id("t_")));
     let request = ModelTurnRequest {
