@@ -885,10 +885,7 @@ impl<C: ModelClient> ThreadRuntime<C> {
                 .iter()
                 .map(|artifact| artifact.artifact_id.clone())
                 .collect(),
-            evidence_ids: tool_results
-                .iter()
-                .flat_map(|result| result.evidence_ids.clone())
-                .collect(),
+            evidence_ids: completion_evidence_ids(tool_results, Some(&submission)),
         })?;
         self.kernel
             .submit_final(&acb.agent_id, &acb.task.task_id, submission)?;
@@ -914,10 +911,7 @@ impl<C: ModelClient> ThreadRuntime<C> {
                 .iter()
                 .map(|artifact| artifact.artifact_id.clone())
                 .collect(),
-            evidence_ids: tool_results
-                .iter()
-                .flat_map(|result| result.evidence_ids.clone())
-                .collect(),
+            evidence_ids: completion_evidence_ids(tool_results, None),
         })?;
         self.kernel.transition_thread(
             &acb.thread_id,
@@ -1095,6 +1089,48 @@ fn should_continue_with_running_tool_result(record: &ToolExecutionRecord) -> boo
             .and_then(|output| output.get("process_id"))
             .and_then(Value::as_str)
             .is_some_and(|process_id| !process_id.is_empty())
+}
+
+fn completion_evidence_ids(
+    tool_results: &[ToolExecutionRecord],
+    submission: Option<&FinalSubmission>,
+) -> Vec<String> {
+    let mut evidence_ids = tool_results
+        .iter()
+        .flat_map(|result| result.evidence_ids.clone())
+        .collect::<Vec<_>>();
+    if let Some(submission) = submission {
+        evidence_ids.extend(
+            submission
+                .evidence_map
+                .iter()
+                .flat_map(|entry| entry.evidence_refs.clone()),
+        );
+    }
+    evidence_ids.extend(
+        tool_results
+            .iter()
+            .filter(|result| result.tool_name == "submit_final")
+            .filter_map(|result| result.input.as_ref())
+            .flat_map(submit_final_input_evidence_refs),
+    );
+    evidence_ids.sort();
+    evidence_ids.dedup();
+    evidence_ids
+}
+
+fn submit_final_input_evidence_refs(input: &Value) -> Vec<String> {
+    input
+        .get("evidence_map")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.get("evidence_refs"))
+        .filter_map(Value::as_array)
+        .flat_map(|refs| refs.iter())
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect()
 }
 
 fn runtime_grant_resource_scopes(permissions: &PermissionSet) -> Vec<String> {

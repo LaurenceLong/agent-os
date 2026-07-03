@@ -566,6 +566,218 @@ fn goal_driven_runtime_integration_rejects_understated_privileged_agent_control_
 }
 
 #[test]
+fn goal_driven_runtime_integration_covers_submit_final_parameters() {
+    struct SubmitFinalParametersModel {
+        workspace_root: String,
+        step: usize,
+    }
+
+    impl ModelClient for SubmitFinalParametersModel {
+        fn next(&mut self, request: &ModelTurnRequest) -> AgentOsResult<ModelTurnResponse> {
+            let response = match self.step {
+                0 => ModelTurnResponse::single(ModelAction::ToolCall(ToolAction::new(
+                    "record_evidence",
+                    json!({
+                        "evidence_type": "source_ref",
+                        "claim": "submit_final parameter source evidence exists",
+                        "blob_ref": "blob://submit-final-parameters-source",
+                        "content_hash": "submit-final-parameters-source-hash"
+                    }),
+                    2,
+                    Some("submit_final parameter source evidence was recorded".to_string()),
+                ))),
+                1 => ModelTurnResponse::single(ModelAction::ToolCall(ToolAction::new(
+                    "record_evidence",
+                    json!({
+                        "evidence_type": "diff_ref",
+                        "claim": "submit_final parameter diff evidence exists",
+                        "blob_ref": "blob://submit-final-parameters-diff",
+                        "content_hash": "submit-final-parameters-diff-hash"
+                    }),
+                    2,
+                    Some("submit_final parameter diff evidence was recorded".to_string()),
+                ))),
+                2 => ModelTurnResponse::single(ModelAction::ToolCall(ToolAction::new(
+                    "record_evidence",
+                    json!({
+                        "evidence_type": "command_log",
+                        "claim": "submit_final parameter command evidence exists",
+                        "blob_ref": "blob://submit-final-parameters-command",
+                        "content_hash": "submit-final-parameters-command-hash"
+                    }),
+                    2,
+                    Some("submit_final parameter command evidence was recorded".to_string()),
+                ))),
+                3 => {
+                    let evidence_refs = request
+                        .context
+                        .tool_results
+                        .iter()
+                        .filter(|result| result.tool_name == "record_evidence")
+                        .filter_map(|result| result.output.as_ref())
+                        .filter_map(|output| output.get("evidence_id"))
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect::<Vec<_>>();
+                    if evidence_refs.len() != 3 {
+                        return Err(AgentOsError::Validation(format!(
+                            "submit_final parameter test expected three evidence ids in tool_results: {:?}",
+                            request.context.tool_results
+                        )));
+                    }
+                    let evidence_refs_for_map = evidence_refs.clone();
+                    ModelTurnResponse::single(ModelAction::ToolCall(ToolAction::new(
+                        "submit_final",
+                        json!({
+                            "summary": "Submit final parameters preserved.",
+                            "changed_artifacts": ["artifact_submit_final_parameters"],
+                            "evidence_map": [{
+                                "claim": "submit_final preserved every model-visible field",
+                                "evidence_refs": evidence_refs_for_map
+                            }],
+                            "unverified_claims": ["manual reviewer was not contacted"],
+                            "known_risks": ["provider credentials were not used"],
+                            "tests_run": [
+                                "goal_driven_runtime_integration_covers_submit_final_parameters"
+                            ],
+                            "tests_not_run": ["live provider spend was not required"],
+                            "approvals": ["approval_submit_final_parameters"]
+                        }),
+                        2,
+                        Some("submit_final optional parameters were routed".to_string()),
+                    )))
+                }
+                _ => {
+                    return Err(AgentOsError::Validation(format!(
+                        "submit_final parameter model was called after completion for {}",
+                        self.workspace_root
+                    )));
+                }
+            };
+            self.step += 1;
+            Ok(response)
+        }
+    }
+
+    let fx = runtime_fixture("agent-os-runtime-integration-submit-final-parameters");
+    let script = SubmitFinalParametersModel {
+        workspace_root: fx.workspace.to_string_lossy().to_string(),
+        step: 0,
+    };
+    let mut runtime =
+        ThreadRuntime::new(fx.kernel.clone(), fx.supervisor_thread_id.clone(), script);
+    let mut config = RuntimeConfig::workspace_write(&fx.workspace);
+    config.max_steps = 4;
+    config.tool_risk_ceiling = 6;
+    config.auto_commit_patch_artifacts = false;
+    let overrides = RuntimeRunOverrides {
+        sandbox_profile_id: Some("sbox_workspace_write".to_string()),
+        tool_approval_id: Some(fx.tool_approval_id.clone()),
+    };
+    let report = match runtime.run_to_completion_with_overrides(config, overrides) {
+        Ok(report) => report,
+        Err(error) => {
+            let state = fx.kernel.state_snapshot().unwrap();
+            panic!(
+                "submit_final parameter runtime failed: {error:?}; tool_invocations={:#?}; evidence={:#?}",
+                state.tool_invocations, state.evidence
+            );
+        }
+    };
+
+    assert_eq!(report.status, ThreadStatus::Completed);
+    assert!(report.final_submitted);
+    assert_eq!(
+        report
+            .tool_results
+            .iter()
+            .map(|result| result.tool_name.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "record_evidence",
+            "record_evidence",
+            "record_evidence",
+            "submit_final"
+        ]
+    );
+
+    let state = fx.kernel.state_snapshot().unwrap();
+    let submission = state
+        .final_submissions
+        .get(&fx.task_id)
+        .unwrap_or_else(|| panic!("missing persisted final submission: {state:#?}"));
+    assert_eq!(submission.summary, "Submit final parameters preserved.");
+    assert_eq!(
+        submission.changed_artifacts,
+        vec!["artifact_submit_final_parameters"]
+    );
+    assert_eq!(submission.evidence_map.len(), 1);
+    assert_eq!(
+        submission.evidence_map[0].claim,
+        "submit_final preserved every model-visible field"
+    );
+    assert_eq!(submission.evidence_map[0].evidence_refs.len(), 3);
+    assert!(state
+        .evidence
+        .contains_key(&submission.evidence_map[0].evidence_refs[0]));
+    assert_eq!(
+        submission.unverified_claims,
+        vec!["manual reviewer was not contacted"]
+    );
+    assert_eq!(
+        submission.known_risks,
+        vec!["provider credentials were not used"]
+    );
+    assert_eq!(
+        submission.tests_run,
+        vec!["goal_driven_runtime_integration_covers_submit_final_parameters"]
+    );
+    assert_eq!(
+        submission.tests_not_run,
+        vec!["live provider spend was not required"]
+    );
+    assert_eq!(
+        submission.approvals,
+        vec!["approval_submit_final_parameters"]
+    );
+
+    let submit_invocation = state
+        .tool_invocations
+        .values()
+        .find(|invocation| {
+            invocation.tool_name == "submit_final" && invocation.status == ToolCallStatus::Completed
+        })
+        .unwrap_or_else(|| panic!("missing submit_final invocation: {state:#?}"));
+    assert_eq!(submit_invocation.status, ToolCallStatus::Completed);
+    assert_eq!(
+        submit_invocation
+            .input
+            .get("changed_artifacts")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(
+        submit_invocation
+            .input
+            .get("approvals")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(1)
+    );
+
+    write_audit_log(
+        "goal-driven-submit-final-parameters-integration.jsonl",
+        &[
+            json!({"type": "runtime_report", "report": report}),
+            json!({"type": "final_submission", "submission": submission}),
+            json!({"type": "submit_final_invocation", "invocation": submit_invocation}),
+        ],
+    );
+    let _ = fs::remove_dir_all(fx.workspace);
+}
+
+#[test]
 fn goal_driven_runtime_integration_covers_control_plane_optional_parameters() {
     struct ControlPlaneOptionalModel {
         task_id: String,

@@ -298,6 +298,10 @@ Control-plane optional parameters:
   cargo test -p agent-os-conformance goal_driven_runtime_integration_covers_control_plane_optional_parameters
   expected coverage: record_evidence task_id/inline_content/metadata, report_supervisor message_type/artifact_refs/evidence_refs, ask_human message_type/context/artifact_refs/evidence_refs, post_blackboard confidence/source_evidence_ids, update_checklist all item statuses, set_goal title/success_criteria/failure_criteria, and accomplish_goal evidence_refs/artifact_refs/known_risks through the normal runtime loop
 
+Final submission parameters:
+  cargo test -p agent-os-conformance goal_driven_runtime_integration_covers_submit_final_parameters
+  expected coverage: model-visible submit_final summary/changed_artifacts/evidence_map/unverified_claims/known_risks/tests_run/tests_not_run/approvals through the normal runtime loop
+
 Ecosystem context:
   cargo test -p agent-os-thread live_openai_chat_completions_llm_goal_driven_ecosystem_e2e -- --ignored --nocapture
   cargo test -p agent-os-thread live_openai_responses_llm_goal_driven_ecosystem_e2e -- --ignored --nocapture
