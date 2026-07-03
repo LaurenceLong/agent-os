@@ -1663,6 +1663,130 @@ fn assert_grep_parameters_observed(report: &RuntimeRunReport) {
     );
 }
 
+fn assert_process_stdin_parameters_observed(report: &RuntimeRunReport, stdin_command: &str) {
+    let run_record = report
+        .tool_results
+        .iter()
+        .find(|record| {
+            record.tool_name == "run_command"
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("command"))
+                    .and_then(Value::as_str)
+                    == Some(stdin_command)
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("stdin"))
+                    .and_then(Value::as_str)
+                    == Some("piped")
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "missing parameterized run_command stdin=piped call: {:?}",
+                report.tool_results
+            )
+        });
+    let run_output = run_record
+        .output
+        .as_ref()
+        .unwrap_or_else(|| panic!("missing run_command output: {run_record:?}"));
+    let process_id = run_output
+        .get("process_id")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("run_command output omitted process_id: {run_record:?}"));
+    assert!(!process_id.is_empty());
+    assert_eq!(
+        run_output.get("stdin_mode").and_then(Value::as_str),
+        Some("piped")
+    );
+
+    let write_record = report
+        .tool_results
+        .iter()
+        .find(|record| {
+            record.tool_name == "write_stdin"
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("process_id"))
+                    .and_then(Value::as_str)
+                    == Some(process_id)
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("write_id"))
+                    .and_then(Value::as_str)
+                    == Some("live-stdin-1")
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("text"))
+                    .and_then(Value::as_str)
+                    == Some("MODEL_STDIN_OK")
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "missing parameterized write_stdin write call: {:?}",
+                report.tool_results
+            )
+        });
+    assert_eq!(
+        write_record
+            .output
+            .as_ref()
+            .and_then(|output| output.pointer("/stdin_write/write_id"))
+            .and_then(Value::as_str),
+        Some("live-stdin-1")
+    );
+
+    let poll_record = report
+        .tool_results
+        .iter()
+        .find(|record| {
+            record.tool_name == "write_stdin"
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("process_id"))
+                    .and_then(Value::as_str)
+                    == Some(process_id)
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("field"))
+                    .and_then(Value::as_str)
+                    == Some("stdout")
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.pointer("/after_sequence/stdout"))
+                    .and_then(Value::as_u64)
+                    == Some(0)
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "missing parameterized write_stdin poll call: {:?}",
+                report.tool_results
+            )
+        });
+    let stdout = poll_record
+        .output
+        .as_ref()
+        .and_then(|output| output.pointer("/process_output/chunks"))
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| panic!("missing write_stdin process output chunks: {poll_record:?}"))
+        .iter()
+        .filter_map(|chunk| chunk.get("text").and_then(Value::as_str))
+        .collect::<Vec<_>>()
+        .join("");
+    assert!(
+        stdout.contains("STDIN_ECHO:MODEL_STDIN_OK"),
+        "write_stdin stdout did not contain stdin echo: {stdout}"
+    );
+}
+
 fn assert_request_permissions_parameters_observed(report: &RuntimeRunReport) {
     let record = report
         .tool_results
@@ -2232,6 +2356,56 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
         ],
     );
 
+    let stdin_command = live_stdin_echo_command();
+    let (stdin_kernel, stdin_request) =
+        make_kernel_request_for_role_with_blob_store_and_requirements(
+            &tmp,
+            "role_producer",
+            &format!(
+                "Complete this focused process stdin validation. Call run_command with command exactly {stdin_command} and stdin piped. Use the process_id returned by run_command to call write_stdin with write_id exactly live-stdin-1 and text exactly MODEL_STDIN_OK. Then call write_stdin again with the same process_id, field stdout, and after_sequence stdout 0. If the stdout chunks do not contain STDIN_ECHO:MODEL_STDIN_OK, poll write_stdin with the same field and after_sequence once more. Then call accomplish_goal with a concise summary, then submit_final with summary exactly Process stdin surface complete., evidence_map citing evidence_ids from completed tool results, tests_run containing write_stdin stdout poll, and known_risks as an empty array. submit_final must be the last tool call."
+            ),
+            Vec::new(),
+            Vec::new(),
+            vec![EvidenceType::CommandLog],
+        );
+    let stdin_client = OpenAiModelClient::new(api_key.clone(), model.clone())
+        .with_api_base(api_base.clone())
+        .with_endpoint(endpoint)
+        .with_max_tokens(2048)
+        .with_audit_log(audit_log_path.clone());
+    let mut stdin_runtime = ThreadRuntime::new(
+        stdin_kernel.clone(),
+        stdin_request.thread.thread_id.clone(),
+        stdin_client,
+    );
+    let stdin_config = live_runtime_config(&tmp, 8);
+    let stdin_report = stdin_runtime.run_to_completion(stdin_config).unwrap();
+    assert!(stdin_report.final_submitted);
+    let failed: Vec<_> = stdin_report
+        .tool_results
+        .iter()
+        .filter(|record| {
+            record.tool_name != "runtime_feedback" && record.status == ToolCallStatus::Failed
+        })
+        .collect();
+    assert!(
+        failed.is_empty(),
+        "process stdin tool calls failed: {failed:?}"
+    );
+    assert_process_stdin_parameters_observed(&stdin_report, stdin_command);
+    assert_live_goal_tools(
+        &audit_log_path,
+        provider,
+        "full_tool_surface_process_stdin",
+        &stdin_report,
+        &[
+            "run_command",
+            "write_stdin",
+            "accomplish_goal",
+            "submit_final",
+        ],
+    );
+
     std::fs::write(
         tmp.join("coordination_seed.md"),
         "Coordination seed: live full surface control-plane segment\n",
@@ -2787,6 +2961,14 @@ fn write_full_surface_verifier(workspace: &Path) -> String {
         )
         .unwrap();
         "sh verify_full_surface.sh".to_string()
+    }
+}
+
+fn live_stdin_echo_command() -> &'static str {
+    if cfg!(windows) {
+        "$buffer = New-Object char[] 14; $count = [Console]::In.ReadBlock($buffer, 0, 14); $text = -join $buffer[0..($count - 1)]; Write-Output ('STDIN_ECHO:' + $text); Start-Sleep -Seconds 2"
+    } else {
+        "text=$(dd bs=14 count=1 2>/dev/null); printf 'STDIN_ECHO:%s\\n' \"$text\"; sleep 2"
     }
 }
 

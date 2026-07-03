@@ -30,6 +30,7 @@ pub use report::{RuntimeConfig, RuntimeRunOverrides, RuntimeRunReport};
 const MAX_PROJECTED_ARTIFACTS: usize = 8;
 const RUNTIME_GRANT_RESOURCE_SCOPE_CANDIDATES: &[&str] = &[
     "tool:*",
+    "process:*",
     "instruction:*",
     "skill:*",
     "skill_file:*",
@@ -471,15 +472,20 @@ impl<C: ModelClient> ThreadRuntime<C> {
                             action,
                         )?;
                         if record.status == ToolCallStatus::Running {
+                            let continue_with_model =
+                                should_continue_with_running_tool_result(&record);
                             tool_results.push(record);
+                            self.kernel.record_checkpoint(
+                                &acb.thread_id,
+                                format!("ckpt_after_tool_background_{}", new_id("y_")),
+                            )?;
+                            if continue_with_model {
+                                break;
+                            }
                             self.kernel.transition_thread(
                                 &acb.thread_id,
                                 ThreadStatus::WaitingTool,
                                 Some("background tool is still running".to_string()),
-                            )?;
-                            self.kernel.record_checkpoint(
-                                &acb.thread_id,
-                                format!("ckpt_after_tool_background_{}", new_id("y_")),
                             )?;
                             let waiting = self.acb()?;
                             return Ok(RuntimeRunReport {
@@ -1073,6 +1079,22 @@ fn expose_tool_search_matches(tool_plan: &mut ToolPlan, tool_results: &[ToolExec
             entry.reason = Some("exposed after tool_search match".to_string());
         }
     }
+}
+
+fn should_continue_with_running_tool_result(record: &ToolExecutionRecord) -> bool {
+    record.tool_name == "run_command"
+        && record
+            .output
+            .as_ref()
+            .and_then(|output| output.get("stdin_mode"))
+            .and_then(Value::as_str)
+            == Some("piped")
+        && record
+            .output
+            .as_ref()
+            .and_then(|output| output.get("process_id"))
+            .and_then(Value::as_str)
+            .is_some_and(|process_id| !process_id.is_empty())
 }
 
 fn runtime_grant_resource_scopes(permissions: &PermissionSet) -> Vec<String> {

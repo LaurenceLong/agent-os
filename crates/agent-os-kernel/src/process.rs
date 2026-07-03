@@ -330,7 +330,7 @@ impl Kernel {
             .cloned())
     }
 
-    fn process_session(&self, process_id: &str) -> AgentOsResult<ProcessSession> {
+    pub(crate) fn process_session(&self, process_id: &str) -> AgentOsResult<ProcessSession> {
         self.read_state()?
             .process_sessions
             .get(process_id)

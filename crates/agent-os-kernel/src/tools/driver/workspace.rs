@@ -12,7 +12,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdout, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const PREVIEW_CHARS: usize = 2_000;
 
@@ -431,11 +431,22 @@ pub(in crate::tools) fn run_process_stdin(
     }
 
     ensure_process_owned_by_agent(kernel, &syscall.agent_id, &process_id)?;
+    let before_write_session = kernel.process_session(&process_id)?;
+    let before_stdout_sequence = before_write_session.stdout.sequence;
+    let before_stderr_sequence = before_write_session.stderr.sequence;
     let stdin_write = if let (Some(write_id), Some(text)) = (write_id, text) {
         Some(kernel.write_process_stdin(&process_id, &write_id, &text)?)
     } else {
         None
     };
+    if stdin_write.is_some() {
+        wait_for_process_output_after_stdin(
+            kernel,
+            &process_id,
+            before_stdout_sequence,
+            before_stderr_sequence,
+        )?;
+    }
     let (session, invocation, chunks) =
         process_output_context_for_agent(kernel, &syscall.agent_id, &process_id)?;
     let worker = kernel
@@ -461,6 +472,26 @@ pub(in crate::tools) fn run_process_stdin(
         object.insert("stdin_write".to_string(), json!(write));
     }
     Ok(output)
+}
+
+fn wait_for_process_output_after_stdin(
+    kernel: &Kernel,
+    process_id: &str,
+    before_stdout_sequence: u64,
+    before_stderr_sequence: u64,
+) -> AgentOsResult<()> {
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_millis(750) {
+        let session = kernel.process_session(process_id)?;
+        if session.stdout.sequence > before_stdout_sequence
+            || session.stderr.sequence > before_stderr_sequence
+            || session.state != ProcessLifecycleState::Running
+        {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    Ok(())
 }
 
 fn process_command_mode(mode: &str) -> ProcessCommandMode {

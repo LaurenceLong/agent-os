@@ -10,7 +10,9 @@ use crate::*;
 use agent_os_sys::*;
 use serde_json::json;
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+const PIPED_STDIN_FOREGROUND_TIMEOUT_MS: u64 = 500;
 
 #[derive(Debug, Clone, Copy)]
 pub(in crate::tools) enum ToolOutputStream {
@@ -304,7 +306,12 @@ impl Kernel {
         invocation: ToolInvocation,
         causation_id: Option<String>,
     ) -> AgentOsResult<ToolInvocation> {
-        let foreground_timeout = Duration::from_millis(descriptor.lifecycle.foreground_timeout_ms);
+        let foreground_timeout = foreground_timeout_for_invocation(&descriptor, &input.input);
+        let input_stdin_mode = input
+            .input
+            .get("stdin")
+            .cloned()
+            .unwrap_or_else(|| json!("closed"));
         let call_id = invocation.call_id.clone();
         let running_snapshot = invocation.clone();
         self.register_tool_worker(&invocation)?;
@@ -326,14 +333,14 @@ impl Kernel {
             Ok(result) => result,
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 let mut progressed = running_snapshot;
-                let process_id = self
-                    .process_session_by_tool_call_id(&progressed.call_id)?
-                    .map(|session| session.process_id);
+                let process_id =
+                    self.wait_process_id_for_tool_call(&progressed.call_id, foreground_timeout)?;
                 progressed.output = Some(json!({
                     "status": "running",
                     "tool_call_id": progressed.call_id,
                     "process_id": process_id,
                     "tool_name": progressed.tool_name,
+                    "stdin_mode": input_stdin_mode,
                     "foreground_timeout_ms": foreground_timeout.as_millis() as u64,
                     "message": "tool exceeded the foreground wait cap and is still running in the background"
                 }));
@@ -370,6 +377,23 @@ impl Kernel {
                 )?;
                 Ok(failed)
             }
+        }
+    }
+
+    fn wait_process_id_for_tool_call(
+        &self,
+        call_id: &str,
+        timeout: Duration,
+    ) -> AgentOsResult<Option<String>> {
+        let started = Instant::now();
+        loop {
+            if let Some(session) = self.process_session_by_tool_call_id(call_id)? {
+                return Ok(Some(session.process_id));
+            }
+            if started.elapsed() >= timeout {
+                return Ok(None);
+            }
+            std::thread::sleep(Duration::from_millis(25));
         }
     }
 
@@ -678,6 +702,18 @@ impl Kernel {
             .cloned()
             .ok_or_else(|| AgentOsError::NotFound(format!("tool {}", input.tool_name)))
     }
+}
+
+fn foreground_timeout_for_invocation(
+    descriptor: &ToolDescriptor,
+    input: &serde_json::Value,
+) -> Duration {
+    if descriptor.name == "run_command"
+        && input.get("stdin").and_then(serde_json::Value::as_str) == Some("piped")
+    {
+        return Duration::from_millis(PIPED_STDIN_FOREGROUND_TIMEOUT_MS);
+    }
+    Duration::from_millis(descriptor.lifecycle.foreground_timeout_ms)
 }
 
 fn planning_mode_allows_tool(mode: ToolPlanningMode, tool_name: &str) -> bool {

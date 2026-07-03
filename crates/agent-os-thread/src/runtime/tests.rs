@@ -664,6 +664,172 @@ fn runtime_exposes_deferred_tool_after_tool_search_match() {
     let _ = fs::remove_dir_all(workspace);
 }
 
+#[test]
+fn runtime_continues_model_loop_for_running_piped_process_stdin() {
+    struct ContinuePipedProcess {
+        command: String,
+    }
+
+    impl ModelClient for ContinuePipedProcess {
+        fn next(&mut self, request: &ModelTurnRequest) -> AgentOsResult<ModelTurnResponse> {
+            let run_record = request.context.tool_results.iter().find(|result| {
+                result.tool_name == "run_command"
+                    && result
+                        .input
+                        .as_ref()
+                        .and_then(|input| input.get("command"))
+                        .and_then(Value::as_str)
+                        == Some(self.command.as_str())
+            });
+            let Some(run_record) = run_record else {
+                return Ok(ModelTurnResponse::single(ModelAction::ToolCall(
+                    ToolAction::new(
+                        "run_command",
+                        json!({
+                            "command": self.command,
+                            "stdin": "piped",
+                            "cwd": request.workspace_root.to_string_lossy()
+                        }),
+                        4,
+                        Some("started piped stdin process".to_string()),
+                    ),
+                )));
+            };
+            assert_eq!(run_record.status, ToolCallStatus::Running);
+            let process_id = run_record
+                .output
+                .as_ref()
+                .and_then(|output| output.get("process_id"))
+                .and_then(Value::as_str)
+                .expect("running run_command output should include process_id")
+                .to_string();
+            assert_eq!(
+                run_record
+                    .output
+                    .as_ref()
+                    .and_then(|output| output.get("stdin_mode"))
+                    .and_then(Value::as_str),
+                Some("piped")
+            );
+
+            let wrote_stdin = request.context.tool_results.iter().any(|result| {
+                result.tool_name == "write_stdin"
+                    && result
+                        .input
+                        .as_ref()
+                        .and_then(|input| input.get("write_id"))
+                        .and_then(Value::as_str)
+                        == Some("runtime-stdin-1")
+            });
+            if !wrote_stdin {
+                return Ok(ModelTurnResponse::single(ModelAction::ToolCall(
+                    ToolAction::new(
+                        "write_stdin",
+                        json!({
+                            "process_id": process_id,
+                            "write_id": "runtime-stdin-1",
+                            "text": "MODEL_STDIN_OK\n"
+                        }),
+                        4,
+                        Some("wrote stdin to running process".to_string()),
+                    ),
+                )));
+            }
+
+            let stdout = request
+                .context
+                .tool_results
+                .iter()
+                .filter(|result| result.tool_name == "write_stdin")
+                .filter_map(|result| result.output.as_ref())
+                .filter_map(|output| output.pointer("/process_output/chunks"))
+                .filter_map(Value::as_array)
+                .flat_map(|chunks| chunks.iter())
+                .filter_map(|chunk| chunk.get("text"))
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join("");
+            if !stdout.contains("STDIN_ECHO:MODEL_STDIN_OK") {
+                return Ok(ModelTurnResponse::single(ModelAction::ToolCall(
+                    ToolAction::new(
+                        "write_stdin",
+                        json!({
+                            "process_id": process_id,
+                            "field": "stdout",
+                            "after_sequence": {"stdout": 0}
+                        }),
+                        4,
+                        Some("polled stdout from stdin process".to_string()),
+                    ),
+                )));
+            }
+
+            let evidence_map = request
+                .context
+                .tool_results
+                .iter()
+                .filter(|result| !result.evidence_ids.is_empty())
+                .map(|result| EvidenceMapEntry {
+                    claim: result
+                        .evidence_claim
+                        .clone()
+                        .unwrap_or_else(|| "stdin process evidence".to_string()),
+                    evidence_refs: result.evidence_ids.clone(),
+                })
+                .collect();
+            Ok(ModelTurnResponse::single(ModelAction::Final {
+                submission: FinalSubmission {
+                    summary: "Submitted after stdin continuation.".to_string(),
+                    changed_artifacts: Vec::new(),
+                    evidence_map,
+                    unverified_claims: Vec::new(),
+                    known_risks: Vec::new(),
+                    tests_run: vec!["write_stdin stdout poll".to_string()],
+                    tests_not_run: Vec::new(),
+                    approvals: Vec::new(),
+                },
+            }))
+        }
+    }
+
+    let workspace = temp_workspace("runtime-piped-process-stdin");
+    let command = if cfg!(windows) {
+        "$line = [Console]::In.ReadLine(); Write-Output ('STDIN_ECHO:' + $line); Start-Sleep -Seconds 2"
+    } else {
+        "IFS= read -r line; printf 'STDIN_ECHO:%s\\n' \"$line\"; sleep 2"
+    };
+    let kernel = Kernel::new();
+    let agent = spawn_runtime_agent(
+        &kernel,
+        &workspace,
+        "Continue a running piped stdin process",
+    );
+    let mut config = RuntimeConfig::workspace_write(&workspace);
+    config.max_steps = 6;
+    let mut runtime = ThreadRuntime::new(
+        kernel.clone(),
+        agent.thread_id,
+        ContinuePipedProcess {
+            command: command.to_string(),
+        },
+    );
+
+    let report = runtime.run_to_completion(config).unwrap();
+
+    assert!(
+        report.final_submitted,
+        "stdin continuation report: {report:#?}"
+    );
+    assert!(report.tool_results.iter().any(|result| {
+        result.tool_name == "run_command" && result.status == ToolCallStatus::Running
+    }));
+    assert!(report.tool_results.iter().any(|result| {
+        result.tool_name == "write_stdin" && result.status == ToolCallStatus::Completed
+    }));
+    assert_eq!(report.status, ThreadStatus::Completed);
+    let _ = fs::remove_dir_all(workspace);
+}
+
 fn temp_workspace(label: &str) -> std::path::PathBuf {
     let workspace = env::temp_dir().join(format!(
         "agent-os-thread-{label}-{}-{}",

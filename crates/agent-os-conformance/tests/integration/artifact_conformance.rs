@@ -1475,18 +1475,6 @@ fn write_stdin_tool_continues_own_process_and_polls_output() {
         std::process::id(),
         new_id("case_")
     ));
-    let mut run_command_descriptor = fx
-        .kernel
-        .state_snapshot()
-        .unwrap()
-        .tool_descriptors
-        .get("run_command")
-        .unwrap()
-        .clone();
-    run_command_descriptor.lifecycle.foreground_timeout_ms = 500;
-    fx.kernel
-        .register_tool_descriptor(run_command_descriptor)
-        .unwrap();
     let env = fx
         .kernel
         .create_environment(
@@ -1521,6 +1509,7 @@ fn write_stdin_tool_continues_own_process_and_polls_output() {
     } else {
         "IFS= read -r line; printf 'direct:%s\n' \"$line\"; sleep 2"
     };
+    let command_started = std::time::Instant::now();
     let command = fx
         .kernel
         .invoke_tool(
@@ -1540,6 +1529,10 @@ fn write_stdin_tool_continues_own_process_and_polls_output() {
             },
         )
         .unwrap();
+    assert!(
+        command_started.elapsed() < std::time::Duration::from_secs(5),
+        "run_command stdin=piped should return a running process without waiting for the default foreground timeout"
+    );
     assert_eq!(command.status, ToolCallStatus::Running);
     let process_id = command
         .output
