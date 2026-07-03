@@ -161,6 +161,12 @@ fn runtime_exports_real_system_prompt_review_bundle_for_core_roles() {
             assert!(system_prompt.contains("## Owner Memento Fragments"));
             assert!(system_prompt.contains("Review prompt context"));
             assert!(system_prompt.contains("Confirm prompt-review-skill and MCP visibility."));
+            assert!(system_prompt.contains("## Thread Lifecycle Context"));
+            assert!(system_prompt.contains("fork fork_"));
+            assert!(system_prompt.contains("source_thread"));
+            assert!(system_prompt.contains("forked_thread"));
+            assert!(system_prompt.contains("rollback rollback_"));
+            assert!(system_prompt.contains("return to prompt review branch"));
             assert!(!system_prompt.contains("supervise and escalate"));
             if role.label == "producer" {
                 assert!(system_prompt.contains("Producer responsibility:"));
@@ -579,6 +585,27 @@ fn run_prompt_export_case(
     kernel
         .arm_memento(&agent.agent_id, &memento.memento_id)
         .unwrap();
+    let branch_turn = kernel.start_turn(&agent.thread_id).unwrap();
+    let branch_turn_id = branch_turn.active_turn.turn_id.clone().unwrap();
+    kernel
+        .fork_thread(common::ForkThreadInput {
+            source_thread_id: agent.thread_id.clone(),
+            from_turn_id: Some(branch_turn_id.clone()),
+            created_by_client_id: "prompt-export-client".to_string(),
+            title: Some("Prompt review branch".to_string()),
+            goal: Some("Review alternate prompt context".to_string()),
+        })
+        .unwrap();
+    kernel
+        .rollback_thread(common::RollbackThreadInput {
+            thread_id: agent.thread_id.clone(),
+            target_turn_id: Some(branch_turn_id),
+            target_item_id: None,
+            target_event_id: None,
+            reason: "return to prompt review branch".to_string(),
+            created_by_client_id: "prompt-export-client".to_string(),
+        })
+        .unwrap();
 
     let client = agent_os_thread::OpenAiModelClient::new("test-key", "prompt-export-model")
         .with_api_base(endpoint)
@@ -633,6 +660,14 @@ fn normalize_generated_context_ids(prompt: &str) -> String {
             if line.starts_with("- reminder mmt_") {
                 let rest = line.split_once(':').map(|(_, rest)| rest).unwrap_or("");
                 return format!("- reminder <memento_id>:{rest}");
+            }
+            if line.starts_with("- fork fork_") {
+                return "- fork <fork_id>: source_thread <source_thread_id>, forked_thread <forked_thread_id>, from <turn_id>"
+                    .to_string();
+            }
+            if line.starts_with("- rollback rollback_") {
+                return "- rollback <rollback_id>: thread <thread_id>, target <turn_id>, reason return to prompt review branch"
+                    .to_string();
             }
             line.to_string()
         })

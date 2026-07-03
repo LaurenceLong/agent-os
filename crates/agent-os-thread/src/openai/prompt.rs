@@ -209,6 +209,35 @@ fn scoped_context(request: &ModelTurnRequest) -> String {
             "## Owner Memento Fragments\n\nThese are owner-scoped self-reminders, not child instructions or evidence.\n\n{body}"
         ));
     }
+    if !request.context.thread_forks.is_empty() || !request.context.thread_rollbacks.is_empty() {
+        let mut entries = Vec::new();
+        entries.extend(request.context.thread_forks.iter().map(|fork| {
+            let boundary = fork
+                .from_turn_id
+                .as_deref()
+                .unwrap_or("latest thread state");
+            format!(
+                "- fork {}: source_thread {}, forked_thread {}, from {}",
+                fork.fork_id, fork.source_thread_id, fork.forked_thread_id, boundary
+            )
+        }));
+        entries.extend(request.context.thread_rollbacks.iter().map(|rollback| {
+            let boundary = rollback
+                .target_turn_id
+                .as_deref()
+                .or(rollback.target_item_id.as_deref())
+                .or(rollback.target_event_id.as_deref())
+                .unwrap_or("unknown boundary");
+            format!(
+                "- rollback {}: thread {}, target {}, reason {}",
+                rollback.rollback_id, rollback.thread_id, boundary, rollback.reason
+            )
+        }));
+        sections.push(format!(
+            "## Thread Lifecycle Context\n\nThese records describe fork and rollback boundaries for this thread.\n\n{}",
+            entries.join("\n")
+        ));
+    }
     if sections.is_empty() {
         String::new()
     } else {

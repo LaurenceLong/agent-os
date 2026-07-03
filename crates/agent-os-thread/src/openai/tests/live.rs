@@ -539,21 +539,8 @@ fn run_live_llm_goal_driven_scoped_context_e2e(
     } else {
         format!(r#"command "sh {verifier_name}""#)
     };
-    if cfg!(windows) {
-        std::fs::write(
-            tmp.join(verifier_name),
-            "@echo off\r\nset RESULT=%~dp0context_result.txt\r\nfindstr /C:\"CONTEXT_PROJECTION_OK\" \"%RESULT%\" >nul || exit /b 1\r\nfindstr /C:\"prompt-review/context.md\" \"%RESULT%\" >nul || exit /b 1\r\nfindstr /C:\"context_snapshot:live-obsolete\" \"%RESULT%\" >nul || exit /b 1\r\nfindstr /C:\"Review scoped context reminder\" \"%RESULT%\" >nul || exit /b 1\r\necho CONTEXT_PROJECTION_VERIFIED\r\n",
-        )
-        .unwrap();
-    } else {
-        std::fs::write(
-            tmp.join(verifier_name),
-            "#!/bin/sh\ngrep -F \"CONTEXT_PROJECTION_OK\" context_result.txt >/dev/null || exit 1\ngrep -F \"prompt-review/context.md\" context_result.txt >/dev/null || exit 1\ngrep -F \"context_snapshot:live-obsolete\" context_result.txt >/dev/null || exit 1\ngrep -F \"Review scoped context reminder\" context_result.txt >/dev/null || exit 1\necho CONTEXT_PROJECTION_VERIFIED\n",
-        )
-        .unwrap();
-    }
     let goal = format!(
-        "Use the scoped context projection in your prompt to discover the loaded_refs value, the context compaction superseded_refs value, and the owner memento title. Create context_result.txt with four lines: CONTEXT_PROJECTION_OK, then the loaded_refs value, then the superseded_refs value, then the owner memento title. Do not write snapshot or compaction ids unless they appear inside those ref values. Verify it by calling run_command with {verifier_command}. Finish with submit_final and cite evidence_ids from completed tool results."
+        "Use the scoped context projection in your prompt to discover the loaded_refs value, the context compaction superseded_refs value, the owner memento title, the thread lifecycle fork source_thread id, and the rollback reason. Create context_result.txt with six lines: CONTEXT_PROJECTION_OK, then the loaded_refs value, then the superseded_refs value, then the owner memento title, then the lifecycle source_thread id, then the rollback reason. Do not write snapshot or compaction ids unless they appear inside those ref values. Verify it by calling run_command with {verifier_command}. Finish with submit_final and cite evidence_ids from completed tool results."
     );
     let kernel = live_kernel_with_blob_stores(&tmp);
     let (kernel, request) = make_kernel_request_for_role_on_kernel_with_requirements(
@@ -616,6 +603,47 @@ fn run_live_llm_goal_driven_scoped_context_e2e(
     kernel
         .arm_memento(&request.thread.agent_id, &memento.memento_id)
         .unwrap();
+    let branch_turn = kernel.start_turn(&request.thread.thread_id).unwrap();
+    let branch_turn_id = branch_turn.active_turn.turn_id.clone().unwrap();
+    kernel
+        .fork_thread(agent_os_kernel::ForkThreadInput {
+            source_thread_id: request.thread.thread_id.clone(),
+            from_turn_id: Some(branch_turn_id.clone()),
+            created_by_client_id: "live-scoped-context".to_string(),
+            title: Some("Live scoped context branch".to_string()),
+            goal: Some("Review forked scoped context".to_string()),
+        })
+        .unwrap();
+    let rollback_reason = "return to scoped context branch";
+    kernel
+        .rollback_thread(agent_os_kernel::RollbackThreadInput {
+            thread_id: request.thread.thread_id.clone(),
+            target_turn_id: Some(branch_turn_id),
+            target_item_id: None,
+            target_event_id: None,
+            reason: rollback_reason.to_string(),
+            created_by_client_id: "live-scoped-context".to_string(),
+        })
+        .unwrap();
+    if cfg!(windows) {
+        std::fs::write(
+            tmp.join(verifier_name),
+            format!(
+                "@echo off\r\nset RESULT=%~dp0context_result.txt\r\nfindstr /C:\"CONTEXT_PROJECTION_OK\" \"%RESULT%\" >nul || exit /b 1\r\nfindstr /C:\"prompt-review/context.md\" \"%RESULT%\" >nul || exit /b 1\r\nfindstr /C:\"context_snapshot:live-obsolete\" \"%RESULT%\" >nul || exit /b 1\r\nfindstr /C:\"Review scoped context reminder\" \"%RESULT%\" >nul || exit /b 1\r\nfindstr /C:\"{}\" \"%RESULT%\" >nul || exit /b 1\r\nfindstr /C:\"{}\" \"%RESULT%\" >nul || exit /b 1\r\necho CONTEXT_PROJECTION_VERIFIED\r\n",
+                request.thread.thread_id, rollback_reason
+            ),
+        )
+        .unwrap();
+    } else {
+        std::fs::write(
+            tmp.join(verifier_name),
+            format!(
+                "#!/bin/sh\ngrep -F \"CONTEXT_PROJECTION_OK\" context_result.txt >/dev/null || exit 1\ngrep -F \"prompt-review/context.md\" context_result.txt >/dev/null || exit 1\ngrep -F \"context_snapshot:live-obsolete\" context_result.txt >/dev/null || exit 1\ngrep -F \"Review scoped context reminder\" context_result.txt >/dev/null || exit 1\ngrep -F \"{}\" context_result.txt >/dev/null || exit 1\ngrep -F \"{}\" context_result.txt >/dev/null || exit 1\necho CONTEXT_PROJECTION_VERIFIED\n",
+                request.thread.thread_id, rollback_reason
+            ),
+        )
+        .unwrap();
+    }
     let client = OpenAiModelClient::new(api_key, model.clone())
         .with_api_base(api_base.clone())
         .with_endpoint(endpoint)
@@ -653,10 +681,15 @@ fn run_live_llm_goal_driven_scoped_context_e2e(
     assert!(result.contains("prompt-review/context.md"));
     assert!(result.contains("context_snapshot:live-obsolete"));
     assert!(result.contains("Review scoped context reminder"));
+    assert!(result.contains(&request.thread.thread_id));
+    assert!(result.contains(rollback_reason));
     assert_provider_request_contains_text(&audit_log_path, "# Scoped Context Projection");
     assert_provider_request_contains_text(&audit_log_path, "prompt-review/context.md");
     assert_provider_request_contains_text(&audit_log_path, "context_snapshot:live-obsolete");
     assert_provider_request_contains_text(&audit_log_path, "Review scoped context reminder");
+    assert_provider_request_contains_text(&audit_log_path, "## Thread Lifecycle Context");
+    assert_provider_request_contains_text(&audit_log_path, &request.thread.thread_id);
+    assert_provider_request_contains_text(&audit_log_path, rollback_reason);
     assert_run_command_succeeded_with_stdout(&report, "CONTEXT_PROJECTION_VERIFIED");
     append_jsonl(
         &audit_log_path,

@@ -226,6 +226,30 @@ impl<C: ModelClient> ThreadRuntime<C> {
             let mementos = self
                 .kernel
                 .visible_mementos_for_thread(&acb.thread_id, &acb.thread_id)?;
+            let mut thread_forks: Vec<_> = state
+                .thread_forks
+                .values()
+                .filter(|fork| {
+                    fork.source_thread_id == acb.thread_id || fork.forked_thread_id == acb.thread_id
+                })
+                .cloned()
+                .collect();
+            thread_forks.sort_by(|left, right| {
+                left.created_at
+                    .cmp(&right.created_at)
+                    .then_with(|| left.fork_id.cmp(&right.fork_id))
+            });
+            let mut thread_rollbacks: Vec<_> = state
+                .thread_rollbacks
+                .values()
+                .filter(|rollback| rollback.thread_id == acb.thread_id)
+                .cloned()
+                .collect();
+            thread_rollbacks.sort_by(|left, right| {
+                left.created_at
+                    .cmp(&right.created_at)
+                    .then_with(|| left.rollback_id.cmp(&right.rollback_id))
+            });
             let mut ecosystem_projection = ecosystem_projection::from_state(&state);
             let tool_planning_mode = if finalization_feedback_sent {
                 ToolPlanningMode::FinalizationOnly
@@ -258,6 +282,8 @@ impl<C: ModelClient> ThreadRuntime<C> {
                 memory_records,
                 context_compactions,
                 mementos,
+                thread_forks,
+                thread_rollbacks,
                 tool_plan,
                 tool_descriptors: ecosystem_projection.tool_descriptors,
                 instruction_documents: ecosystem_projection.instruction_documents,

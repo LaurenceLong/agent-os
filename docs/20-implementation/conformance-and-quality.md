@@ -99,6 +99,9 @@ Runtime conformance tests MUST verify:
 - runtime model-context projection includes owner-visible Memento Fragments
   through the kernel owner-only API, while draft, consumed, superseded, expired,
   and invalidated fragments stay out of normal context
+- runtime model-context projection includes current-thread fork and rollback
+  lifecycle boundaries so a live model can distinguish source, forked branch,
+  and rollback reason from normal task text
 - runtime context-pruning events remain explicit and replayable when context
   pressure supersedes older tool results, context snapshots, or memory records
 

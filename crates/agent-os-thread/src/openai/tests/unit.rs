@@ -224,6 +224,24 @@ fn default_system_prompt_projects_scoped_context_lifecycle() {
         updated_at: now_rfc3339(),
         expires_at: None,
     });
+    request.context.thread_forks.push(ThreadForkRecord {
+        fork_id: "fork_owner".to_string(),
+        source_thread_id: "thread_source".to_string(),
+        forked_thread_id: request.thread.thread_id.clone(),
+        from_turn_id: Some("turn_branch".to_string()),
+        created_by_client_id: "client_test".to_string(),
+        created_at: now_rfc3339(),
+    });
+    request.context.thread_rollbacks.push(ThreadRollbackRecord {
+        rollback_id: "rollback_owner".to_string(),
+        thread_id: request.thread.thread_id.clone(),
+        target_turn_id: Some("turn_branch".to_string()),
+        target_item_id: None,
+        target_event_id: None,
+        reason: "try a cleaner branch".to_string(),
+        created_by_client_id: "client_test".to_string(),
+        created_at: now_rfc3339(),
+    });
 
     let prompt = default_system_prompt(&request, tmp.to_str().unwrap());
 
@@ -244,6 +262,13 @@ fn default_system_prompt_projects_scoped_context_lifecycle() {
     assert!(prompt.contains("Review child evidence"));
     assert!(prompt.contains("Check the child output before accepting."));
     assert!(prompt.contains("inspect logs"));
+    assert!(prompt.contains("## Thread Lifecycle Context"));
+    assert!(prompt.contains("fork fork_owner"));
+    assert!(prompt.contains("source_thread thread_source"));
+    assert!(prompt.contains("forked_thread"));
+    assert!(prompt.contains("from turn_branch"));
+    assert!(prompt.contains("rollback rollback_owner"));
+    assert!(prompt.contains("try a cleaner branch"));
 }
 
 #[test]

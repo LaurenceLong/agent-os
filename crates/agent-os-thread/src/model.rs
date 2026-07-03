@@ -24,6 +24,8 @@ pub struct ModelContextProjection {
     pub memory_records: Vec<MemoryRecord>,
     pub context_compactions: Vec<ContextCompaction>,
     pub mementos: Vec<MementoFragment>,
+    pub thread_forks: Vec<ThreadForkRecord>,
+    pub thread_rollbacks: Vec<ThreadRollbackRecord>,
     pub tool_plan: ToolPlan,
     pub tool_descriptors: Vec<ToolDescriptor>,
     pub instruction_documents: Vec<InstructionDocument>,
