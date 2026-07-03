@@ -607,16 +607,40 @@ fn workspace_and_process_tools_execute_through_broker_and_attach_evidence() {
         session.stdout.bytes,
         process_output["stdout_bytes"].as_u64().unwrap()
     );
-    let replayed = Kernel::from_events(&fx.kernel.events().unwrap()).unwrap();
+    let process_chunks = state
+        .process_output_chunks
+        .iter()
+        .filter(|chunk| chunk.process_id == process_id)
+        .collect::<Vec<_>>();
+    assert!(process_chunks
+        .iter()
+        .any(|chunk| chunk.stream == ProcessOutputStreamName::Stdout));
     assert_eq!(
-        replayed
-            .state_snapshot()
+        session.stdout.sequence,
+        process_chunks
+            .iter()
+            .filter(|chunk| chunk.stream == ProcessOutputStreamName::Stdout)
+            .map(|chunk| chunk.sequence)
+            .max()
             .unwrap()
+    );
+    let replayed = Kernel::from_events(&fx.kernel.events().unwrap()).unwrap();
+    let replayed_state = replayed.state_snapshot().unwrap();
+    assert_eq!(
+        replayed_state
             .process_sessions
             .get(process_id)
             .unwrap()
             .state,
         ProcessLifecycleState::Exited
+    );
+    assert_eq!(
+        replayed_state
+            .process_output_chunks
+            .iter()
+            .filter(|chunk| chunk.process_id == process_id)
+            .count(),
+        process_chunks.len()
     );
 
     let _ = std::fs::remove_dir_all(workspace);
@@ -988,6 +1012,47 @@ fn long_running_command_returns_running_and_can_be_queried_by_tool_call_id() {
         Some(first_stdout_cursor)
     );
 
+    let queried_process = fx
+        .kernel
+        .invoke_tool(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            &supervisor.session_id,
+            supervisor_cap.capability_id.clone(),
+            1,
+            ToolInvokeInput {
+                tool_name: "agent_control".to_string(),
+                input: json!({
+                    "action": "output",
+                    "thread_id": worker.thread_id,
+                    "payload": {
+                        "process_id": process_id,
+                        "field": "stdout"
+                    }
+                }),
+                evidence_claim: None,
+            },
+        )
+        .unwrap();
+    let first_stdout_sequence = queried_process
+        .output
+        .as_ref()
+        .and_then(|output| output.pointer("/output/process_output/next_sequence/stdout"))
+        .and_then(serde_json::Value::as_u64)
+        .unwrap();
+    assert!(first_stdout_sequence > 0);
+    let process_chunk_text = queried_process
+        .output
+        .as_ref()
+        .and_then(|output| output.pointer("/output/process_output/chunks"))
+        .and_then(serde_json::Value::as_array)
+        .unwrap()
+        .iter()
+        .filter_map(|chunk| chunk.get("text").and_then(serde_json::Value::as_str))
+        .collect::<Vec<_>>()
+        .join("");
+    assert!(process_chunk_text.contains("stdout-before"));
+
     let mut stdout_new = String::new();
     let poll_started = std::time::Instant::now();
     while poll_started.elapsed() < std::time::Duration::from_secs(10) {
@@ -1030,6 +1095,44 @@ fn long_running_command_returns_running_and_can_be_queried_by_tool_call_id() {
     }
     assert!(stdout_new.contains("stdout-after"));
     assert!(!stdout_new.contains("stdout-before"));
+
+    let queried_process_new = fx
+        .kernel
+        .invoke_tool(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            &supervisor.session_id,
+            supervisor_cap.capability_id.clone(),
+            1,
+            ToolInvokeInput {
+                tool_name: "agent_control".to_string(),
+                input: json!({
+                    "action": "output",
+                    "thread_id": worker.thread_id,
+                    "payload": {
+                        "process_id": process_id,
+                        "field": "stdout",
+                        "after_sequence": {
+                            "stdout": first_stdout_sequence
+                        }
+                    }
+                }),
+                evidence_claim: None,
+            },
+        )
+        .unwrap();
+    let process_new_text = queried_process_new
+        .output
+        .as_ref()
+        .and_then(|output| output.pointer("/output/process_output/chunks"))
+        .and_then(serde_json::Value::as_array)
+        .unwrap()
+        .iter()
+        .filter_map(|chunk| chunk.get("text").and_then(serde_json::Value::as_str))
+        .collect::<Vec<_>>()
+        .join("");
+    assert!(process_new_text.contains("stdout-after"));
+    assert!(!process_new_text.contains("stdout-before"));
 
     let queried_page = fx
         .kernel

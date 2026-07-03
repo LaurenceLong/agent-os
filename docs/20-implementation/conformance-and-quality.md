@@ -130,6 +130,9 @@ Tool driver tests MUST verify:
 - `run_command` creates a kernel-owned `ProcessSession`, returns `process_id`,
   records command mode, executed argv, lifecycle state, output cursors, and
   replayable exit or failure state
+- process output chunks are appended as replayable sequence events, and
+  `agent_control(action=output)` can poll by `process_id` plus
+  `after_sequence`
 - descriptor-declared evidence attachment for workspace, command, control-plane,
   and permission tools so final `evidence_map` entries can cite real evidence ids
 

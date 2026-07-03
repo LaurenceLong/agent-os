@@ -201,6 +201,20 @@ impl Kernel {
                     .process_sessions
                     .insert(session.process_id.clone(), session);
             }
+            "ProcessOutputAppended" => {
+                let chunk: ProcessOutputChunk = parse_payload(&event.payload)?;
+                if let Some(session) = state.process_sessions.get_mut(&chunk.process_id) {
+                    let stream = match chunk.stream {
+                        ProcessOutputStreamName::Stdout => &mut session.stdout,
+                        ProcessOutputStreamName::Stderr => &mut session.stderr,
+                    };
+                    stream.sequence = chunk.sequence;
+                    stream.bytes = chunk.end_byte;
+                    stream.cursor = chunk.end_byte;
+                    session.updated_at = chunk.created_at.clone();
+                }
+                state.process_output_chunks.push(chunk);
+            }
             "CapabilityGranted" => {
                 let cap: CapabilityToken = parse_payload(&event.payload)?;
                 state.capabilities.insert(cap.capability_id.clone(), cap);

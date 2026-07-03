@@ -104,6 +104,44 @@ fn output_for_target(
     target: &AgentControlBlock,
     payload: &Value,
 ) -> AgentOsResult<AgentControlActionResult> {
+    if let Some(process_id) = payload.get("process_id").and_then(Value::as_str) {
+        let state = kernel.read_state()?;
+        let session = state
+            .process_sessions
+            .get(process_id)
+            .filter(|session| {
+                session.agent_id == target.agent_id || session.task_id == target.task.task_id
+            })
+            .cloned()
+            .ok_or_else(|| AgentOsError::NotFound(format!("process session {process_id}")))?;
+        let invocation = state
+            .tool_invocations
+            .get(&session.tool_call_id)
+            .cloned()
+            .ok_or_else(|| AgentOsError::NotFound(format!("tool call {}", session.tool_call_id)))?;
+        let chunks = state
+            .process_output_chunks
+            .iter()
+            .filter(|chunk| chunk.process_id == session.process_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        drop(state);
+        let worker = kernel
+            .tool_workers
+            .lock()
+            .ok()
+            .and_then(|workers| workers.get(&session.tool_call_id).cloned());
+        return Ok(AgentControlActionResult {
+            thread_status: target.status,
+            output: super::super::super::output::query_process_output(
+                &session,
+                &invocation,
+                worker.as_ref(),
+                &chunks,
+                payload,
+            )?,
+        });
+    }
     let state = kernel.read_state()?;
     if let Some(tool_call_id) = payload.get("tool_call_id").and_then(Value::as_str) {
         let invocation = state

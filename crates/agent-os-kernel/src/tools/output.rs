@@ -75,6 +75,68 @@ pub(super) fn query_tool_output(
     }))
 }
 
+pub(super) fn query_process_output(
+    session: &ProcessSession,
+    invocation: &ToolInvocation,
+    worker: Option<&ToolWorkerRecord>,
+    chunks: &[ProcessOutputChunk],
+    payload: &Value,
+) -> AgentOsResult<Value> {
+    let mut output = query_tool_output(invocation, worker, payload)?;
+    let Some(object) = output.as_object_mut() else {
+        return Ok(output);
+    };
+    object.insert("process_id".to_string(), json!(session.process_id.clone()));
+    object.insert("process_session".to_string(), json!(session));
+    object.insert(
+        "process_output".to_string(),
+        process_output_json(session, chunks, payload),
+    );
+    Ok(output)
+}
+
+fn process_output_json(
+    session: &ProcessSession,
+    chunks: &[ProcessOutputChunk],
+    payload: &Value,
+) -> Value {
+    let field_filter = payload.get("field").and_then(Value::as_str);
+    let selected = chunks
+        .iter()
+        .filter(|chunk| stream_matches_filter(chunk.stream, field_filter))
+        .filter(|chunk| chunk.sequence > after_sequence(payload, chunk.stream))
+        .cloned()
+        .collect::<Vec<_>>();
+    json!({
+        "next_sequence": {
+            "stdout": session.stdout.sequence,
+            "stderr": session.stderr.sequence,
+        },
+        "chunks": selected,
+    })
+}
+
+fn stream_matches_filter(stream: ProcessOutputStreamName, field_filter: Option<&str>) -> bool {
+    match field_filter {
+        Some("stdout") => stream == ProcessOutputStreamName::Stdout,
+        Some("stderr") => stream == ProcessOutputStreamName::Stderr,
+        Some(_) => false,
+        None => true,
+    }
+}
+
+fn after_sequence(payload: &Value, stream: ProcessOutputStreamName) -> u64 {
+    let field = match stream {
+        ProcessOutputStreamName::Stdout => "stdout",
+        ProcessOutputStreamName::Stderr => "stderr",
+    };
+    payload
+        .get("after_sequence")
+        .and_then(|value| value.get(field))
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+}
+
 fn managed_fields(
     invocation: &ToolInvocation,
     worker: Option<&ToolWorkerRecord>,

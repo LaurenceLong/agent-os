@@ -319,6 +319,7 @@ pub(in crate::tools) fn run_process(
         spawn_stdout_reader(
             kernel.clone(),
             tool_call_id.to_string(),
+            process.process_id.clone(),
             stdout,
             open_spool_file(&stdout_spool_path),
             stdout_capture.clone(),
@@ -328,6 +329,7 @@ pub(in crate::tools) fn run_process(
         spawn_stderr_reader(
             kernel.clone(),
             tool_call_id.to_string(),
+            process.process_id.clone(),
             stderr,
             open_spool_file(&stderr_spool_path),
             stderr_capture.clone(),
@@ -469,6 +471,7 @@ fn open_spool_file(path: &Path) -> AgentOsResult<File> {
 fn spawn_stdout_reader(
     kernel: Kernel,
     tool_call_id: String,
+    process_id: String,
     stdout: ChildStdout,
     spool: AgentOsResult<File>,
     capture: Arc<Mutex<ToolStreamOutput>>,
@@ -477,6 +480,7 @@ fn spawn_stdout_reader(
         read_process_stream(
             kernel,
             tool_call_id,
+            process_id,
             super::super::ToolOutputStream::Stdout,
             stdout,
             spool?,
@@ -488,6 +492,7 @@ fn spawn_stdout_reader(
 fn spawn_stderr_reader(
     kernel: Kernel,
     tool_call_id: String,
+    process_id: String,
     stderr: ChildStderr,
     spool: AgentOsResult<File>,
     capture: Arc<Mutex<ToolStreamOutput>>,
@@ -496,6 +501,7 @@ fn spawn_stderr_reader(
         read_process_stream(
             kernel,
             tool_call_id,
+            process_id,
             super::super::ToolOutputStream::Stderr,
             stderr,
             spool?,
@@ -507,6 +513,7 @@ fn spawn_stderr_reader(
 fn read_process_stream<R: Read>(
     kernel: Kernel,
     tool_call_id: String,
+    process_id: String,
     stream: super::super::ToolOutputStream,
     mut reader: R,
     mut spool: File,
@@ -534,6 +541,18 @@ fn read_process_stream<R: Read>(
             capture.append_bounded(chunk);
         }
         kernel.append_tool_worker_output(&tool_call_id, stream, chunk);
+        kernel.append_process_output_chunk(
+            &process_id,
+            process_output_stream_name(stream),
+            chunk,
+        )?;
+    }
+}
+
+fn process_output_stream_name(stream: super::super::ToolOutputStream) -> ProcessOutputStreamName {
+    match stream {
+        super::super::ToolOutputStream::Stdout => ProcessOutputStreamName::Stdout,
+        super::super::ToolOutputStream::Stderr => ProcessOutputStreamName::Stderr,
     }
 }
 

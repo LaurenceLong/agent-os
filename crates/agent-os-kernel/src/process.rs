@@ -88,11 +88,15 @@ impl Kernel {
         &self,
         process_id: &str,
         exit_code: Option<i32>,
-        stdout: ProcessOutputStream,
-        stderr: ProcessOutputStream,
+        mut stdout: ProcessOutputStream,
+        mut stderr: ProcessOutputStream,
     ) -> AgentOsResult<ProcessSession> {
         let mut session = self.process_session(process_id)?;
         let now = now_rfc3339();
+        stdout.sequence = session.stdout.sequence;
+        stdout.cursor = stdout.bytes;
+        stderr.sequence = session.stderr.sequence;
+        stderr.cursor = stderr.bytes;
         session.state = ProcessLifecycleState::Exited;
         session.exit_code = exit_code;
         session.stdout = stdout;
@@ -116,6 +120,49 @@ impl Kernel {
         session.completed_at = Some(now);
         self.emit_process_session("ProcessSessionFailed", &session)?;
         Ok(session)
+    }
+
+    pub(crate) fn append_process_output_chunk(
+        &self,
+        process_id: &str,
+        stream: ProcessOutputStreamName,
+        bytes: &[u8],
+    ) -> AgentOsResult<ProcessOutputChunk> {
+        if bytes.is_empty() {
+            return Err(AgentOsError::Validation(
+                "process output chunk must not be empty".to_string(),
+            ));
+        }
+        let session = self.process_session(process_id)?;
+        let current = match stream {
+            ProcessOutputStreamName::Stdout => &session.stdout,
+            ProcessOutputStreamName::Stderr => &session.stderr,
+        };
+        let start_byte = current.bytes;
+        let end_byte = start_byte + bytes.len() as u64;
+        let chunk = ProcessOutputChunk {
+            chunk_id: new_id("pout_"),
+            process_id: session.process_id.clone(),
+            tool_call_id: session.tool_call_id.clone(),
+            stream,
+            sequence: current.sequence + 1,
+            start_byte,
+            end_byte,
+            bytes: bytes.len() as u64,
+            text: String::from_utf8_lossy(bytes).to_string(),
+            created_at: now_rfc3339(),
+        };
+        self.emit(
+            "ProcessOutputAppended",
+            "process_session",
+            &chunk.process_id,
+            Some(session.agent_id),
+            Some(session.task_id),
+            Some(chunk.tool_call_id.clone()),
+            None,
+            &chunk,
+        )?;
+        Ok(chunk)
     }
 
     pub(crate) fn process_session_by_tool_call_id(
