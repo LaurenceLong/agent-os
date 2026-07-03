@@ -1,4 +1,4 @@
-﻿use super::support::*;
+use super::support::*;
 use super::*;
 
 #[test]
@@ -399,6 +399,244 @@ fn openai_chat_completions_mock_adapter_runs_every_core_tool() {
     assert_eq!(messages.iter().filter(|m| m["role"] == "tool").count(), 16);
     let first_args: Value = serde_json::from_str(
         messages[2]["tool_calls"][0]["function"]["arguments"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(first_args["path"], "read.txt");
+    assert!(first_args.get("workspace_root").is_none());
+    let _ = std::fs::remove_dir_all(tmp);
+}
+
+#[test]
+fn openai_responses_mock_adapter_runs_every_core_tool() {
+    let tmp = std::env::temp_dir().join(format!("aos-openai-responses-all-tools-{}", new_id("t_")));
+    std::fs::create_dir_all(&tmp).unwrap();
+    std::fs::write(tmp.join("read.txt"), "read me\n").unwrap();
+    std::fs::write(
+        tmp.join("shot.png"),
+        [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
+    )
+    .unwrap();
+    std::fs::write(tmp.join("edit.txt"), "alpha old beta\n").unwrap();
+    std::fs::write(tmp.join("delete.txt"), "remove me\n").unwrap();
+    let (kernel, request) = make_kernel_request_for_role(
+        &tmp,
+        "role_supervisor",
+        "Supervise OpenAI Responses mock adapter coverage",
+        vec!["all core tools return structured results".to_string()],
+    );
+    let capability = attach_workspace_and_grant(&kernel, &request, 4);
+    let current_exe = std::env::current_exe().unwrap();
+    let model_options = std::collections::BTreeMap::new();
+    let system_prompt_override = None;
+    let initial_provider_request = build_provider_request(
+        ProviderRequestConfig {
+            endpoint: LlmApiStyle::OpenAiResponses,
+            api_base: "https://api.example.test/v1",
+            api_key: "test-key",
+            model: "mock-model",
+            max_tokens: 4096,
+            temperature: Some(0.0),
+            model_options: &model_options,
+            system_prompt_override: &system_prompt_override,
+        },
+        &request,
+    )
+    .unwrap();
+
+    let tool_calls = vec![
+        ("call_read", "read_file", json!({"path": "read.txt"})),
+        (
+            "call_glob",
+            "glob_files",
+            json!({"pattern": "read.txt", "limit": 10}),
+        ),
+        (
+            "call_grep",
+            "grep_files",
+            json!({"pattern": "read me", "path": "read.txt", "limit": 10}),
+        ),
+        ("call_image", "read_image", json!({"path": "shot.png"})),
+        (
+            "call_write",
+            "apply_patch",
+            json!({"patch": "*** Begin Patch\n*** Add File: created.txt\n+created by provider mock\n*** End Patch\n"}),
+        ),
+        (
+            "call_replace",
+            "apply_patch",
+            json!({"patch": "*** Begin Patch\n*** Update File: edit.txt\n@@\n-alpha old beta\n+alpha new beta\n*** End Patch\n"}),
+        ),
+        (
+            "call_delete",
+            "apply_patch",
+            json!({"patch": "*** Begin Patch\n*** Delete File: delete.txt\n*** End Patch\n"}),
+        ),
+        (
+            "call_run",
+            "run_command",
+            json!({"mode": "exec", "command": current_exe.to_string_lossy(), "args": ["--help"]}),
+        ),
+        (
+            "call_goal",
+            "set_goal",
+            json!({"goal": "complete provider-neutral all-tool mock adapter coverage"}),
+        ),
+        (
+            "call_accomplish_goal",
+            "accomplish_goal",
+            json!({"summary": "provider-neutral mock adapter local goal complete"}),
+        ),
+        (
+            "call_checklist",
+            "update_checklist",
+            json!({"items": [
+                {"text": "exercise every model-visible tool", "status": "completed"}
+            ]}),
+        ),
+        (
+            "call_evidence",
+            "record_evidence",
+            json!({
+                "evidence_type": "external_reference",
+                "claim": "provider mock executed control-plane tools",
+                "blob_ref": "blob://mock-evidence",
+                "content_hash": "mock-hash"
+            }),
+        ),
+        (
+            "call_report",
+            "report_supervisor",
+            json!({"message": "provider mock all-tool coverage is progressing"}),
+        ),
+        (
+            "call_blackboard",
+            "post_blackboard",
+            json!({
+                "channel_id": "risks",
+                "scope": "goal",
+                "section": "risk",
+                "content": {"risk": "mock adapter risk entry"}
+            }),
+        ),
+        (
+            "call_human",
+            "ask_human",
+            json!({"question": "Confirm mock adapter human route wiring?"}),
+        ),
+        (
+            "call_agent",
+            "agent_control",
+            json!({
+                "action": "start",
+                "payload": {
+                    "goal": "inspect provider-neutral mock adapter coverage",
+                    "success_criteria": ["report status"]
+                }
+            }),
+        ),
+    ];
+    let body = json!({
+        "output": tool_calls
+            .into_iter()
+            .map(|(id, name, arguments)| json!({
+                "type": "function_call",
+                "call_id": id,
+                "name": name,
+                "arguments": serde_json::to_string(&arguments).unwrap()
+            }))
+            .collect::<Vec<_>>(),
+        "usage": {"input_tokens": 44, "output_tokens": 25}
+    });
+    let response = parse_openai_responses_response(&body, &request).unwrap();
+    assert_eq!(response.usage.input_tokens, 44);
+    let parsed_actions = response.actions.clone();
+    let records = execute_tool_actions(&kernel, &request, &capability, response.actions);
+    assert_core_tool_mock_effects(&tmp, &records);
+
+    let next_request = ModelTurnRequest {
+        thread: request.thread,
+        workspace_root: tmp.clone(),
+        step_index: 1,
+        model_capabilities: image_capable_model(),
+        context: ModelContextProjection {
+            tool_results: records,
+            ..ModelContextProjection::default()
+        },
+    };
+    let followup_provider_request = build_provider_request(
+        ProviderRequestConfig {
+            endpoint: LlmApiStyle::OpenAiResponses,
+            api_base: "https://api.example.test/v1",
+            api_key: "test-key",
+            model: "mock-model",
+            max_tokens: 4096,
+            temperature: Some(0.0),
+            model_options: &model_options,
+            system_prompt_override: &system_prompt_override,
+        },
+        &next_request,
+    )
+    .unwrap();
+    write_mock_interaction_log(
+        "openai_responses-mock-adapter-interaction.jsonl",
+        &[
+            json!({
+                "type": "provider_request",
+                "provider": "openai_responses",
+                "endpoint": "/responses",
+                "body": initial_provider_request.body
+            }),
+            json!({
+                "type": "mock_llm_response",
+                "provider": "openai_responses",
+                "body": body
+            }),
+            json!({
+                "type": "parsed_model_actions",
+                "provider": "openai_responses",
+                "actions": parsed_actions
+            }),
+            json!({
+                "type": "tool_execution_records",
+                "provider": "openai_responses",
+                "records": next_request.context.tool_results.clone()
+            }),
+            json!({
+                "type": "provider_followup_request",
+                "provider": "openai_responses",
+                "endpoint": "/responses",
+                "body": followup_provider_request.body.clone()
+            }),
+        ],
+    );
+    assert_eq!(initial_provider_request.endpoint_path, "/responses");
+    assert_eq!(initial_provider_request.body["tool_choice"], "auto");
+    assert_eq!(
+        initial_provider_request.body["tools"][0]["type"],
+        "function"
+    );
+    assert_eq!(initial_provider_request.body["tools"][0]["strict"], false);
+    assert!(initial_provider_request.body.get("messages").is_none());
+    assert!(
+        initial_provider_request.body["input"]
+            .as_array()
+            .unwrap()
+            .len()
+            >= 2
+    );
+    assert_eq!(
+        followup_provider_request.body["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|message| message["role"] == "tool")
+            .count(),
+        16
+    );
+    let first_args: Value = serde_json::from_str(
+        followup_provider_request.body["input"][2]["tool_calls"][0]["function"]["arguments"]
             .as_str()
             .unwrap(),
     )
