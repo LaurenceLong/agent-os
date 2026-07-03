@@ -139,15 +139,15 @@ pub(super) fn make_kernel_request_for_role_on_kernel_with_requirements(
 }
 
 pub(super) fn refresh_tool_descriptors(kernel: &Kernel, request: &mut ModelTurnRequest) {
-    let mut descriptors: Vec<_> = kernel
-        .state_snapshot()
-        .unwrap()
-        .tool_descriptors
-        .values()
-        .cloned()
-        .collect();
-    descriptors.sort_by(|left, right| left.name.cmp(&right.name));
-    request.context.tool_descriptors = descriptors;
+    let plan = kernel
+        .plan_tools_for_turn(
+            &request.thread,
+            request.model_capabilities.clone(),
+            ToolPlanningMode::Normal,
+        )
+        .unwrap();
+    request.context.tool_descriptors = plan.direct_descriptors();
+    request.context.tool_plan = plan;
 }
 
 pub(super) fn attach_workspace_and_grant(

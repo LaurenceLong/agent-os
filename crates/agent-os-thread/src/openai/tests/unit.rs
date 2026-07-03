@@ -1100,7 +1100,12 @@ fn map_function_call_keeps_apply_patch_delete_operation() {
 #[test]
 fn map_function_call_supports_agent_control_actions() {
     let tmp = std::env::temp_dir().join(format!("aos-openai-ac-{}", new_id("t_")));
-    let request = make_request(&tmp);
+    let (_kernel, request) = make_kernel_request_for_role(
+        &tmp,
+        "role_supervisor",
+        "inspect agent control actions",
+        vec!["agent control is available".to_string()],
+    );
     let (tool_name, input, risk) = map_function_call(
         "agent_control",
         json!({
@@ -1246,5 +1251,10 @@ fn attach_mcp_echo_tool(request: &mut ModelTurnRequest) {
         .context
         .tool_descriptors
         .push(tool.tool_descriptor.clone());
+    request.context.tool_plan.entries.push(ToolPlanEntry {
+        descriptor: tool.tool_descriptor.clone(),
+        exposure: ToolExposure::Direct,
+        reason: None,
+    });
     request.context.mcp_tools.push(tool);
 }

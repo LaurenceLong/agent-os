@@ -1,4 +1,4 @@
-use crate::EvidenceType;
+use crate::{EvidenceType, ModelCapabilities};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -182,6 +182,70 @@ impl Default for ToolDescriptor {
             evidence_type: None,
             created_at: String::new(),
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolPlanningMode {
+    #[default]
+    Normal,
+    FinalizationOnly,
+    PrePatchResolution,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolExposure {
+    Direct,
+    Deferred,
+    RuntimeOnly,
+    Hidden,
+    Disabled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolPlanEntry {
+    pub descriptor: ToolDescriptor,
+    pub exposure: ToolExposure,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolPlan {
+    pub plan_id: String,
+    pub thread_id: String,
+    pub agent_id: String,
+    pub task_id: String,
+    pub mode: ToolPlanningMode,
+    pub model_capabilities: ModelCapabilities,
+    pub entries: Vec<ToolPlanEntry>,
+    pub created_at: String,
+}
+
+impl Default for ToolPlan {
+    fn default() -> Self {
+        Self {
+            plan_id: String::new(),
+            thread_id: String::new(),
+            agent_id: String::new(),
+            task_id: String::new(),
+            mode: ToolPlanningMode::Normal,
+            model_capabilities: ModelCapabilities::default(),
+            entries: Vec::new(),
+            created_at: String::new(),
+        }
+    }
+}
+
+impl ToolPlan {
+    pub fn direct_descriptors(&self) -> Vec<ToolDescriptor> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.exposure == ToolExposure::Direct)
+            .map(|entry| entry.descriptor.clone())
+            .collect()
     }
 }
 

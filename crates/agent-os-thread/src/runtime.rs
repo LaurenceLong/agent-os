@@ -224,15 +224,21 @@ impl<C: ModelClient> ThreadRuntime<C> {
                     .then_with(|| left.compaction_id.cmp(&right.compaction_id))
             });
             let mut ecosystem_projection = ecosystem_projection::from_state(&state);
-            if finalization_feedback_sent {
-                retain_finalization_tool_descriptors(&mut ecosystem_projection.tool_descriptors);
+            let tool_planning_mode = if finalization_feedback_sent {
+                ToolPlanningMode::FinalizationOnly
             } else if pre_patch_resolution_feedback_sent
                 && should_enforce_pre_patch_resolution_gate(&tool_results, &artifacts)
             {
-                retain_pre_patch_resolution_tool_descriptors(
-                    &mut ecosystem_projection.tool_descriptors,
-                );
-            }
+                ToolPlanningMode::PrePatchResolution
+            } else {
+                ToolPlanningMode::Normal
+            };
+            let tool_plan = self.kernel.plan_tools_for_turn(
+                &acb,
+                stream.route_decision.model_capabilities.clone(),
+                tool_planning_mode,
+            )?;
+            ecosystem_projection.tool_descriptors = tool_plan.direct_descriptors();
             let provider_profile = state
                 .provider_profiles
                 .get(&acb.config_snapshot.provider_profile_id)
@@ -248,6 +254,7 @@ impl<C: ModelClient> ThreadRuntime<C> {
                 context_snapshots,
                 memory_records,
                 context_compactions,
+                tool_plan,
                 tool_descriptors: ecosystem_projection.tool_descriptors,
                 instruction_documents: ecosystem_projection.instruction_documents,
                 skill_definitions: ecosystem_projection.skill_definitions,

@@ -30,6 +30,67 @@ pub(crate) fn core_tool_descriptors(now: &str) -> Vec<ToolDescriptor> {
 }
 
 impl Kernel {
+    pub fn plan_tools_for_turn(
+        &self,
+        thread: &AgentControlBlock,
+        model_capabilities: ModelCapabilities,
+        mode: ToolPlanningMode,
+    ) -> AgentOsResult<ToolPlan> {
+        let state = self.read_state()?;
+        let mut descriptors = state.tool_descriptors.values().cloned().collect::<Vec<_>>();
+        descriptors.sort_by(|left, right| left.name.cmp(&right.name));
+        drop(state);
+
+        let entries = descriptors
+            .into_iter()
+            .map(|descriptor| {
+                let (exposure, reason) =
+                    self.plan_tool_exposure(thread, &model_capabilities, mode, &descriptor);
+                ToolPlanEntry {
+                    descriptor,
+                    exposure,
+                    reason,
+                }
+            })
+            .collect();
+
+        Ok(ToolPlan {
+            plan_id: new_id("tool_plan_"),
+            thread_id: thread.thread_id.clone(),
+            agent_id: thread.agent_id.clone(),
+            task_id: thread.task.task_id.clone(),
+            mode,
+            model_capabilities,
+            entries,
+            created_at: now_rfc3339(),
+        })
+    }
+
+    fn plan_tool_exposure(
+        &self,
+        thread: &AgentControlBlock,
+        model_capabilities: &ModelCapabilities,
+        mode: ToolPlanningMode,
+        descriptor: &ToolDescriptor,
+    ) -> (ToolExposure, Option<String>) {
+        if !planning_mode_allows_tool(mode, &descriptor.name) {
+            return (
+                ToolExposure::Hidden,
+                Some(format!("tool hidden by {mode:?} planning mode")),
+            );
+        }
+        if descriptor.name == "read_image" && !model_capabilities.image_input {
+            return (
+                ToolExposure::Disabled,
+                Some("read_image requires a model with image_input capability".to_string()),
+            );
+        }
+        if let Err(error) = self.require_tool_authority(thread, descriptor, descriptor.risk_level) {
+            return (ToolExposure::Disabled, Some(error.to_string()));
+        }
+        (ToolExposure::Direct, None)
+    }
+
     pub fn register_tool_descriptor(
         &self,
         descriptor: ToolDescriptor,
@@ -539,6 +600,21 @@ impl Kernel {
             .get(&input.tool_name)
             .cloned()
             .ok_or_else(|| AgentOsError::NotFound(format!("tool {}", input.tool_name)))
+    }
+}
+
+fn planning_mode_allows_tool(mode: ToolPlanningMode, tool_name: &str) -> bool {
+    match mode {
+        ToolPlanningMode::Normal => true,
+        ToolPlanningMode::FinalizationOnly => {
+            matches!(tool_name, "submit_final" | "accomplish_goal")
+        }
+        ToolPlanningMode::PrePatchResolution => {
+            matches!(
+                tool_name,
+                "apply_patch" | "submit_final" | "accomplish_goal"
+            )
+        }
     }
 }
 

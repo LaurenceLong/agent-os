@@ -1,5 +1,5 @@
 use crate::{ArtifactRecord, ToolAction, ToolExecutionRecord};
-use agent_os_sys::{new_id, ToolCallStatus, ToolDescriptor};
+use agent_os_sys::{new_id, ToolCallStatus};
 use serde_json::{json, Value};
 
 pub(super) const RUNTIME_FEEDBACK_TOOL: &str = "runtime_feedback";
@@ -139,10 +139,6 @@ pub(super) fn finalization_feedback_record(
     }
 }
 
-pub(super) fn retain_finalization_tool_descriptors(descriptors: &mut Vec<ToolDescriptor>) {
-    descriptors.retain(|descriptor| is_finalization_allowed_tool_name(&descriptor.name));
-}
-
 fn is_finalization_allowed_tool_name(tool_name: &str) -> bool {
     matches!(tool_name, "submit_final" | "accomplish_goal")
 }
@@ -241,10 +237,6 @@ pub(super) fn pre_patch_resolution_feedback_record(
         evidence_ids: Vec::new(),
         evidence_claim: None,
     }
-}
-
-pub(super) fn retain_pre_patch_resolution_tool_descriptors(descriptors: &mut Vec<ToolDescriptor>) {
-    descriptors.retain(|descriptor| is_pre_patch_resolution_allowed_tool_name(&descriptor.name));
 }
 
 fn is_pre_patch_resolution_allowed_tool_name(tool_name: &str) -> bool {

@@ -49,6 +49,11 @@ pub(crate) fn tool_definitions_for_request(request: &ModelTurnRequest) -> Vec<Va
 pub(crate) fn visible_tool_descriptors_for_request(
     request: &ModelTurnRequest,
 ) -> Vec<ToolDescriptor> {
+    if !request.context.tool_plan.entries.is_empty()
+        && request.context.tool_plan.model_capabilities == request.model_capabilities
+    {
+        return request.context.tool_plan.direct_descriptors();
+    }
     request
         .context
         .tool_descriptors

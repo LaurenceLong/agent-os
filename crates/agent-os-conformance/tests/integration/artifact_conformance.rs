@@ -1100,6 +1100,111 @@ fn default_tool_registry_is_minimal() {
 }
 
 #[test]
+fn kernel_tool_plan_projects_direct_hidden_and_disabled_tools() {
+    let fx = fixture();
+    let text_only = ModelCapabilities {
+        tool_calling: true,
+        ..ModelCapabilities::default()
+    };
+    let producer_plan = fx
+        .kernel
+        .plan_tools_for_turn(&fx.worker, text_only, ToolPlanningMode::Normal)
+        .unwrap();
+    let direct_names = producer_plan
+        .direct_descriptors()
+        .into_iter()
+        .map(|descriptor| descriptor.name)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(direct_names.contains("glob_files"));
+    assert!(direct_names.contains("grep_files"));
+    assert!(direct_names.contains("submit_final"));
+    assert!(!direct_names.contains("agent_control"));
+    assert!(!direct_names.contains("set_goal"));
+    let read_image = producer_plan
+        .entries
+        .iter()
+        .find(|entry| entry.descriptor.name == "read_image")
+        .unwrap();
+    assert_eq!(read_image.exposure, ToolExposure::Disabled);
+    assert!(read_image
+        .reason
+        .as_deref()
+        .unwrap()
+        .contains("image_input"));
+    let agent_control = producer_plan
+        .entries
+        .iter()
+        .find(|entry| entry.descriptor.name == "agent_control")
+        .unwrap();
+    assert_eq!(agent_control.exposure, ToolExposure::Disabled);
+    let reason = agent_control.reason.as_deref().unwrap();
+    assert!(!reason.is_empty());
+
+    let supervisor = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_supervisor".to_string(),
+            owner: "integration-test".to_string(),
+            goal: "inspect tool plan".to_string(),
+            success_criteria: vec!["control plane tools are planned".to_string()],
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: Vec::new(),
+        })
+        .unwrap();
+    let normal_supervisor_plan = fx
+        .kernel
+        .plan_tools_for_turn(
+            &supervisor,
+            ModelCapabilities {
+                image_input: true,
+                tool_calling: true,
+                ..ModelCapabilities::default()
+            },
+            ToolPlanningMode::Normal,
+        )
+        .unwrap();
+    let normal_supervisor_direct = normal_supervisor_plan
+        .direct_descriptors()
+        .into_iter()
+        .map(|descriptor| descriptor.name)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(normal_supervisor_direct.contains("agent_control"));
+    assert!(normal_supervisor_direct.contains("set_goal"));
+    let supervisor_plan = fx
+        .kernel
+        .plan_tools_for_turn(
+            &supervisor,
+            ModelCapabilities {
+                image_input: true,
+                tool_calling: true,
+                ..ModelCapabilities::default()
+            },
+            ToolPlanningMode::FinalizationOnly,
+        )
+        .unwrap();
+    let direct_names = supervisor_plan
+        .direct_descriptors()
+        .into_iter()
+        .map(|descriptor| descriptor.name)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        direct_names,
+        std::collections::BTreeSet::from([
+            "accomplish_goal".to_string(),
+            "submit_final".to_string()
+        ])
+    );
+    let apply_patch = supervisor_plan
+        .entries
+        .iter()
+        .find(|entry| entry.descriptor.name == "apply_patch")
+        .unwrap();
+    assert_eq!(apply_patch.exposure, ToolExposure::Hidden);
+}
+
+#[test]
 fn tool_invocation_rejects_input_schema_violations_before_side_effects() {
     let fx = fixture();
     let cap = fx
