@@ -1663,6 +1663,69 @@ fn assert_grep_parameters_observed(report: &RuntimeRunReport) {
     );
 }
 
+fn assert_process_exec_env_parameters_observed(
+    report: &RuntimeRunReport,
+    exec_command: &str,
+    exec_args: &[String],
+) {
+    let record = report
+        .tool_results
+        .iter()
+        .find(|record| {
+            record.tool_name == "run_command"
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("mode"))
+                    .and_then(Value::as_str)
+                    == Some("exec")
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("command"))
+                    .and_then(Value::as_str)
+                    == Some(exec_command)
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("args"))
+                    .is_some_and(|args| args == &json!(exec_args))
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.pointer("/env/AGENT_OS_LIVE_ENV_MARKER"))
+                    .and_then(Value::as_str)
+                    == Some("EXEC_ENV_OK")
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "missing parameterized run_command mode=exec args/env call: {:?}",
+                report.tool_results
+            )
+        });
+    let output = record
+        .output
+        .as_ref()
+        .unwrap_or_else(|| panic!("missing run_command exec/env output: {record:?}"));
+    assert_eq!(
+        output.get("execution_mode").and_then(Value::as_str),
+        Some("exec")
+    );
+    assert_eq!(
+        output.get("executed_args"),
+        Some(&json!(exec_args)),
+        "exec args were not preserved in run_command output: {output:?}"
+    );
+    let stdout = output
+        .get("stdout")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("missing run_command exec/env stdout: {record:?}"));
+    assert!(
+        stdout.contains("EXEC_ENV_OK"),
+        "run_command exec/env stdout did not contain marker: {stdout}"
+    );
+}
+
 fn assert_process_stdin_parameters_observed(report: &RuntimeRunReport, stdin_command: &str) {
     let run_record = report
         .tool_results
@@ -2356,13 +2419,15 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
         ],
     );
 
+    let (exec_command, exec_args) = live_exec_env_command_and_args();
+    let exec_args_json = serde_json::to_string(&exec_args).unwrap();
     let stdin_command = live_stdin_echo_command();
     let (stdin_kernel, stdin_request) =
         make_kernel_request_for_role_with_blob_store_and_requirements(
             &tmp,
             "role_producer",
             &format!(
-                "Complete this focused process stdin validation. Call run_command with command exactly {stdin_command} and stdin piped. Use the process_id returned by run_command to call write_stdin with write_id exactly live-stdin-1 and text exactly MODEL_STDIN_OK. After that write call, you must call write_stdin a second time with the same process_id, field stdout, and after_sequence stdout 0 even if the first write_stdin output already contains STDIN_ECHO:MODEL_STDIN_OK. Do not call accomplish_goal or submit_final before this second write_stdin poll call. If the poll stdout chunks do not contain STDIN_ECHO:MODEL_STDIN_OK, poll write_stdin with the same field and after_sequence once more. Then call accomplish_goal with a concise summary, then submit_final with summary exactly Process stdin surface complete., evidence_map citing evidence_ids from completed tool results, tests_run containing write_stdin stdout poll, and known_risks as an empty array. submit_final must be the last tool call."
+                "Complete this focused process parameter validation. First call run_command with mode exec, command exactly {exec_command}, args exactly {exec_args_json}, and env containing AGENT_OS_LIVE_ENV_MARKER set to EXEC_ENV_OK. Confirm that run_command stdout contains EXEC_ENV_OK. Then call run_command with command exactly {stdin_command} and stdin piped. Use the process_id returned by the stdin run_command to call write_stdin with write_id exactly live-stdin-1 and text exactly MODEL_STDIN_OK. After that write call, you must call write_stdin a second time with the same process_id, field stdout, and after_sequence stdout 0 even if the first write_stdin output already contains STDIN_ECHO:MODEL_STDIN_OK. Do not call accomplish_goal or submit_final before this second write_stdin poll call. If the poll stdout chunks do not contain STDIN_ECHO:MODEL_STDIN_OK, poll write_stdin with the same field and after_sequence once more. Then call accomplish_goal with a concise summary, then submit_final with summary exactly Process stdin surface complete., evidence_map citing evidence_ids from completed tool results, tests_run containing run_command exec env and write_stdin stdout poll, and known_risks as an empty array. submit_final must be the last tool call."
             ),
             Vec::new(),
             Vec::new(),
@@ -2392,6 +2457,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
         failed.is_empty(),
         "process stdin tool calls failed: {failed:?}"
     );
+    assert_process_exec_env_parameters_observed(&stdin_report, &exec_command, &exec_args);
     assert_process_stdin_parameters_observed(&stdin_report, stdin_command);
     assert_live_goal_tools(
         &audit_log_path,
@@ -3519,6 +3585,26 @@ fn live_stdin_echo_command() -> &'static str {
         "$buffer = New-Object char[] 14; $count = [Console]::In.ReadBlock($buffer, 0, 14); $text = -join $buffer[0..($count - 1)]; Write-Output ('STDIN_ECHO:' + $text); Start-Sleep -Seconds 2"
     } else {
         "text=$(dd bs=14 count=1 2>/dev/null); printf 'STDIN_ECHO:%s\\n' \"$text\"; sleep 2"
+    }
+}
+
+fn live_exec_env_command_and_args() -> (String, Vec<String>) {
+    if cfg!(windows) {
+        (
+            "cmd".to_string(),
+            vec![
+                "/C".to_string(),
+                "echo %AGENT_OS_LIVE_ENV_MARKER%".to_string(),
+            ],
+        )
+    } else {
+        (
+            "sh".to_string(),
+            vec![
+                "-c".to_string(),
+                "printf '%s\\n' \"$AGENT_OS_LIVE_ENV_MARKER\"".to_string(),
+            ],
+        )
     }
 }
 
