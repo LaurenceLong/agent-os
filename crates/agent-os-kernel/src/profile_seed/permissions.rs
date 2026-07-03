@@ -106,6 +106,7 @@ fn producer_reviewer_permission_set() -> PermissionSet {
             "request_permissions",
             "load_skill",
             "read_skill_resource",
+            "tool_search",
             "submit_final",
         ]),
         allowed_tool_driver_classes: strings_tool_driver_classes(&[

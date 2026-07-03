@@ -171,7 +171,9 @@ fn runtime_exports_real_system_prompt_review_bundle_for_core_roles() {
             assert!(tool_names.contains(&"read_file".to_string()));
             assert!(tool_names.contains(&"read_image".to_string()));
             assert!(tool_names.contains(&"run_command".to_string()));
+            assert!(tool_names.contains(&"tool_search".to_string()));
             assert!(tool_names.contains(&"submit_final".to_string()));
+            assert!(!tool_names.contains(&PROMPT_REVIEW_MCP_TOOL.to_string()));
             if role.label == "supervisor" {
                 assert!(tool_names.contains(&"set_goal".to_string()));
                 assert!(tool_names.contains(&"agent_control".to_string()));
@@ -208,8 +210,8 @@ fn runtime_exports_real_system_prompt_review_bundle_for_core_roles() {
             assert!(provider_tools(first_provider_request, provider)
                 .iter()
                 .any(|tool| {
-                    provider_tool_name(tool, provider) == PROMPT_REVIEW_MCP_TOOL
-                        && provider_tool_description(tool, provider).contains("Echo one text field")
+                    provider_tool_name(tool, provider) == "tool_search"
+                        && provider_tool_description(tool, provider).contains("deferred")
                 }));
             if canonical_tool_names.is_none() {
                 canonical_tool_names = Some(tool_names.clone());
@@ -270,8 +272,9 @@ fn runtime_exports_real_system_prompt_review_bundle_for_core_roles() {
         assert!(first_tools_markdown.contains("### glob_files"));
         assert!(first_tools_markdown.contains("### grep_files"));
         assert!(first_tools_markdown.contains("### run_command"));
+        assert!(first_tools_markdown.contains("### tool_search"));
         assert!(first_tools_markdown.contains("Examples:"));
-        assert!(first_tools_markdown.contains(PROMPT_REVIEW_MCP_TOOL));
+        assert!(!first_tools_markdown.contains(&format!("### {PROMPT_REVIEW_MCP_TOOL}")));
         let first_context_markdown =
             fs::read_to_string(&canonical_request_steps[0].context_md).unwrap();
         assert!(first_context_markdown.contains("System Prompt"));
@@ -1170,9 +1173,9 @@ fn write_model_visible_context_markdown(input: ModelVisibleContextMarkdown<'_>) 
     }
     if provider_tools(input.provider_request, input.provider)
         .iter()
-        .any(|tool| provider_tool_name(tool, input.provider).starts_with("mcp__"))
+        .any(|tool| provider_tool_name(tool, input.provider) == "tool_search")
     {
-        markdown.push_str("- MCP tools are visible as dynamic provider tool schemas and listed in the imported MCP prompt section.\n");
+        markdown.push_str("- Deferred MCP tools are listed in the imported MCP prompt section and discoverable through `tool_search`.\n");
     }
     fs::write(input.context_md, markdown).unwrap();
 }

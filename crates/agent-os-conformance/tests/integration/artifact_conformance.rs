@@ -1864,6 +1864,7 @@ fn default_tool_registry_is_minimal() {
             "request_permissions",
             "load_skill",
             "read_skill_resource",
+            "tool_search",
             "agent_control",
             "submit_final",
         ])
@@ -1906,6 +1907,37 @@ fn default_tool_registry_is_minimal() {
 #[test]
 fn kernel_tool_plan_projects_direct_hidden_and_disabled_tools() {
     let fx = fixture();
+    fx.kernel
+        .register_tool_descriptor(ToolDescriptor {
+            tool_id: "tool_mcp__echo__echo".to_string(),
+            name: "mcp__echo__echo".to_string(),
+            description: "Echo one text field through MCP.".to_string(),
+            version: "0.3.0".to_string(),
+            driver_class: ToolDriverClass::Mcp,
+            risk_level: 3,
+            input_schema: json!({
+                "type": "object",
+                "required": ["text"],
+                "properties": {"text": {"type": "string"}},
+                "additionalProperties": false
+            }),
+            model_input_schema: Some(json!({
+                "type": "object",
+                "required": ["text"],
+                "properties": {"text": {"type": "string"}},
+                "additionalProperties": false
+            })),
+            output_schema: json!({"type": "object"}),
+            runtime_input_policy: ToolRuntimeInputPolicy {
+                required_resource_scopes: vec!["mcp:echo:echo".to_string()],
+                ..ToolRuntimeInputPolicy::default()
+            },
+            idempotency: IdempotencyMode::ToolNative,
+            evidence_type: Some(EvidenceType::ExternalReference),
+            created_at: now_rfc3339(),
+            ..ToolDescriptor::default()
+        })
+        .unwrap();
     let text_only = ModelCapabilities {
         tool_calling: true,
         ..ModelCapabilities::default()
@@ -1922,8 +1954,17 @@ fn kernel_tool_plan_projects_direct_hidden_and_disabled_tools() {
     assert!(direct_names.contains("glob_files"));
     assert!(direct_names.contains("grep_files"));
     assert!(direct_names.contains("submit_final"));
+    assert!(direct_names.contains("tool_search"));
+    assert!(!direct_names.contains("mcp__echo__echo"));
     assert!(!direct_names.contains("agent_control"));
     assert!(!direct_names.contains("set_goal"));
+    let mcp_echo = producer_plan
+        .entries
+        .iter()
+        .find(|entry| entry.descriptor.name == "mcp__echo__echo")
+        .unwrap();
+    assert_eq!(mcp_echo.exposure, ToolExposure::Deferred);
+    assert!(mcp_echo.reason.as_deref().unwrap().contains("tool_search"));
     let read_image = producer_plan
         .entries
         .iter()
@@ -2006,6 +2047,75 @@ fn kernel_tool_plan_projects_direct_hidden_and_disabled_tools() {
         .find(|entry| entry.descriptor.name == "apply_patch")
         .unwrap();
     assert_eq!(apply_patch.exposure, ToolExposure::Hidden);
+}
+
+#[test]
+fn tool_search_returns_deferred_tool_summaries() {
+    let fx = fixture();
+    fx.kernel
+        .register_tool_descriptor(ToolDescriptor {
+            tool_id: "tool_mcp__echo__echo".to_string(),
+            name: "mcp__echo__echo".to_string(),
+            description: "Echo one text field through MCP.".to_string(),
+            version: "0.3.0".to_string(),
+            driver_class: ToolDriverClass::Mcp,
+            risk_level: 3,
+            input_schema: json!({
+                "type": "object",
+                "required": ["text"],
+                "properties": {"text": {"type": "string"}},
+                "additionalProperties": false
+            }),
+            model_input_schema: Some(json!({
+                "type": "object",
+                "required": ["text"],
+                "properties": {"text": {"type": "string"}},
+                "additionalProperties": false
+            })),
+            output_schema: json!({"type": "object"}),
+            runtime_input_policy: ToolRuntimeInputPolicy {
+                required_resource_scopes: vec!["mcp:echo:echo".to_string()],
+                ..ToolRuntimeInputPolicy::default()
+            },
+            idempotency: IdempotencyMode::ToolNative,
+            evidence_type: Some(EvidenceType::ExternalReference),
+            created_at: now_rfc3339(),
+            ..ToolDescriptor::default()
+        })
+        .unwrap();
+    let capability = fx
+        .kernel
+        .grant_capability(
+            &fx.worker.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            3,
+            None,
+        )
+        .unwrap();
+
+    let invocation = fx
+        .kernel
+        .invoke_tool(
+            &fx.worker.agent_id,
+            &fx.task.task_id,
+            &fx.worker.session_id,
+            capability.capability_id,
+            1,
+            ToolInvokeInput {
+                tool_name: "tool_search".to_string(),
+                input: json!({"query": "echo", "limit": 5}),
+                evidence_claim: Some("deferred tool discovery was queried".to_string()),
+            },
+        )
+        .unwrap();
+
+    let output = invocation.output.unwrap();
+    assert_eq!(output["status"], json!("ok"));
+    assert_eq!(output["returned_matches"], json!(1));
+    assert_eq!(output["matches"][0]["name"], json!("mcp__echo__echo"));
+    assert_eq!(output["matches"][0]["driver_class"], json!("mcp"));
 }
 
 #[test]

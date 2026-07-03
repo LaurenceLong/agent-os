@@ -688,7 +688,7 @@ fn tool_definitions_include_all_core_tools() {
                 .and_then(Value::as_str)
         })
         .collect();
-    assert_eq!(names.len(), 18);
+    assert_eq!(names.len(), 19);
     assert!(names.contains(&"apply_patch"));
     assert!(names.contains(&"glob_files"));
     assert!(names.contains(&"grep_files"));
@@ -705,6 +705,7 @@ fn tool_definitions_include_all_core_tools() {
     assert!(names.contains(&"request_permissions"));
     assert!(names.contains(&"load_skill"));
     assert!(names.contains(&"read_skill_resource"));
+    assert!(names.contains(&"tool_search"));
     assert!(names.contains(&"agent_control"));
     assert!(names.contains(&"submit_final"));
     assert!(!names.contains(&"write_file"));
@@ -965,33 +966,45 @@ fn supervisor_tool_view_includes_privileged_agent_control_actions() {
 }
 
 #[test]
-fn request_tool_view_includes_permitted_dynamic_mcp_tools() {
+fn request_tool_view_projects_tool_search_for_deferred_mcp_tools() {
     let tmp = std::env::temp_dir().join(format!("aos-openai-mcp-tools-{}", new_id("t_")));
-    let mut request = make_request(&tmp);
-    attach_mcp_echo_tool(&mut request);
+    let (kernel, mut request) = make_kernel_request(&tmp);
+    let mcp_tool = mcp_echo_tool();
+    kernel
+        .register_tool_descriptor(mcp_tool.tool_descriptor.clone())
+        .unwrap();
+    refresh_tool_descriptors(&kernel, &mut request);
 
     let tools = tool_definitions_for_request(&request);
     let names: Vec<&str> = tools
         .iter()
         .filter_map(|tool| tool.pointer("/function/name").and_then(Value::as_str))
         .collect();
-    assert!(names.contains(&"mcp__echo__echo"));
-    let mcp_tool = tools
+    assert!(names.contains(&"tool_search"));
+    assert!(!names.contains(&"mcp__echo__echo"));
+    let tool_search = tools
         .iter()
-        .find(|tool| {
-            tool.pointer("/function/name").and_then(Value::as_str) == Some("mcp__echo__echo")
-        })
+        .find(|tool| tool.pointer("/function/name").and_then(Value::as_str) == Some("tool_search"))
         .unwrap();
     assert_eq!(
-        mcp_tool.pointer("/function/parameters/required"),
-        Some(&json!(["text"]))
+        tool_search.pointer("/function/parameters/required"),
+        Some(&json!(["query"]))
     );
+    let deferred_mcp = request
+        .context
+        .tool_plan
+        .entries
+        .iter()
+        .find(|entry| entry.descriptor.name == "mcp__echo__echo")
+        .unwrap();
+    assert_eq!(deferred_mcp.exposure, ToolExposure::Deferred);
 
     let anthropic_names: Vec<String> = anthropic_tool_definitions_for_request(&request)
         .into_iter()
         .filter_map(|tool| tool.get("name").and_then(Value::as_str).map(str::to_string))
         .collect();
-    assert!(anthropic_names.contains(&"mcp__echo__echo".to_string()));
+    assert!(anthropic_names.contains(&"tool_search".to_string()));
+    assert!(!anthropic_names.contains(&"mcp__echo__echo".to_string()));
 }
 
 #[test]

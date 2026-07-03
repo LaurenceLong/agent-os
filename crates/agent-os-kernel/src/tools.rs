@@ -41,7 +41,7 @@ impl Kernel {
         descriptors.sort_by(|left, right| left.name.cmp(&right.name));
         drop(state);
 
-        let entries = descriptors
+        let mut entries: Vec<ToolPlanEntry> = descriptors
             .into_iter()
             .map(|descriptor| {
                 let (exposure, reason) =
@@ -53,6 +53,24 @@ impl Kernel {
                 }
             })
             .collect();
+        let has_deferred_tools = entries
+            .iter()
+            .any(|entry| entry.exposure == ToolExposure::Deferred);
+        for entry in &mut entries {
+            if entry.descriptor.name != "tool_search" {
+                continue;
+            }
+            if has_deferred_tools
+                && entry.exposure == ToolExposure::Hidden
+                && planning_mode_allows_tool(mode, &entry.descriptor.name)
+            {
+                entry.exposure = ToolExposure::Direct;
+                entry.reason = Some("deferred tools are available for discovery".to_string());
+            } else {
+                entry.exposure = ToolExposure::Hidden;
+                entry.reason = Some("no deferred tools are available for discovery".to_string());
+            }
+        }
 
         Ok(ToolPlan {
             plan_id: new_id("tool_plan_"),
@@ -87,6 +105,18 @@ impl Kernel {
         }
         if let Err(error) = self.require_tool_authority(thread, descriptor, descriptor.risk_level) {
             return (ToolExposure::Disabled, Some(error.to_string()));
+        }
+        if descriptor.name == "tool_search" {
+            return (
+                ToolExposure::Hidden,
+                Some("no deferred tools are available for discovery".to_string()),
+            );
+        }
+        if descriptor.driver_class == ToolDriverClass::Mcp {
+            return (
+                ToolExposure::Deferred,
+                Some("MCP tool is discoverable through tool_search".to_string()),
+            );
         }
         (ToolExposure::Direct, None)
     }

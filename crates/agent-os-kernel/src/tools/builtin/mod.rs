@@ -22,6 +22,7 @@ pub(super) mod run_command;
 mod schema;
 mod set_goal;
 mod submit_final;
+mod tool_search;
 mod update_checklist;
 
 use crate::*;
@@ -66,6 +67,7 @@ fn all_tools() -> Vec<BuiltinTool> {
         load_skill::tool(),
         read_skill_resource::tool(),
         submit_final::tool(),
+        tool_search::tool(),
         agent_control::tool(),
     ]
 }
