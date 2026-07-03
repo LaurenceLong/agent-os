@@ -1517,6 +1517,89 @@ fn assert_grep_parameters_observed(report: &RuntimeRunReport) {
     );
 }
 
+fn assert_request_permissions_parameters_observed(report: &RuntimeRunReport) {
+    let record = report
+        .tool_results
+        .iter()
+        .find(|record| {
+            record.tool_name == "request_permissions"
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("reason"))
+                    .and_then(Value::as_str)
+                    == Some("Need bounded read_file permission for this control-plane validation.")
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("scope"))
+                    .and_then(Value::as_str)
+                    == Some("turn")
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.pointer("/permissions/max_risk_level"))
+                    .and_then(Value::as_u64)
+                    == Some(2)
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.pointer("/permissions/approval_required_above"))
+                    .and_then(Value::as_u64)
+                    == Some(2)
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "missing parameterized request_permissions call: {:?}",
+                report.tool_results
+            )
+        });
+    let input = record
+        .input
+        .as_ref()
+        .unwrap_or_else(|| panic!("missing request_permissions input: {record:?}"));
+    assert_eq!(
+        input.pointer("/permissions/allowed_syscalls"),
+        Some(&json!(["tool.invoke"]))
+    );
+    assert_eq!(
+        input.pointer("/permissions/resource_scopes"),
+        Some(&json!(["tool:read_file"]))
+    );
+    assert_eq!(
+        input.pointer("/permissions/allowed_tool_names"),
+        Some(&json!(["read_file"]))
+    );
+    assert_eq!(
+        input.pointer("/permissions/allowed_tool_driver_classes"),
+        Some(&json!(["filesystem"]))
+    );
+    assert_eq!(
+        input.pointer("/permissions/requires_evidence_for"),
+        Some(&json!(["read_file"]))
+    );
+    let output = record
+        .output
+        .as_ref()
+        .unwrap_or_else(|| panic!("missing request_permissions output: {record:?}"));
+    assert_eq!(
+        output.get("status").and_then(Value::as_str),
+        Some("pending")
+    );
+    assert_eq!(
+        output.get("request_status").and_then(Value::as_str),
+        Some("Pending")
+    );
+    assert_eq!(output.get("scope").and_then(Value::as_str), Some("turn"));
+    assert!(
+        output
+            .get("permission_request_id")
+            .and_then(Value::as_str)
+            .is_some_and(|id| !id.is_empty()),
+        "request_permissions output omitted permission_request_id: {record:?}"
+    );
+}
+
 fn assert_no_completed_read_image(report: &RuntimeRunReport) {
     let completed_read_image = report.tool_results.iter().any(|record| {
         record.tool_name == "read_image" && record.status == agent_os_sys::ToolCallStatus::Completed
@@ -1849,7 +1932,7 @@ fn run_live_llm_goal_driven_control_plane_e2e(
     let (kernel, request) = make_kernel_request_for_role_with_blob_store_and_requirements(
             &tmp,
             "role_supervisor",
-                "Complete this live control-plane checklist as a supervisor. 1. read_file coordination_seed.md. 2. update_checklist with one completed item. 3. record_evidence for the coordination seed. 4. report_supervisor with a concise progress message. 5. post_blackboard one risk note with channel_id exactly risks, scope task, and section risk. 6. ask_human exactly once to confirm there is no extra scope, then continue after delivery. 7. agent_control start a child producer with role_profile_id role_producer and a one-sentence goal in payload.goal. 8. set_goal with target_thread_id set to the child thread_id returned by agent_control and goal saying the live control-plane goal is achieved; do not set_goal on your own thread. 9. accomplish_goal with a concise summary. 10. submit_final with summary exactly Control-plane coordination complete., evidence_map citing evidence_ids from completed tool results, tests_run containing read_file coordination_seed.md, and known_risks as an empty array. submit_final must be the last tool call. Do not skip ask_human, agent_control, set_goal, or report_supervisor.",
+                "Complete this live control-plane checklist as a supervisor. 1. read_file coordination_seed.md. 2. update_checklist with one completed item. 3. request_permissions with reason exactly Need bounded read_file permission for this control-plane validation., scope turn, and permissions containing max_risk_level 2, allowed_syscalls [tool.invoke], resource_scopes [tool:read_file], allowed_tool_names [read_file], allowed_tool_driver_classes [filesystem], approval_required_above 2, and requires_evidence_for [read_file]. After the permission request returns pending, continue without approving it and without checking its status. 4. record_evidence for the coordination seed. 5. report_supervisor with a concise progress message. 6. post_blackboard one risk note with channel_id exactly risks, scope task, and section risk. 7. ask_human exactly once to confirm there is no extra scope, then continue after delivery. 8. agent_control start exactly once for a child producer with role_profile_id role_producer and a one-sentence goal in payload.goal; do not call agent_control status, output, send, resume, stop, kill, delete_session, purge_state, or export_trace in this checklist. 9. set_goal with target_thread_id set to the child thread_id returned by agent_control start and goal saying the live control-plane goal is achieved; do not set_goal on your own thread. 10. accomplish_goal with a concise summary. 11. submit_final with summary exactly Control-plane coordination complete., evidence_map citing evidence_ids from completed tool results, tests_run containing read_file coordination_seed.md, and known_risks as an empty array. submit_final must be the last tool call. Do not skip request_permissions, ask_human, agent_control start, set_goal, or report_supervisor.",
             Vec::new(),
             Vec::new(),
             vec![EvidenceType::SourceRef],
@@ -1873,7 +1956,7 @@ fn run_live_llm_goal_driven_control_plane_e2e(
     .unwrap();
 
     let mut runtime = ThreadRuntime::new(kernel.clone(), request.thread.thread_id.clone(), client);
-    let config = live_runtime_config(&tmp, 12);
+    let config = live_runtime_config(&tmp, 13);
     let report = runtime.run_to_completion(config).unwrap();
     assert!(report.final_submitted);
     assert_all_tool_calls_completed(&report);
@@ -1886,6 +1969,7 @@ fn run_live_llm_goal_driven_control_plane_e2e(
             "read_file",
             "set_goal",
             "update_checklist",
+            "request_permissions",
             "record_evidence",
             "report_supervisor",
             "post_blackboard",
@@ -1895,6 +1979,7 @@ fn run_live_llm_goal_driven_control_plane_e2e(
             "submit_final",
         ],
     );
+    assert_request_permissions_parameters_observed(&report);
     println!("live_goal_control_plane_log={}", audit_log_path.display());
     let _ = std::fs::remove_dir_all(tmp);
 }
@@ -1951,7 +2036,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
             &tmp,
             "role_producer",
             &format!(
-                "Complete this focused workspace validation. Use glob_files to locate read.txt by path pattern, use grep_files to confirm read.txt contains read me, then read read.txt. Also exercise workspace tool parameters: call read_file on paged.txt with offset 2 and limit 2; call glob_files with path notes, pattern *.txt, offset 1, and limit 1 so it returns the second txt file; call grep_files with path notes, include *.txt, pattern Needle, case_sensitive true, offset 1, and limit 1 so it returns the second case-sensitive txt match and excludes c.md and lower-case needle. Use apply_patch for every workspace mutation: add created.txt with exactly FULL_TOOL_SURFACE_OK followed by one newline, update edit.txt by replacing status=old with status=new, and delete obsolete.tmp with an apply_patch delete operation. Use run_command only for the final verifier command {verifier_command}; do not use run_command for listing, deleting, grepping, or editing files. After the verifier succeeds, call accomplish_goal with a concise summary, then submit_final with summary exactly Workspace surface complete., evidence_map citing evidence_ids from completed tool results, tests_run containing {verifier_command}, and known_risks as an empty array. submit_final must be the last tool call."
+                "Complete this focused workspace validation. Use glob_files to locate read.txt by path pattern, use grep_files to confirm read.txt contains read me, then read read.txt. Also exercise workspace tool parameters: call read_file on paged.txt with offset 2 and limit 2; call glob_files with path notes, pattern *.txt, offset 1, and limit 1 so it returns the second txt file; call grep_files with path notes, include *.txt, pattern Needle, case_sensitive true, offset 1, and limit 1 so it returns the second case-sensitive txt match and excludes c.md and lower-case needle. The grep_files result is sufficient; do not read notes/c.md or make extra verification calls for that exclusion. Use apply_patch for every workspace mutation: add created.txt with content exactly FULL_TOOL_SURFACE_OK followed by one newline and no blank second line, update edit.txt by replacing status=old with status=new, and delete obsolete.tmp with an apply_patch delete operation. Use run_command only for the final verifier command {verifier_command}; do not use run_command for listing, deleting, grepping, or editing files. After the verifier succeeds, call accomplish_goal with a concise summary, then submit_final with summary exactly Workspace surface complete., evidence_map citing evidence_ids from completed tool results, tests_run containing {verifier_command}, and known_risks as an empty array. submit_final must be the last tool call."
             ),
             Vec::new(),
             vec![ArtifactType::Patch],
@@ -1967,7 +2052,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
         workspace_request.thread.thread_id.clone(),
         workspace_client,
     );
-    let workspace_config = live_runtime_config(&tmp, 15);
+    let workspace_config = live_runtime_config(&tmp, 20);
     let workspace_report = workspace_runtime
         .run_to_completion(workspace_config)
         .unwrap();
@@ -2010,7 +2095,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
         make_kernel_request_for_role_with_blob_store_and_requirements(
             &tmp,
             "role_supervisor",
-            "Complete this focused control-plane validation. Read coordination_seed.md, update_checklist with one completed item, record_evidence for coordination_seed.md as source_ref, report_supervisor with a short progress message, post_blackboard on channel test-results with scope task and section test_result, ask_human exactly once whether there is extra scope and continue after delivery, start one child producer with role_profile_id role_producer and payload.goal, then set_goal with target_thread_id set to the child thread_id returned by agent_control and goal saying the live full-surface control-plane segment is achieved; do not set_goal on your own thread. Then call accomplish_goal with a concise summary, then submit_final with summary exactly Control-plane surface complete., evidence_map citing evidence_ids from completed tool results, tests_run containing read_file coordination_seed.md, and known_risks as an empty array. submit_final must be the last tool call.",
+            "Complete this focused control-plane validation. Read coordination_seed.md, update_checklist with one completed item, request_permissions with reason exactly Need bounded read_file permission for this control-plane validation., scope turn, and permissions containing max_risk_level 2, allowed_syscalls [tool.invoke], resource_scopes [tool:read_file], allowed_tool_names [read_file], allowed_tool_driver_classes [filesystem], approval_required_above 2, and requires_evidence_for [read_file]; after it returns pending, continue without approving it and without checking its status. Record_evidence for coordination_seed.md as source_ref, report_supervisor with a short progress message, post_blackboard on channel test-results with scope task and section test_result, ask_human exactly once whether there is extra scope and continue after delivery, agent_control start exactly once for one child producer with role_profile_id role_producer and payload.goal; do not call agent_control status, output, send, resume, stop, kill, delete_session, purge_state, or export_trace in this segment. Then set_goal with target_thread_id set to the child thread_id returned by agent_control start and goal saying the live full-surface control-plane segment is achieved; do not set_goal on your own thread. Then call accomplish_goal with a concise summary, then submit_final with summary exactly Control-plane surface complete., evidence_map citing evidence_ids from completed tool results, tests_run containing read_file coordination_seed.md, and known_risks as an empty array. submit_final must be the last tool call.",
             Vec::new(),
             Vec::new(),
             vec![EvidenceType::SourceRef],
@@ -2025,7 +2110,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
         control_request.thread.thread_id.clone(),
         control_client,
     );
-    let control_config = live_runtime_config(&tmp, 14);
+    let control_config = live_runtime_config(&tmp, 15);
     let control_report = control_runtime.run_to_completion(control_config).unwrap();
     assert!(control_report.final_submitted);
     assert_all_tool_calls_completed(&control_report);
@@ -2038,6 +2123,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
             "read_file",
             "set_goal",
             "update_checklist",
+            "request_permissions",
             "record_evidence",
             "report_supervisor",
             "post_blackboard",
@@ -2047,6 +2133,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
             "submit_final",
         ],
     );
+    assert_request_permissions_parameters_observed(&control_report);
     assert_agent_control_actions(
         &audit_log_path,
         provider,

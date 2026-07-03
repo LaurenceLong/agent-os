@@ -71,7 +71,7 @@ fn descriptor(now: &str) -> ToolDescriptor {
 
 fn input_schema() -> Value {
     schema::object(
-        &["permissions", "reason"],
+        &["permissions", "reason", "scope"],
         json!({
             "permissions": schema::permission_set_schema(),
             "reason": {"type": "string", "maxLength": 8000},
@@ -95,13 +95,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn schema_requires_permissions_and_reason() {
+    fn schema_requires_permissions_reason_and_scope() {
         let required = descriptor("now").input_schema["required"]
             .as_array()
             .unwrap()
             .clone();
         assert!(required.iter().any(|value| value == "permissions"));
         assert!(required.iter().any(|value| value == "reason"));
+        assert!(required.iter().any(|value| value == "scope"));
     }
 
     #[test]
