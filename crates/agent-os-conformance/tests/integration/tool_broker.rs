@@ -318,6 +318,143 @@ fn tool_broker_integration_runs_all_model_visible_tool_families() {
 }
 
 #[test]
+fn workspace_discovery_tools_cover_parameter_semantics_through_broker() {
+    let fx = fixture();
+    let workspace = temp_workspace("agent-os-integration-discovery-params");
+    fs::create_dir_all(workspace.join("docs")).unwrap();
+    fs::create_dir_all(workspace.join("notes")).unwrap();
+    fs::write(workspace.join("docs/alpha.txt"), "alpha document\n").unwrap();
+    fs::write(workspace.join("docs/beta.txt"), "beta document\n").unwrap();
+    fs::write(workspace.join("docs/gamma.md"), "gamma document\n").unwrap();
+    fs::write(workspace.join("notes/one.txt"), "Needle uppercase\n").unwrap();
+    fs::write(workspace.join("notes/two.txt"), "needle lowercase\n").unwrap();
+    fs::write(workspace.join("notes/skip.md"), "needle markdown\n").unwrap();
+
+    let worker = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_producer".to_string(),
+            owner: "integration-test".to_string(),
+            goal: "Exercise discovery tool parameter semantics".to_string(),
+            success_criteria: vec!["discovery parameters produce auditable output".to_string()],
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: vec![workspace.to_string_lossy().to_string()],
+        })
+        .unwrap();
+    attach_workspace_for_agent(&fx.kernel, &worker, &fx.task.task_id, &workspace);
+    let capability = fx
+        .kernel
+        .grant_capability(
+            &worker.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            1,
+            None,
+        )
+        .unwrap();
+    let tools = ToolInvoker {
+        kernel: &fx.kernel,
+        agent: &worker,
+        task_id: &fx.task.task_id,
+        capability: &capability,
+    };
+
+    let glob = tools.invoke(
+        1,
+        "glob_files",
+        json!({
+            "workspace_root": workspace.to_string_lossy(),
+            "path": "docs",
+            "pattern": "*.txt",
+            "offset": 1,
+            "limit": 1
+        }),
+        Some("scoped glob pagination was queried"),
+    );
+    let glob_output = glob.output.as_ref().unwrap();
+    assert_eq!(glob_output["path"], json!("docs"));
+    assert_eq!(glob_output["pattern"], json!("*.txt"));
+    assert_eq!(glob_output["offset"], json!(1));
+    assert_eq!(glob_output["limit"], json!(1));
+    assert_eq!(glob_output["total_matches"], json!(2));
+    assert_eq!(glob_output["returned_matches"], json!(1));
+    assert_eq!(glob_output["next_offset"], serde_json::Value::Null);
+    assert_eq!(glob_output["matches"][0]["path"], json!("docs/beta.txt"));
+
+    let grep_case_insensitive = tools.invoke(
+        1,
+        "grep_files",
+        json!({
+            "workspace_root": workspace.to_string_lossy(),
+            "path": "notes",
+            "include": "*.txt",
+            "pattern": "needle",
+            "case_sensitive": false,
+            "offset": 0,
+            "limit": 1
+        }),
+        Some("case-insensitive grep pagination was queried"),
+    );
+    let grep_output = grep_case_insensitive.output.as_ref().unwrap();
+    assert_eq!(grep_output["path"], json!("notes"));
+    assert_eq!(grep_output["include"], json!("*.txt"));
+    assert_eq!(grep_output["case_sensitive"], json!(false));
+    assert_eq!(grep_output["total_matches"], json!(2));
+    assert_eq!(grep_output["returned_matches"], json!(1));
+    assert_eq!(grep_output["next_offset"], json!(1));
+    assert_eq!(grep_output["matches"][0]["path"], json!("notes/one.txt"));
+    assert_eq!(grep_output["matches"][0]["line_number"], json!(1));
+    assert_eq!(grep_output["matches"][0]["line"], json!("Needle uppercase"));
+
+    let grep_case_sensitive = tools.invoke(
+        1,
+        "grep_files",
+        json!({
+            "workspace_root": workspace.to_string_lossy(),
+            "path": "notes",
+            "include": "*.txt",
+            "pattern": "needle",
+            "case_sensitive": true
+        }),
+        Some("case-sensitive grep was queried"),
+    );
+    let sensitive_output = grep_case_sensitive.output.as_ref().unwrap();
+    assert_eq!(sensitive_output["case_sensitive"], json!(true));
+    assert_eq!(sensitive_output["total_matches"], json!(1));
+    assert_eq!(
+        sensitive_output["matches"][0]["path"],
+        json!("notes/two.txt")
+    );
+
+    let invalid_scope = tools.invoke(
+        1,
+        "glob_files",
+        json!({
+            "workspace_root": workspace.to_string_lossy(),
+            "path": "../outside",
+            "pattern": "*.txt"
+        }),
+        Some("invalid glob scope was rejected"),
+    );
+    assert_eq!(invalid_scope.status, ToolCallStatus::Failed);
+    let error = invalid_scope
+        .output
+        .as_ref()
+        .and_then(|output| output.get("error"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    assert!(
+        error.contains("outside workspace root") || error.contains("workspace"),
+        "{error}"
+    );
+
+    let _ = fs::remove_dir_all(workspace);
+}
+
+#[test]
 fn apply_patch_rejects_multiple_file_operations() {
     let fx = fixture();
     let workspace = temp_workspace("agent-os-integration-apply-patch-one-op");
