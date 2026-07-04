@@ -2923,7 +2923,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
             task_id: process_task.task_id.clone(),
             role_profile_id: "role_supervisor".to_string(),
             owner: "agent-os-thread-live-test".to_string(),
-            goal: "Complete this focused agent_control process validation. Read agent_control_process_seed.md, then use process_target_thread_id as thread_id only and do not provide agent_id or payload.tool_call_id. Call agent_control status with payload.processes true and payload.state running. Call agent_control status with payload.process_id set to output_process_id. Call agent_control output with payload.process_id set to output_process_id, payload.field stdout, and payload.after_sequence stdout 0. Call agent_control send with payload.process_id set to send_process_id, payload.write_id exactly agent-process-send-1, and payload.text exactly AGENT_SEND. Call agent_control stop with payload.process_id set to stop_process_id. Call agent_control kill with payload.process_id set to kill_process_id. Then submit_final with summary exactly Agent control process surface complete., evidence_map citing evidence_ids from completed tool results, tests_run containing agent_control process payloads, and known_risks as an empty array. submit_final must be the last tool call.".to_string(),
+            goal: "Complete this focused agent_control process validation. First read agent_control_process_seed.md and extract process_target_thread_id, output_process_id, send_process_id, stop_process_id, and kill_process_id. Use process_target_thread_id as thread_id only; do not provide agent_id or payload.tool_call_id. You must complete these six agent_control calls before submit_final: 1. status with payload.processes true and payload.state running; 2. status with payload.process_id set to output_process_id; 3. output with payload.process_id set to output_process_id, payload.field stdout, and payload.after_sequence stdout 0; 4. send with payload.process_id set to send_process_id, payload.write_id exactly agent-process-send-1, and payload.text exactly AGENT_SEND; 5. stop with payload.process_id set to stop_process_id; 6. kill with payload.process_id set to kill_process_id. Do not call submit_final until the kill call returns successfully. Then submit_final with summary exactly Agent control process surface complete., evidence_map citing evidence_ids from completed tool results, tests_run containing agent_control process payloads, and known_risks as an empty array. submit_final must be the last tool call.".to_string(),
             success_criteria: Vec::new(),
             failure_criteria: Vec::new(),
             parent_thread_id: None,
@@ -2990,7 +2990,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
         process_supervisor.thread_id.clone(),
         process_client,
     );
-    let mut process_config = live_runtime_config(&tmp, 12);
+    let mut process_config = live_runtime_config(&tmp, 14);
     process_config.tool_risk_ceiling = 6;
     let process_report = process_runtime
         .run_to_completion_with_overrides(

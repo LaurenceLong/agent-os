@@ -3,8 +3,12 @@ use agent_os_store_sqlite::SqliteStore;
 use serde_json::Value;
 use std::{
     env, fs,
+    io::{Read, Write},
+    net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::Command,
+    sync::{mpsc, Mutex, OnceLock},
+    thread,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -412,6 +416,120 @@ fn cli_code_binary_applies_exact_edit_runs_verifier_and_replays_sqlite_state() {
 }
 
 #[test]
+fn cli_chat_binary_runs_task_through_configured_provider_and_replays_sqlite_state() {
+    let root = isolated_temp_dir("cli-chat-binary");
+    fs::create_dir_all(&root).unwrap();
+    let target_dir = root.join("cargo-target");
+    build_cli_and_hostd_binaries(&target_dir);
+    let workspace = root.join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    let state_db = root.join("state").join("agent-os.sqlite");
+    fs::create_dir_all(state_db.parent().unwrap()).unwrap();
+    let agent_home = root.join("agent-home");
+    fs::create_dir_all(agent_home.join("config")).unwrap();
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    fs::write(
+        agent_home.join("config").join("config.json"),
+        serde_json::to_vec_pretty(&json!({
+            "model": "local/chat-model",
+            "provider": {
+                "local": {
+                    "api_key": "test-key",
+                    "endpoint": "openai_chat_completions",
+                    "options": {
+                        "base_url": endpoint,
+                        "timeout_ms": 5000
+                    },
+                    "models": {
+                        "chat-model": {
+                            "name": "wire-chat-model",
+                            "limit": {"context": 65536, "output": 1024},
+                            "capabilities": {
+                                "streaming": true,
+                                "tool_calling": true,
+                                "reasoning": false,
+                                "temperature": true,
+                                "image_input": false,
+                                "structured_output": false
+                            }
+                        }
+                    }
+                }
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let (requests_tx, requests_rx) = mpsc::channel();
+    let server = thread::spawn(move || serve_chat_provider_endpoint(listener, requests_tx));
+
+    let output = Command::new(binary_path(&target_dir, "agent-os"))
+        .arg("chat")
+        .arg("--workspace")
+        .arg(&workspace)
+        .arg("--task")
+        .arg("Create chat_result.txt from chat binary conformance")
+        .arg("--bundle-output")
+        .arg("bundle/chat.json")
+        .arg("--state-db")
+        .arg(&state_db)
+        .arg("--max-steps")
+        .arg("6")
+        .arg("--runtime-timeout-seconds")
+        .arg("30")
+        .env("AGENT_OS_HOME", &agent_home)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "agent-os chat failed with status {}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Agent-OS v0.3"));
+    assert!(stdout.contains("Provider:  local"));
+    assert!(stdout.contains("Model:     local/chat-model"));
+    assert!(stdout.contains("Session: 1 task(s)"));
+    assert_eq!(
+        fs::read_to_string(workspace.join("chat_result.txt")).unwrap(),
+        "CHAT_BINARY_OK\n"
+    );
+    let bundle_path = workspace.join("bundle").join("chat.json");
+    let bundle: Value = serde_json::from_slice(&fs::read(bundle_path).unwrap()).unwrap();
+    let task_id = bundle["root_task_id"].as_str().unwrap().to_string();
+    assert_eq!(
+        bundle["replay_summary"]["final_submission_count"].as_u64(),
+        Some(1)
+    );
+    let captured_requests = requests_rx
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .unwrap();
+    server.join().unwrap();
+    assert_eq!(captured_requests.len(), 2);
+    assert_eq!(captured_requests[0]["model"], "wire-chat-model");
+    assert!(captured_requests[0]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|tool| tool["function"]["name"] == "apply_patch"));
+
+    let replayed = Kernel::with_replayed_store(SqliteStore::open(&state_db).unwrap()).unwrap();
+    let replayed_state = replayed.state_snapshot().unwrap();
+    assert!(replayed_state.final_submissions.contains_key(&task_id));
+    assert!(replayed_state
+        .threads
+        .values()
+        .any(|thread| thread.status == ThreadStatus::Completed));
+
+    drop(replayed);
+    remove_dir_all_retry(&root);
+}
+
+#[test]
 fn cli_resume_binary_recovers_running_thread_and_completes_runtime_job_through_hostd() {
     let root = isolated_temp_dir("cli-resume-binary");
     fs::create_dir_all(&root).unwrap();
@@ -557,6 +675,28 @@ fn cli_resume_binary_recovers_running_thread_and_completes_runtime_job_through_h
 }
 
 fn build_cli_and_hostd_binaries(target_dir: &Path) {
+    static BUILD_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    let _guard = BUILD_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+    let shared_target_dir = workspace_root()
+        .join("target")
+        .join("agent-os-conformance-cli-binaries");
+    if !binary_path(&shared_target_dir, "agent-os").exists()
+        || !binary_path(&shared_target_dir, "agent-os-hostd").exists()
+    {
+        build_shared_cli_and_hostd_binaries(&shared_target_dir);
+    }
+    let binary_dir = target_dir.join("debug");
+    fs::create_dir_all(&binary_dir).unwrap();
+    for stem in ["agent-os", "agent-os-hostd"] {
+        fs::copy(
+            binary_path(&shared_target_dir, stem),
+            binary_path(target_dir, stem),
+        )
+        .unwrap();
+    }
+}
+
+fn build_shared_cli_and_hostd_binaries(target_dir: &Path) {
     let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let output = Command::new(cargo)
         .arg("build")
@@ -792,6 +932,140 @@ fn json_escape(input: &str) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     model_program
+}
+
+fn serve_chat_provider_endpoint(listener: TcpListener, requests_tx: mpsc::Sender<Vec<Value>>) {
+    let mut requests = Vec::new();
+    for step_index in 0..2 {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        let request = read_http_json(&mut stream);
+        let response = if step_index == 0 {
+            json!({
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": null,
+                        "tool_calls": [{
+                            "id": "call_chat_patch",
+                            "type": "function",
+                            "function": {
+                                "name": "apply_patch",
+                                "arguments": "{\"patch\":\"*** Begin Patch\\n*** Add File: chat_result.txt\\n+CHAT_BINARY_OK\\n*** End Patch\\n\"}"
+                            }
+                        }]
+                    }
+                }],
+                "usage": {"prompt_tokens": 100, "completion_tokens": 8}
+            })
+        } else {
+            let evidence_refs = evidence_refs_from_openai_request(&request);
+            assert!(
+                !evidence_refs.is_empty(),
+                "second chat provider request must include tool evidence ids"
+            );
+            json!({
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": null,
+                        "tool_calls": [{
+                            "id": "call_chat_final",
+                            "type": "function",
+                            "function": {
+                                "name": "submit_final",
+                                "arguments": json!({
+                                    "summary": "Chat binary conformance completed.",
+                                    "changed_artifacts": [],
+                                    "evidence_map": [{
+                                        "claim": "chat_result.txt was created through apply_patch",
+                                        "evidence_refs": evidence_refs
+                                    }],
+                                    "unverified_claims": [],
+                                    "known_risks": [],
+                                    "tests_run": ["agent-os chat binary conformance"],
+                                    "tests_not_run": [],
+                                    "approvals": []
+                                }).to_string()
+                            }
+                        }]
+                    }
+                }],
+                "usage": {"prompt_tokens": 120, "completion_tokens": 12}
+            })
+        };
+        write_http_json(&mut stream, &response);
+        requests.push(request);
+    }
+    requests_tx.send(requests).unwrap();
+}
+
+fn read_http_json(stream: &mut TcpStream) -> Value {
+    let mut bytes = Vec::new();
+    let mut buffer = [0_u8; 1024];
+    let (header_end, content_length) = loop {
+        let read = stream.read(&mut buffer).unwrap();
+        assert!(read > 0, "connection closed before headers");
+        bytes.extend_from_slice(&buffer[..read]);
+        if let Some(header_end) = find_header_end(&bytes) {
+            let headers = String::from_utf8_lossy(&bytes[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .expect("content-length header");
+            break (header_end, content_length);
+        }
+    };
+
+    let body_start = header_end + 4;
+    while bytes.len() < body_start + content_length {
+        let read = stream.read(&mut buffer).unwrap();
+        assert!(read > 0, "connection closed before body");
+        bytes.extend_from_slice(&buffer[..read]);
+    }
+    serde_json::from_slice(&bytes[body_start..body_start + content_length]).unwrap()
+}
+
+fn write_http_json(stream: &mut TcpStream, body: &Value) {
+    let body = serde_json::to_vec(body).unwrap();
+    write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    )
+    .unwrap();
+    stream.write_all(&body).unwrap();
+}
+
+fn find_header_end(bytes: &[u8]) -> Option<usize> {
+    bytes.windows(4).position(|window| window == b"\r\n\r\n")
+}
+
+fn evidence_refs_from_openai_request(request: &Value) -> Vec<String> {
+    request["messages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|message| message["role"] == "tool")
+        .filter_map(|message| message["content"].as_str())
+        .filter_map(|content| serde_json::from_str::<Value>(content).ok())
+        .flat_map(|content| {
+            content["evidence_ids"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 fn wait_for_process_state(
