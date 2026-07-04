@@ -321,6 +321,45 @@ fn live_openai_responses_llm_goal_driven_agent_control_lifecycle_success_e2e() {
 
 #[test]
 #[ignore = "requires AGENT_OS_LIVE_OPENAI_API_KEY and a live openai_chat_completions endpoint"]
+fn live_openai_chat_completions_llm_goal_driven_agent_control_lifecycle_rejection_e2e() {
+    run_live_llm_goal_driven_agent_control_lifecycle_rejection_e2e(
+        "openai_chat_completions",
+        LlmApiStyle::OpenAiChatCompletions,
+        "AGENT_OS_LIVE_OPENAI_API_KEY",
+        "AGENT_OS_LIVE_OPENAI_MODEL",
+        "AGENT_OS_LIVE_OPENAI_BASE_URL",
+        "live-openai_chat_completions-goal-agent-control-lifecycle-rejection.jsonl",
+    );
+}
+
+#[test]
+#[ignore = "requires AGENT_OS_LIVE_ANTHROPIC_API_KEY and a live anthropic_messages endpoint"]
+fn live_anthropic_messages_llm_goal_driven_agent_control_lifecycle_rejection_e2e() {
+    run_live_llm_goal_driven_agent_control_lifecycle_rejection_e2e(
+        "anthropic_messages",
+        LlmApiStyle::AnthropicMessages,
+        "AGENT_OS_LIVE_ANTHROPIC_API_KEY",
+        "AGENT_OS_LIVE_ANTHROPIC_MODEL",
+        "AGENT_OS_LIVE_ANTHROPIC_BASE_URL",
+        "live-anthropic_messages-goal-agent-control-lifecycle-rejection.jsonl",
+    );
+}
+
+#[test]
+#[ignore = "requires AGENT_OS_LIVE_OPENAI_API_KEY and a live openai_responses endpoint"]
+fn live_openai_responses_llm_goal_driven_agent_control_lifecycle_rejection_e2e() {
+    run_live_llm_goal_driven_agent_control_lifecycle_rejection_e2e(
+        "openai_responses",
+        LlmApiStyle::OpenAiResponses,
+        "AGENT_OS_LIVE_OPENAI_API_KEY",
+        "AGENT_OS_LIVE_OPENAI_MODEL",
+        "AGENT_OS_LIVE_OPENAI_BASE_URL",
+        "live-openai_responses-goal-agent-control-lifecycle-rejection.jsonl",
+    );
+}
+
+#[test]
+#[ignore = "requires AGENT_OS_LIVE_OPENAI_API_KEY and a live openai_chat_completions endpoint"]
 fn live_openai_chat_completions_llm_goal_driven_ecosystem_e2e() {
     run_live_llm_goal_driven_ecosystem_e2e(
         "openai_chat_completions",
@@ -3098,6 +3137,27 @@ fn run_live_llm_goal_driven_agent_control_lifecycle_success_e2e(
     }
 }
 
+fn run_live_llm_goal_driven_agent_control_lifecycle_rejection_e2e(
+    provider: &str,
+    endpoint: LlmApiStyle,
+    api_key_env: &str,
+    model_env: &str,
+    base_env: &str,
+    log_file_name: &str,
+) {
+    for action in ["delete_session", "purge_state"] {
+        run_live_llm_goal_driven_single_lifecycle_rejection_agent_control_e2e(
+            provider,
+            endpoint,
+            api_key_env,
+            model_env,
+            base_env,
+            log_file_name,
+            action,
+        );
+    }
+}
+
 fn run_live_llm_goal_driven_single_lifecycle_success_agent_control_e2e(
     provider: &str,
     endpoint: LlmApiStyle,
@@ -3238,6 +3298,160 @@ fn run_live_llm_goal_driven_single_lifecycle_success_agent_control_e2e(
     let _ = std::fs::remove_dir_all(tmp);
 }
 
+fn run_live_llm_goal_driven_single_lifecycle_rejection_agent_control_e2e(
+    provider: &str,
+    endpoint: LlmApiStyle,
+    api_key_env: &str,
+    model_env: &str,
+    base_env: &str,
+    log_file_name: &str,
+    action: &str,
+) {
+    let api_key = live_env_var(api_key_env);
+    let model = live_env_var(model_env);
+    let api_base = live_env_var(base_env);
+    let tmp = fresh_live_tmp(
+        &format!("aos-live-agent-control-lifecycle-rejection-{action}"),
+        provider,
+    );
+    let audit_log_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/agent-os-audit")
+        .join(log_file_name);
+
+    let kernel = live_kernel_with_blob_stores(&tmp);
+    let goal = kernel
+        .register_goal(RegisterGoalInput {
+            namespace: "live-e2e".to_string(),
+            created_by: "agent-os-thread-live-test".to_string(),
+            title: format!("Live agent_control lifecycle rejection {action}"),
+            description:
+                "Exercise rejected privileged agent_control lifecycle handling through a live LLM"
+                    .to_string(),
+            acceptance_criteria: vec![format!("agent_control {action} is rejected")],
+            constraints: Vec::new(),
+            risk_level: 6,
+            deadline: None,
+        })
+        .unwrap();
+    let task = kernel
+        .spawn_task(SpawnTaskInput {
+            goal_id: goal.goal_id.clone(),
+            parent_task_id: None,
+            title: format!("Reject {action}"),
+            description: format!("Attempt agent_control {action} without privileged approval"),
+            depends_on: Vec::new(),
+            required_artifact_types: Vec::new(),
+            required_evidence_types: vec![EvidenceType::SourceRef],
+            priority: 10,
+            risk_level: 6,
+        })
+        .unwrap();
+    let supervisor = kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: task.task_id.clone(),
+            role_profile_id: "role_supervisor".to_string(),
+            owner: "agent-os-thread-live-test".to_string(),
+            goal: format!(
+                "Read rejection_seed.md, then call exactly one agent_control action {action} on the target thread_id named in that file. Use the thread_id field only; do not provide agent_id. The target is intentionally not your direct child, so this privileged action is expected to return Failed or Denied. After the agent_control tool result, do not retry it; call submit_final with summary exactly Agent control lifecycle action denied., evidence_map citing the completed read_file evidence_id, tests_run containing read_file rejection_seed.md, tests_not_run containing agent_control {action} denied by non-child target guard, and known_risks as an empty array. submit_final must be the last tool call."
+            ),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: vec![tmp.to_string_lossy().to_string()],
+        })
+        .unwrap();
+    let target = kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: task.task_id.clone(),
+            role_profile_id: "role_producer".to_string(),
+            owner: "agent-os-thread-live-test".to_string(),
+            goal: "lifecycle rejection non-child target".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: vec![tmp.to_string_lossy().to_string()],
+        })
+        .unwrap();
+    let original_target = target.clone();
+    let approval_id = approve_live_tool_risk(&kernel, &task, &supervisor);
+    let client = OpenAiModelClient::new(api_key, model.clone())
+        .with_api_base(api_base.clone())
+        .with_endpoint(endpoint)
+        .with_max_tokens(1536)
+        .with_audit_log(audit_log_path.clone());
+    append_jsonl(
+        &audit_log_path,
+        &json!({
+            "type": "live_goal_driven_agent_control_lifecycle_rejection_start",
+            "provider": provider,
+            "api_base": api_base,
+            "model": model,
+            "workspace": tmp,
+            "action": action,
+            "target_thread_id": target.thread_id,
+            "task_goal": supervisor.task.goal,
+        }),
+    )
+    .unwrap();
+
+    std::fs::write(
+        tmp.join("rejection_seed.md"),
+        format!(
+            "Agent control lifecycle denial action: {action}\nTarget thread_id: {}\nUse thread_id only. Do not provide agent_id. This target is not a direct child of the supervisor, so the action should be denied without changing the target thread.\n",
+            target.thread_id
+        ),
+    )
+    .unwrap();
+    let mut runtime = ThreadRuntime::new(kernel.clone(), supervisor.thread_id.clone(), client);
+    let mut config = live_runtime_config(&tmp, 5);
+    config.tool_risk_ceiling = 6;
+    let report = runtime
+        .run_to_completion_with_overrides(
+            config,
+            RuntimeRunOverrides {
+                sandbox_profile_id: None,
+                tool_approval_id: Some(approval_id),
+            },
+        )
+        .unwrap();
+    assert!(report.final_submitted);
+    assert_completed_tool(&report, "read_file");
+    assert_agent_control_denial_observed(&report, action);
+    let state = kernel.state_snapshot().unwrap();
+    let target_after = state
+        .threads
+        .get(&original_target.thread_id)
+        .unwrap_or_else(|| panic!("missing target thread {}", original_target.thread_id));
+    assert_eq!(target_after.status, original_target.status);
+    assert_eq!(target_after.session_id, original_target.session_id);
+    assert!(state.tool_invocations.values().any(|invocation| {
+        invocation.tool_name == "agent_control"
+            && invocation.status == ToolCallStatus::Failed
+            && invocation.input.get("action").and_then(Value::as_str) == Some(action)
+    }));
+    assert!(state.agent_control_commands.values().all(|command| {
+        command.target_thread_id.as_deref() != Some(&original_target.thread_id)
+    }));
+    append_jsonl(
+        &audit_log_path,
+        &json!({
+            "type": "live_goal_driven_agent_control_lifecycle_rejection_summary",
+            "provider": provider,
+            "action": action,
+            "report": report,
+            "target_after": target_after,
+            "tool_invocations": state.tool_invocations,
+            "agent_control_commands": state.agent_control_commands,
+        }),
+    )
+    .unwrap();
+    println!(
+        "live_goal_agent_control_lifecycle_rejection_log={}",
+        audit_log_path.display()
+    );
+    let _ = std::fs::remove_dir_all(tmp);
+}
+
 fn assert_all_tool_calls_completed(report: &RuntimeRunReport) {
     let mut completed_tools = report
         .tool_results
@@ -3297,6 +3511,38 @@ fn assert_agent_control_actions(
     assert!(
         missing_actions.is_empty(),
         "live goal-driven {scenario} e2e missed expected agent_control actions: {missing_actions:?}"
+    );
+}
+
+fn assert_agent_control_denial_observed(report: &RuntimeRunReport, expected_action: &str) {
+    let record = report
+        .tool_results
+        .iter()
+        .find(|record| {
+            record.tool_name == "agent_control"
+                && record
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("action"))
+                    .and_then(Value::as_str)
+                    == Some(expected_action)
+        })
+        .unwrap_or_else(|| panic!("missing denied agent_control action {expected_action}"));
+    assert!(
+        matches!(
+            record.status,
+            ToolCallStatus::Failed | ToolCallStatus::Denied
+        ),
+        "expected denied agent_control {expected_action}, got {record:?}"
+    );
+    let output = record
+        .output
+        .as_ref()
+        .map(Value::to_string)
+        .unwrap_or_default();
+    assert!(
+        output.contains("direct child") || output.contains("PermissionDenied"),
+        "expected non-child permission denial for {expected_action}: {record:?}"
     );
 }
 
