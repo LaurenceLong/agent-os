@@ -419,6 +419,167 @@ fn request_permissions_requires_direct_parent_through_broker() {
 }
 
 #[test]
+fn request_permissions_parameter_failures_do_not_create_requests() {
+    let fx = fixture();
+    let supervisor = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_supervisor".to_string(),
+            owner: "integration-test".to_string(),
+            goal: "Review permission requests".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: Vec::new(),
+        })
+        .unwrap();
+    let child = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_producer".to_string(),
+            owner: "integration-test".to_string(),
+            goal: "Request bounded permissions".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: Some(supervisor.thread_id),
+            workspace_roots: Vec::new(),
+        })
+        .unwrap();
+    let capability = fx
+        .kernel
+        .grant_capability(
+            &child.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            1,
+            None,
+        )
+        .unwrap();
+    let base_permissions = || {
+        json!({
+            "max_risk_level": 1,
+            "allowed_syscalls": ["tool.invoke"],
+            "resource_scopes": ["tool:read_file"],
+            "allowed_tool_names": ["read_file"],
+            "allowed_tool_driver_classes": ["filesystem"],
+            "approval_required_above": 1,
+            "requires_evidence_for": ["read_file"]
+        })
+    };
+
+    for (input, expected_error) in [
+        (
+            json!({
+                "reason": "bad scope",
+                "scope": "goal",
+                "permissions": base_permissions()
+            }),
+            "tool.input.scope does not match any enum value",
+        ),
+        (
+            json!({
+                "reason": "missing permissions field",
+                "scope": "turn",
+                "permissions": {
+                    "max_risk_level": 1,
+                    "allowed_syscalls": ["tool.invoke"],
+                    "resource_scopes": ["tool:read_file"],
+                    "allowed_tool_names": ["read_file"],
+                    "allowed_tool_driver_classes": ["filesystem"],
+                    "approval_required_above": 1
+                }
+            }),
+            "tool.input.permissions missing required field requires_evidence_for",
+        ),
+        (
+            json!({
+                "reason": "risk too high",
+                "scope": "turn",
+                "permissions": {
+                    "max_risk_level": 7,
+                    "allowed_syscalls": ["tool.invoke"],
+                    "resource_scopes": ["tool:read_file"],
+                    "allowed_tool_names": ["read_file"],
+                    "allowed_tool_driver_classes": ["filesystem"],
+                    "approval_required_above": 1,
+                    "requires_evidence_for": ["read_file"]
+                }
+            }),
+            "tool.input.permissions.max_risk_level must be <= 6",
+        ),
+        (
+            json!({
+                "reason": "invalid driver class",
+                "scope": "session",
+                "permissions": {
+                    "max_risk_level": 1,
+                    "allowed_syscalls": ["tool.invoke"],
+                    "resource_scopes": ["tool:read_file"],
+                    "allowed_tool_names": ["read_file"],
+                    "allowed_tool_driver_classes": ["database"],
+                    "approval_required_above": 1,
+                    "requires_evidence_for": ["read_file"]
+                }
+            }),
+            "tool.input.permissions.allowed_tool_driver_classes[0] does not match any enum value",
+        ),
+        (
+            json!({
+                "reason": "invalid syscall entry",
+                "scope": "turn",
+                "permissions": {
+                    "max_risk_level": 1,
+                    "allowed_syscalls": ["tool.invoke", 7],
+                    "resource_scopes": ["tool:read_file"],
+                    "allowed_tool_names": ["read_file"],
+                    "allowed_tool_driver_classes": ["filesystem"],
+                    "approval_required_above": 1,
+                    "requires_evidence_for": ["read_file"]
+                }
+            }),
+            "tool.input.permissions.allowed_syscalls[1] expected string",
+        ),
+    ] {
+        let invocation = fx
+            .kernel
+            .invoke_tool(
+                &child.agent_id,
+                &fx.task.task_id,
+                &child.session_id,
+                capability.capability_id.clone(),
+                1,
+                ToolInvokeInput {
+                    tool_name: "request_permissions".to_string(),
+                    input,
+                    evidence_claim: Some(
+                        "request_permissions parameter failure was model-visible".to_string(),
+                    ),
+                },
+            )
+            .unwrap();
+        assert_eq!(invocation.status, ToolCallStatus::Failed);
+        assert!(invocation.evidence_ids.is_empty());
+        let output = invocation.output.as_ref().unwrap();
+        assert_eq!(output["status"], "failed");
+        assert_eq!(output["stage"], "input_schema");
+        let error = output["error"].as_str().unwrap_or_default();
+        assert!(
+            error.contains(expected_error),
+            "expected {expected_error:?}, got {error:?}"
+        );
+        assert!(fx
+            .kernel
+            .state_snapshot()
+            .unwrap()
+            .permission_requests
+            .is_empty());
+    }
+}
+
+#[test]
 fn agent_control_permission_decision_failures_are_model_visible_through_broker() {
     let fx = fixture();
     let supervisor = fx
