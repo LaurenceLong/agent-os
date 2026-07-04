@@ -17,7 +17,7 @@ fn descriptor(now: &str) -> ToolDescriptor {
         schema::DescriptorSpec {
             tool_id: "tool_apply_patch",
             name: "apply_patch",
-            description: "Apply exactly one workspace file patch between *** Begin Patch and *** End Patch. Use *** Add File: path, *** Update File: path, or *** Delete File: path. Update hunks accept plain context lines or canonical leading-space context lines with -old and +new changes.",
+            description: "Apply exactly one workspace file patch between *** Begin Patch and *** End Patch. Use *** Add File: path, *** Update File: path, or *** Delete File: path. Update hunks accept plain context lines or canonical leading-space context lines with -old and +new changes. Do not add a blank context line before *** End Patch unless that blank line exists in the target file.",
             driver_class: ToolDriverClass::Filesystem,
             risk_level: 4,
             input_schema: schema::object(
@@ -32,7 +32,7 @@ fn descriptor(now: &str) -> ToolDescriptor {
             json!({
                 "patch": {
                     "type": "string",
-                    "description": "Patch document with *** Begin Patch and *** End Patch. Add files with: *** Add File: path then +content lines. Update files with: *** Update File: path then @@ hunks; unchanged context may be plain lines or lines prefixed with one space, changed lines use -old and +new. Delete files with: *** Delete File: path."
+                    "description": "Patch document with *** Begin Patch and *** End Patch. Add files with: *** Add File: path then +content lines. To create a file containing exactly one line ending in one newline, provide exactly one +content line and no + blank line. Update files with: *** Update File: path then @@ hunks; unchanged context may be plain lines or lines prefixed with one space, changed lines use -old and +new. Delete files with: *** Delete File: path. A blank line inside an update hunk is real context and must exist in the file."
                 }
             }),
         ),
@@ -158,5 +158,34 @@ mod tests {
         assert!(patches
             .iter()
             .any(|patch| patch.contains("\n-    1\n+    2\n")));
+    }
+
+    #[test]
+    fn schema_warns_that_blank_update_context_is_real() {
+        let descriptor = descriptor("now");
+        assert!(descriptor
+            .description
+            .contains("blank context line before *** End Patch"));
+        assert!(descriptor
+            .model_input_schema
+            .as_ref()
+            .unwrap()
+            .pointer("/properties/patch/description")
+            .and_then(Value::as_str)
+            .unwrap()
+            .contains("blank line inside an update hunk is real context"));
+    }
+
+    #[test]
+    fn schema_describes_single_line_add_file_shape() {
+        let descriptor = descriptor("now");
+        assert!(descriptor
+            .model_input_schema
+            .as_ref()
+            .unwrap()
+            .pointer("/properties/patch/description")
+            .and_then(Value::as_str)
+            .unwrap()
+            .contains("exactly one +content line and no + blank line"));
     }
 }

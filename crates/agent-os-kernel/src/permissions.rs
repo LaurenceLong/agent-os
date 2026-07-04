@@ -154,16 +154,19 @@ impl Kernel {
             .ok_or_else(|| {
                 AgentOsError::NotFound(format!("permission request {permission_request_id}"))
             })?;
-        if request.status != PermissionRequestStatus::Pending {
-            return Err(AgentOsError::InvalidTransition(format!(
-                "permission request {:?} -> response",
-                request.status
-            )));
-        }
         if request.approver_thread_id.as_deref() != Some(&approver.thread_id) {
             return Err(AgentOsError::PermissionDenied(
                 "permission request can only be answered by the direct parent".to_string(),
             ));
+        }
+        if request.status != PermissionRequestStatus::Pending {
+            if request.status == PermissionRequestStatus::Denied && granted_permissions.is_none() {
+                return Ok((request, None));
+            }
+            return Err(AgentOsError::InvalidTransition(format!(
+                "permission request {:?} -> response",
+                request.status
+            )));
         }
         let requester = state
             .threads
@@ -448,4 +451,113 @@ fn scope_pattern_allows(allowed: &str, requested: &str) -> bool {
                 .strip_prefix(prefix)
                 .is_some_and(|rest| rest.starts_with(':'))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn permission_set() -> PermissionSet {
+        PermissionSet {
+            max_risk_level: 2,
+            allowed_syscalls: vec!["tool.invoke".to_string()],
+            resource_scopes: vec!["tool:read_file".to_string()],
+            allowed_tool_names: vec!["read_file".to_string()],
+            allowed_tool_driver_classes: vec![ToolDriverClass::Filesystem],
+            approval_required_above: 2,
+            requires_evidence_for: vec!["read_file".to_string()],
+        }
+    }
+
+    fn parent_child_fixture() -> (Kernel, AgentControlBlock, AgentControlBlock) {
+        let kernel = Kernel::new();
+        let goal = kernel
+            .register_goal(RegisterGoalInput {
+                namespace: "test".to_string(),
+                created_by: "user".to_string(),
+                title: "Permission".to_string(),
+                description: "Permission fixture".to_string(),
+                acceptance_criteria: vec!["permission response recorded".to_string()],
+                constraints: Vec::new(),
+                risk_level: 3,
+                deadline: None,
+            })
+            .unwrap();
+        let task = kernel
+            .spawn_task(SpawnTaskInput {
+                goal_id: goal.goal_id.clone(),
+                parent_task_id: None,
+                title: "Coordinate".to_string(),
+                description: "Coordinate permissions".to_string(),
+                depends_on: Vec::new(),
+                required_artifact_types: Vec::new(),
+                required_evidence_types: Vec::new(),
+                priority: 10,
+                risk_level: 3,
+            })
+            .unwrap();
+        let parent = kernel
+            .spawn_agent(SpawnAgentInput {
+                task_id: task.task_id.clone(),
+                role_profile_id: "role_supervisor".to_string(),
+                owner: "user".to_string(),
+                goal: "supervise".to_string(),
+                success_criteria: Vec::new(),
+                failure_criteria: Vec::new(),
+                parent_thread_id: None,
+                workspace_roots: Vec::new(),
+            })
+            .unwrap();
+        let child = kernel
+            .spawn_agent(SpawnAgentInput {
+                task_id: task.task_id,
+                role_profile_id: "role_producer".to_string(),
+                owner: "user".to_string(),
+                goal: "produce".to_string(),
+                success_criteria: Vec::new(),
+                failure_criteria: Vec::new(),
+                parent_thread_id: Some(parent.thread_id.clone()),
+                workspace_roots: Vec::new(),
+            })
+            .unwrap();
+        (kernel, parent, child)
+    }
+
+    #[test]
+    fn duplicate_deny_permission_response_is_idempotent() {
+        let (kernel, parent, child) = parent_child_fixture();
+        let request = kernel
+            .request_permissions_with_cause(
+                &child.agent_id,
+                "Need bounded read permission".to_string(),
+                permission_set(),
+                PermissionGrantScope::Session,
+                None,
+            )
+            .unwrap();
+
+        let (first, first_grant) = kernel
+            .respond_permission_request_with_cause(
+                &parent.agent_id,
+                &request.permission_request_id,
+                None,
+                Some("Denied for test".to_string()),
+                None,
+            )
+            .unwrap();
+        let (second, second_grant) = kernel
+            .respond_permission_request_with_cause(
+                &parent.agent_id,
+                &request.permission_request_id,
+                None,
+                Some("Denied for test".to_string()),
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(first.status, PermissionRequestStatus::Denied);
+        assert!(first_grant.is_none());
+        assert_eq!(second.status, PermissionRequestStatus::Denied);
+        assert!(second_grant.is_none());
+    }
 }

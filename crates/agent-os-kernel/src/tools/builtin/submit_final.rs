@@ -85,8 +85,16 @@ fn input_schema() -> Value {
             },
             "unverified_claims": {"type": "array", "items": {"type": "string"}},
             "known_risks": {"type": "array", "items": {"type": "string"}},
-            "tests_run": {"type": "array", "items": {"type": "string"}},
-            "tests_not_run": {"type": "array", "items": {"type": "string"}},
+            "tests_run": {
+                "type": "array",
+                "description": "Array of completed verification commands or checks. Always provide a JSON array of strings, never a single string.",
+                "items": {"type": "string"}
+            },
+            "tests_not_run": {
+                "type": "array",
+                "description": "Array of verification commands or checks that were skipped, with reasons in the string values.",
+                "items": {"type": "string"}
+            },
             "approvals": {"type": "array", "items": {"type": "string"}}
         }),
     )
@@ -114,5 +122,20 @@ mod tests {
             .clone();
         assert!(required.iter().any(|value| value == "summary"));
         assert!(required.iter().any(|value| value == "evidence_map"));
+    }
+
+    #[test]
+    fn schema_describes_tests_run_as_array_not_string() {
+        let descriptor = descriptor("now");
+        let description = descriptor
+            .model_input_schema
+            .as_ref()
+            .unwrap()
+            .pointer("/properties/tests_run/description")
+            .and_then(Value::as_str)
+            .unwrap();
+
+        assert!(description.contains("JSON array of strings"));
+        assert!(description.contains("never a single string"));
     }
 }

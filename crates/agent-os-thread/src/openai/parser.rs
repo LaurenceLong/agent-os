@@ -272,6 +272,11 @@ fn inject_runtime_fields(
     for (field, source) in &descriptor.runtime_input_policy.injected_fields {
         if source.as_str() == "workspace_root" {
             let workspace_root = request.workspace_root.to_string_lossy().to_string();
+            if field != source {
+                if let Value::Object(map) = arguments {
+                    map.remove(source);
+                }
+            }
             inject_field(arguments, field, &workspace_root);
         }
     }

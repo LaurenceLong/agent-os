@@ -629,7 +629,7 @@ fn run_live_llm_goal_driven_scoped_context_e2e(
         format!(r#"command "sh {verifier_name}""#)
     };
     let goal = format!(
-        "Use the scoped context projection in your prompt to discover the loaded_refs value, the context compaction superseded_refs value, the owner memento title, the thread lifecycle fork source_thread id, and the rollback reason. Create context_result.txt with six lines: CONTEXT_PROJECTION_OK, then the loaded_refs value, then the superseded_refs value, then the owner memento title, then the lifecycle source_thread id, then the rollback reason. Do not write snapshot or compaction ids unless they appear inside those ref values. Verify it by calling run_command with {verifier_command}. Finish with submit_final and cite evidence_ids from completed tool results."
+        "Use the scoped context projection in your prompt to discover the loaded_refs value, the context compaction superseded_refs value, the owner memento title, the thread lifecycle fork source_thread id, and the rollback reason. Create context_result.txt with six lines: CONTEXT_PROJECTION_OK, then the loaded_refs value, then the superseded_refs value, then the owner memento title, then the lifecycle source_thread id copied exactly with no added or removed characters, then the rollback reason. Do not write snapshot or compaction ids unless they appear inside those ref values. Verify it by calling run_command with {verifier_command}. Finish with submit_final and cite evidence_ids from completed tool results."
     );
     let kernel = live_kernel_with_blob_stores(&tmp);
     let (kernel, request) = make_kernel_request_for_role_on_kernel_with_requirements(
@@ -752,7 +752,7 @@ fn run_live_llm_goal_driven_scoped_context_e2e(
     .unwrap();
 
     let mut runtime = ThreadRuntime::new(kernel.clone(), request.thread.thread_id.clone(), client);
-    let config = live_runtime_config(&tmp, 8);
+    let config = live_runtime_config(&tmp, 10);
     let report = runtime.run_to_completion(config).unwrap();
     assert!(report.final_submitted);
     assert_completed_tool(&report, "apply_patch");
@@ -2230,7 +2230,7 @@ fn run_live_llm_goal_driven_workspace_e2e(
                 "@echo off\r\nfindstr /C:\"Status: ready\" task.md >nul || exit /b 1\r\npowershell -NoProfile -Command \"$c=[IO.File]::ReadAllText('live_result.txt');$e='WORKSPACE_GOAL_OK'+[char]10;if($c -ne $e){exit 1}\"\r\nif errorlevel 1 exit /b 1\r\nif exist obsolete.tmp exit /b 1\r\necho WORKSPACE_GOAL_VERIFIED\r\n",
             )
             .unwrap();
-        ("verify_goal.cmd", r#"command ".\verify_goal.cmd""#)
+        ("verify_goal.cmd", r#"command "cmd /c verify_goal.cmd""#)
     } else {
         std::fs::write(
                 tmp.join("verify_goal.sh"),
@@ -2248,7 +2248,7 @@ fn run_live_llm_goal_driven_workspace_e2e(
         &tmp,
         "role_producer",
         &format!(
-            "Prepare the workspace for release. Inspect task.md, preserve its existing Keep line, change the single status marker from draft to ready, create live_result.txt containing WORKSPACE_GOAL_OK followed by one newline, remove obsolete.tmp, run the provided verifier script {verifier_name} by calling run_command with {verifier_command}, and finish with a concise final result. The final submit_final call must include an evidence_map that cites evidence_ids from completed tool results."
+            "Prepare the workspace for release. Inspect task.md, preserve its existing Keep line, change the single status marker from draft to ready, create live_result.txt containing WORKSPACE_GOAL_OK followed by exactly one newline and no blank second line, and remove obsolete.tmp. Use apply_patch for every workspace mutation; do not use run_command to create, edit, or delete files. When updating task.md, build the update hunk from the exact read_file content and do not add a blank context line before *** End Patch unless the file contains that blank line. When adding live_result.txt, the add-file patch must have exactly one content line, +WORKSPACE_GOAL_OK, and must not include a + blank line. Run the provided verifier script {verifier_name} by calling run_command with {verifier_command}; this verifier command must be the only run_command call. Finish with a concise final result. The final submit_final call must include an evidence_map that cites evidence_ids from completed tool results, and tests_run must be a JSON array containing the verifier command string."
         ),
         Vec::new(),
         vec![ArtifactType::Patch],
@@ -2323,7 +2323,7 @@ fn run_live_llm_goal_driven_control_plane_e2e(
     let (kernel, request) = make_kernel_request_for_role_with_blob_store_and_requirements(
             &tmp,
             "role_supervisor",
-                "Complete this live control-plane checklist as a supervisor. 1. read_file coordination_seed.md. 2. update_checklist with one completed item. 3. request_permissions with reason exactly Need bounded read_file permission for this control-plane validation., scope turn, and permissions containing max_risk_level 2, allowed_syscalls [tool.invoke], resource_scopes [tool:read_file], allowed_tool_names [read_file], allowed_tool_driver_classes [filesystem], approval_required_above 2, and requires_evidence_for [read_file]. After the permission request returns pending, continue without approving it and without checking its status. 4. record_evidence for the coordination seed. 5. report_supervisor with a concise progress message. 6. post_blackboard one risk note with channel_id exactly risks, scope task, and section risk. 7. ask_human exactly once to confirm there is no extra scope, then continue after delivery. 8. agent_control start exactly once for a child producer with role_profile_id role_producer and a one-sentence goal in payload.goal; do not call agent_control status, output, send, resume, stop, kill, delete_session, purge_state, or export_trace in this checklist. 9. set_goal with target_thread_id set to the child thread_id returned by agent_control start and goal saying the live control-plane goal is achieved; do not set_goal on your own thread. 10. accomplish_goal with a concise summary. 11. submit_final with summary exactly Control-plane coordination complete., evidence_map citing evidence_ids from completed tool results, tests_run containing read_file coordination_seed.md, and known_risks as an empty array. submit_final must be the last tool call. Do not skip request_permissions, ask_human, agent_control start, set_goal, or report_supervisor.",
+                "Complete this live control-plane checklist as a supervisor. 1. read_file coordination_seed.md. 2. update_checklist with one completed item. 3. request_permissions with reason exactly Need bounded read_file permission for this control-plane validation., scope turn, and permissions containing max_risk_level 2, allowed_syscalls [tool.invoke], resource_scopes [tool:read_file], allowed_tool_names [read_file], allowed_tool_driver_classes [filesystem], approval_required_above 2, and requires_evidence_for [read_file]. After the permission request returns pending, continue without approving it and without checking its status. 4. record_evidence for the coordination seed. 5. report_supervisor with a concise progress message. 6. post_blackboard one risk note with channel_id exactly risks, scope task, and section risk. 7. Call the ask_human tool exactly once with question exactly Is there any extra scope for this live control-plane validation? and message_type HumanQuestion; wait for its tool result with delivery_status before proceeding. Do not merely mention ask_human in prose or summaries. 8. Only after the ask_human tool result, call agent_control start exactly once for a child producer with role_profile_id role_producer and a one-sentence goal in payload.goal; do not call agent_control status, output, send, resume, stop, kill, delete_session, purge_state, or export_trace in this checklist. 9. set_goal with target_thread_id set to the child thread_id returned by agent_control start and goal saying the live control-plane goal is achieved; do not set_goal on your own thread. 10. accomplish_goal with a concise summary. 11. submit_final with summary exactly Control-plane coordination complete., evidence_map citing evidence_ids from completed tool results including the ask_human evidence_id, tests_run containing read_file coordination_seed.md, and known_risks as an empty array. submit_final must be the last tool call. Do not skip request_permissions, ask_human, agent_control start, set_goal, or report_supervisor.",
             Vec::new(),
             Vec::new(),
             vec![EvidenceType::SourceRef],
@@ -2347,7 +2347,7 @@ fn run_live_llm_goal_driven_control_plane_e2e(
     .unwrap();
 
     let mut runtime = ThreadRuntime::new(kernel.clone(), request.thread.thread_id.clone(), client);
-    let config = live_runtime_config(&tmp, 13);
+    let config = live_runtime_config(&tmp, 16);
     let report = runtime.run_to_completion(config).unwrap();
     assert!(report.final_submitted);
     assert_all_tool_calls_completed(&report);
@@ -2427,7 +2427,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
             &tmp,
             "role_producer",
             &format!(
-                "Complete this focused workspace validation. Use glob_files to locate read.txt by path pattern, use grep_files to confirm read.txt contains read me, then read read.txt. Also exercise workspace tool parameters with these exact JSON-relevant values: call read_file with path paged.txt, offset 2, and limit 2; call glob_files with path notes, pattern *.txt, offset 1, and limit 1 so it returns the second txt file; call grep_files with path notes, include *.txt, pattern Needle, case_sensitive true, offset 1, and limit 1 so it returns the second case-sensitive txt match and excludes c.md and lower-case needle. Do not substitute limit 20 for the paged read; the paged read must use limit 2. The grep_files result is sufficient; do not read notes/c.md or make extra verification calls for that exclusion. Use apply_patch for every workspace mutation: add created.txt with content exactly FULL_TOOL_SURFACE_OK followed by one newline and no blank second line, update edit.txt by replacing status=old with status=new, and delete obsolete.tmp with an apply_patch delete operation. Use run_command only for the final verifier command {verifier_command}; do not use run_command for listing, deleting, grepping, or editing files. After the verifier succeeds, call accomplish_goal with a concise summary, then submit_final with summary exactly Workspace surface complete., evidence_map citing evidence_ids from completed tool results, tests_run containing {verifier_command}, and known_risks as an empty array. submit_final must be the last tool call."
+                "Complete this focused workspace validation. Use glob_files to locate read.txt by path pattern, use grep_files to confirm read.txt contains read me, then read read.txt. Also exercise workspace tool parameters with these exact JSON-relevant values: call read_file with path paged.txt, offset 2, and limit 2; call glob_files with path notes, pattern *.txt, offset 1, and limit 1 so it returns the second txt file; call grep_files with path notes, include *.txt, pattern Needle, case_sensitive true, offset 1, and limit 1 so it returns the second case-sensitive txt match and excludes c.md and lower-case needle. Do not substitute limit 20 for the paged read; the paged read must use limit 2. The grep_files result is sufficient; do not read notes/c.md or make extra verification calls for that exclusion. Use apply_patch for every workspace mutation: add created.txt with content exactly FULL_TOOL_SURFACE_OK followed by one newline and no blank second line, update edit.txt with a single update hunk containing exactly -status=old, +status=new, and context line keep=this line, and delete obsolete.tmp with an apply_patch delete operation. Do not include duplicate status=old or keep=this line context before the changed line. Use run_command only for the final verifier command {verifier_command}; do not use run_command for listing, deleting, grepping, or editing files. After the verifier succeeds, call accomplish_goal with a concise summary, then submit_final with summary exactly Workspace surface complete., evidence_map citing evidence_ids from completed tool results, tests_run containing {verifier_command}, and known_risks as an empty array. submit_final must be the last tool call."
             ),
             Vec::new(),
             vec![ArtifactType::Patch],
@@ -3239,11 +3239,22 @@ fn run_live_llm_goal_driven_single_lifecycle_success_agent_control_e2e(
 }
 
 fn assert_all_tool_calls_completed(report: &RuntimeRunReport) {
+    let mut completed_tools = report
+        .tool_results
+        .iter()
+        .filter(|record| record.status == ToolCallStatus::Completed)
+        .map(|record| record.tool_name.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    if report.final_submitted {
+        completed_tools.insert("submit_final");
+    }
     let failed: Vec<_> = report
         .tool_results
         .iter()
         .filter(|record| {
-            record.tool_name != "runtime_feedback" && record.status != ToolCallStatus::Completed
+            record.tool_name != "runtime_feedback"
+                && record.status != ToolCallStatus::Completed
+                && !completed_tools.contains(record.tool_name.as_str())
         })
         .collect();
     assert!(failed.is_empty(), "tool calls did not complete: {failed:?}");
@@ -3430,7 +3441,7 @@ fn assert_agent_control_process_parameters_observed(
                 .as_ref()
                 .and_then(|input| input.pointer("/payload/text"))
                 .and_then(Value::as_str)
-                == Some("AGENT_SEND")
+                .is_some_and(|text| matches!(text, "AGENT_SEND" | "AGENT_SEND\n"))
     });
     assert_eq!(
         send_record

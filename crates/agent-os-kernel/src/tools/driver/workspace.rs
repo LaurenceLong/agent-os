@@ -832,6 +832,8 @@ impl WorkspacePatch {
 struct PatchHunk {
     old_lines: Vec<String>,
     new_lines: Vec<String>,
+    marker_padding_old_lines: Vec<String>,
+    marker_padding_new_lines: Vec<String>,
     plain_old_lines: Vec<String>,
     plain_new_lines: Vec<String>,
     prefer_plain_context: bool,
@@ -905,12 +907,7 @@ fn parse_update_file(
     index: &mut usize,
 ) -> AgentOsResult<WorkspacePatch> {
     let mut hunks = Vec::new();
-    let mut old_lines = Vec::new();
-    let mut new_lines = Vec::new();
-    let mut plain_old_lines = Vec::new();
-    let mut plain_new_lines = Vec::new();
-    let mut changed = false;
-    let mut prefer_plain_context = false;
+    let mut draft = PatchHunkDraft::default();
     while let Some(line) = lines.get(*index) {
         if *line == "*** End Patch" || *line == "*** End of File" {
             break;
@@ -921,25 +918,12 @@ fn parse_update_file(
             ));
         }
         if line.starts_with("@@") {
-            push_hunk(
-                &mut hunks,
-                &mut old_lines,
-                &mut new_lines,
-                &mut plain_old_lines,
-                &mut plain_new_lines,
-                changed,
-                prefer_plain_context,
-            )?;
-            changed = false;
-            prefer_plain_context = false;
+            draft.push_to(&mut hunks)?;
             *index += 1;
             continue;
         }
         if line.is_empty() {
-            old_lines.push(String::new());
-            new_lines.push(String::new());
-            plain_old_lines.push(String::new());
-            plain_new_lines.push(String::new());
+            draft.push_context(String::new(), String::new());
             *index += 1;
             continue;
         }
@@ -948,40 +932,21 @@ fn parse_update_file(
         };
         match prefix {
             " " => {
-                old_lines.push(text.to_string());
-                new_lines.push(text.to_string());
-                plain_old_lines.push((*line).to_string());
-                plain_new_lines.push((*line).to_string());
+                draft.push_context(text.to_string(), (*line).to_string());
             }
             "-" => {
-                old_lines.push(text.to_string());
-                plain_old_lines.push(text.to_string());
-                changed = true;
+                draft.push_removed(text);
             }
             "+" => {
-                new_lines.push(text.to_string());
-                plain_new_lines.push(text.to_string());
-                changed = true;
+                draft.push_added(text);
             }
             _ => {
-                old_lines.push((*line).to_string());
-                new_lines.push((*line).to_string());
-                plain_old_lines.push((*line).to_string());
-                plain_new_lines.push((*line).to_string());
-                prefer_plain_context = true;
+                draft.push_plain_context((*line).to_string());
             }
         }
         *index += 1;
     }
-    push_hunk(
-        &mut hunks,
-        &mut old_lines,
-        &mut new_lines,
-        &mut plain_old_lines,
-        &mut plain_new_lines,
-        changed,
-        prefer_plain_context,
-    )?;
+    draft.push_to(&mut hunks)?;
     if hunks.is_empty() {
         return Err(AgentOsError::Validation(
             "apply_patch update operation must contain a changed hunk".to_string(),
@@ -993,31 +958,78 @@ fn parse_update_file(
     })
 }
 
-fn push_hunk(
-    hunks: &mut Vec<PatchHunk>,
-    old_lines: &mut Vec<String>,
-    new_lines: &mut Vec<String>,
-    plain_old_lines: &mut Vec<String>,
-    plain_new_lines: &mut Vec<String>,
+#[derive(Default)]
+struct PatchHunkDraft {
+    old_lines: Vec<String>,
+    new_lines: Vec<String>,
+    marker_padding_old_lines: Vec<String>,
+    marker_padding_new_lines: Vec<String>,
+    plain_old_lines: Vec<String>,
+    plain_new_lines: Vec<String>,
     changed: bool,
     prefer_plain_context: bool,
-) -> AgentOsResult<()> {
-    if old_lines.is_empty() && new_lines.is_empty() {
-        return Ok(());
+}
+
+impl PatchHunkDraft {
+    fn push_context(&mut self, canonical: String, plain: String) {
+        self.old_lines.push(canonical.clone());
+        self.new_lines.push(canonical.clone());
+        self.marker_padding_old_lines.push(canonical.clone());
+        self.marker_padding_new_lines.push(canonical);
+        self.plain_old_lines.push(plain.clone());
+        self.plain_new_lines.push(plain);
     }
-    if !changed {
-        return Err(AgentOsError::Validation(
-            "apply_patch update hunk must change at least one line".to_string(),
-        ));
+
+    fn push_plain_context(&mut self, line: String) {
+        self.push_context(line, String::new());
+        let plain = self.old_lines.last().cloned().unwrap_or_default();
+        *self.plain_old_lines.last_mut().unwrap() = plain.clone();
+        *self.plain_new_lines.last_mut().unwrap() = plain;
+        self.prefer_plain_context = true;
     }
-    hunks.push(PatchHunk {
-        old_lines: std::mem::take(old_lines),
-        new_lines: std::mem::take(new_lines),
-        plain_old_lines: std::mem::take(plain_old_lines),
-        plain_new_lines: std::mem::take(plain_new_lines),
-        prefer_plain_context,
-    });
-    Ok(())
+
+    fn push_removed(&mut self, text: &str) {
+        self.old_lines.push(text.to_string());
+        self.marker_padding_old_lines
+            .push(strip_diff_marker_padding(text).to_string());
+        self.plain_old_lines.push(text.to_string());
+        self.changed = true;
+    }
+
+    fn push_added(&mut self, text: &str) {
+        self.new_lines.push(text.to_string());
+        self.marker_padding_new_lines
+            .push(strip_diff_marker_padding(text).to_string());
+        self.plain_new_lines.push(text.to_string());
+        self.changed = true;
+    }
+
+    fn push_to(&mut self, hunks: &mut Vec<PatchHunk>) -> AgentOsResult<()> {
+        if self.old_lines.is_empty() && self.new_lines.is_empty() {
+            return Ok(());
+        }
+        if !self.changed {
+            return Err(AgentOsError::Validation(
+                "apply_patch update hunk must change at least one line".to_string(),
+            ));
+        }
+        hunks.push(PatchHunk {
+            old_lines: std::mem::take(&mut self.old_lines),
+            new_lines: std::mem::take(&mut self.new_lines),
+            marker_padding_old_lines: std::mem::take(&mut self.marker_padding_old_lines),
+            marker_padding_new_lines: std::mem::take(&mut self.marker_padding_new_lines),
+            plain_old_lines: std::mem::take(&mut self.plain_old_lines),
+            plain_new_lines: std::mem::take(&mut self.plain_new_lines),
+            prefer_plain_context: self.prefer_plain_context,
+        });
+        self.changed = false;
+        self.prefer_plain_context = false;
+        Ok(())
+    }
+}
+
+fn strip_diff_marker_padding(text: &str) -> &str {
+    text.strip_prefix(' ').unwrap_or(text)
 }
 
 fn require_patch_end(lines: &[&str], index: usize) -> AgentOsResult<()> {
@@ -1072,27 +1084,57 @@ fn find_hunk_replacement(
     lines: &[String],
     hunk: &PatchHunk,
 ) -> Option<(usize, usize, Vec<String>)> {
-    let canonical = find_hunk(lines, &hunk.old_lines)
-        .map(|position| (position, hunk.old_lines.len(), hunk.new_lines.clone()));
+    let canonical = find_hunk_replacement_candidate(lines, &hunk.old_lines, &hunk.new_lines);
     let plain_differs =
         hunk.plain_old_lines != hunk.old_lines || hunk.plain_new_lines != hunk.new_lines;
     let plain = if plain_differs {
-        find_hunk(lines, &hunk.plain_old_lines).map(|position| {
-            (
-                position,
-                hunk.plain_old_lines.len(),
-                hunk.plain_new_lines.clone(),
-            )
-        })
+        find_hunk_replacement_candidate(lines, &hunk.plain_old_lines, &hunk.plain_new_lines)
+    } else {
+        None
+    };
+    let marker_padding_differs = hunk.marker_padding_old_lines != hunk.old_lines
+        || hunk.marker_padding_new_lines != hunk.new_lines;
+    let marker_padding = if marker_padding_differs {
+        find_hunk_replacement_candidate(
+            lines,
+            &hunk.marker_padding_old_lines,
+            &hunk.marker_padding_new_lines,
+        )
     } else {
         None
     };
 
     if hunk.prefer_plain_context {
-        plain.or(canonical)
+        plain.or(canonical).or(marker_padding)
     } else {
-        canonical.or(plain)
+        canonical.or(plain).or(marker_padding)
     }
+}
+
+fn find_hunk_replacement_candidate(
+    lines: &[String],
+    old_lines: &[String],
+    new_lines: &[String],
+) -> Option<(usize, usize, Vec<String>)> {
+    find_hunk(lines, old_lines)
+        .map(|position| (position, old_lines.len(), new_lines.to_vec()))
+        .or_else(|| find_hunk_with_trimmed_trailing_blank_context(lines, old_lines, new_lines))
+}
+
+fn find_hunk_with_trimmed_trailing_blank_context(
+    lines: &[String],
+    old_lines: &[String],
+    new_lines: &[String],
+) -> Option<(usize, usize, Vec<String>)> {
+    if old_lines.last().is_some_and(|line| line.is_empty())
+        && new_lines.last().is_some_and(|line| line.is_empty())
+    {
+        let old_trimmed = &old_lines[..old_lines.len() - 1];
+        let new_trimmed = &new_lines[..new_lines.len() - 1];
+        return find_hunk(lines, old_trimmed)
+            .map(|position| (position, old_trimmed.len(), new_trimmed.to_vec()));
+    }
+    None
 }
 
 fn find_hunk(lines: &[String], old_lines: &[String]) -> Option<usize> {
@@ -1121,8 +1163,17 @@ fn resolve_workspace_path(
     workspace_root: &Path,
     relative_path: &Path,
 ) -> AgentOsResult<(PathBuf, PathBuf)> {
-    ensure_safe_relative_path(relative_path)?;
     let root = canonical_workspace_root(workspace_root)?;
+    if relative_path.is_absolute() {
+        let target = canonical_workspace_root(relative_path)?;
+        if !target.starts_with(&root) {
+            return Err(AgentOsError::Validation(
+                "workspace path must stay inside workspace".to_string(),
+            ));
+        }
+        return Ok((root, target));
+    }
+    ensure_safe_relative_path(relative_path)?;
     Ok((root.clone(), root.join(relative_path)))
 }
 
@@ -1252,6 +1303,37 @@ mod tests {
     }
 
     #[test]
+    fn update_hunk_ignores_trailing_blank_context_before_end_marker() {
+        let patch = "*** Begin Patch\n*** Update File: task.md\n@@\nTitle: live workspace goal\n-Status: draft\n+Status: ready\nKeep: this line must remain\n\n*** End Patch\n";
+        let operation = parse_apply_patch(patch).unwrap();
+        let WorkspacePatch::Update { hunks, .. } = operation else {
+            panic!("expected update operation");
+        };
+
+        let before = "Title: live workspace goal\nStatus: draft\nKeep: this line must remain\n";
+        let after = apply_update_hunks(before, &hunks).unwrap();
+
+        assert_eq!(
+            after,
+            "Title: live workspace goal\nStatus: ready\nKeep: this line must remain\n"
+        );
+    }
+
+    #[test]
+    fn update_hunk_accepts_marker_padding_after_change_prefix() {
+        let patch = "*** Begin Patch\n*** Update File: edit.txt\n@@\n- status=old\n+ status=new\n keep=this line\n*** End Patch\n";
+        let operation = parse_apply_patch(patch).unwrap();
+        let WorkspacePatch::Update { hunks, .. } = operation else {
+            panic!("expected update operation");
+        };
+
+        let before = "status=old\nkeep=this line\n";
+        let after = apply_update_hunks(before, &hunks).unwrap();
+
+        assert_eq!(after, "status=new\nkeep=this line\n");
+    }
+
+    #[test]
     fn update_hunk_still_rejects_plain_context_without_changes() {
         let patch = "*** Begin Patch\n*** Update File: src/lib.rs\n@@\nfn demo() {\n    before();\n}\n*** End Patch\n";
         let error = match parse_apply_patch(patch) {
@@ -1263,6 +1345,26 @@ mod tests {
             error.contains("apply_patch update hunk must change at least one line"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn resolve_workspace_path_accepts_absolute_path_inside_workspace_only() {
+        let root = std::env::temp_dir().join(format!("aos-workspace-path-{}", new_id("t_")));
+        std::fs::create_dir_all(root.join("inside")).unwrap();
+
+        let (_, inside) = resolve_workspace_path(&root, &root).unwrap();
+        assert_eq!(inside, root.canonicalize().unwrap());
+
+        let outside = std::env::temp_dir();
+        if outside.canonicalize().unwrap() != root.canonicalize().unwrap() {
+            let error = resolve_workspace_path(&root, &outside).unwrap_err();
+            assert!(
+                error.to_string().contains("stay inside workspace"),
+                "{error}"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

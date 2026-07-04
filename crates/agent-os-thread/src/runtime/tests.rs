@@ -1522,7 +1522,7 @@ fn runtime_projects_finalization_feedback_after_patch_and_command_and_filters_to
 }
 
 #[test]
-fn finalization_feedback_requires_successful_post_patch_command() {
+fn finalization_feedback_requires_successful_post_patch_command_output() {
     fn tool_result(tool_name: &str, output: serde_json::Value) -> ToolExecutionRecord {
         ToolExecutionRecord {
             call_id: format!("{tool_name}_call"),
@@ -1555,7 +1555,16 @@ fn finalization_feedback_requires_successful_post_patch_command() {
         &artifacts
     ));
 
-    let successful_command = tool_result("run_command", json!({"exit_code": 0}));
+    let silent_successful_command = tool_result("run_command", json!({"exit_code": 0}));
+    assert!(!super::feedback::should_project_finalization_feedback(
+        &[patch.clone(), silent_successful_command],
+        &artifacts
+    ));
+
+    let successful_command = tool_result(
+        "run_command",
+        json!({"exit_code": 0, "stdout_bytes": 9, "stderr_bytes": 0}),
+    );
     assert!(super::feedback::should_project_finalization_feedback(
         &[patch, successful_command],
         &artifacts

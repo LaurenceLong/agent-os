@@ -137,6 +137,7 @@ fn latest_patch_has_following_command_evidence(tool_results: &[ToolExecutionReco
             result.tool_name == "run_command"
                 && result.status == ToolCallStatus::Completed
                 && run_command_succeeded(result)
+                && run_command_captured_output(result)
                 && !result.evidence_ids.is_empty()
         })
 }
@@ -148,6 +149,21 @@ fn run_command_succeeded(result: &ToolExecutionRecord) -> bool {
         .and_then(|output| output.get("exit_code"))
         .and_then(Value::as_i64)
         == Some(0)
+}
+
+fn run_command_captured_output(result: &ToolExecutionRecord) -> bool {
+    let Some(output) = result.output.as_ref() else {
+        return false;
+    };
+    let stdout_bytes = output
+        .get("stdout_bytes")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let stderr_bytes = output
+        .get("stderr_bytes")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    stdout_bytes > 0 || stderr_bytes > 0
 }
 
 pub(super) fn finalization_feedback_record(

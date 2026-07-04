@@ -6,7 +6,7 @@ use agent_os_sys::{
     AgentOsResult, AppMethodLifecycle, AppNotification, AppNotificationEnvelope, AppRequest,
     AppRequestEnvelope, AppResponse, AppResponseEnvelope, AutomationScheduleKind, ClientConnection,
     ClientKind, EvidenceMapEntry, FinalSubmission, ProcessLifecycleState, ProjectionCursor,
-    ProviderUsage, SecurityLevel, StatsQuery, StatsSnapshot, ThreadStatus,
+    ProviderUsage, ResourceSessionType, SecurityLevel, StatsQuery, StatsSnapshot, ThreadStatus,
 };
 use agent_os_thread::{ModelAction, ModelClient, ModelTurnRequest, ModelTurnResponse, ToolAction};
 use serde_json::json;
@@ -538,6 +538,122 @@ fn app_server_automation_schedule_and_run_projection_round_trips_through_store()
         .iter()
         .any(|job| job["job"]["client_thread_id"] == thread_id && job["status"] == "queued"));
     remove_dir_all_retry(&root);
+}
+
+#[test]
+fn app_server_resource_session_open_close_projects_thread_state_and_notifications() {
+    let host = AgentOsHost::in_memory();
+    let mut server = AppServer::new(host);
+    let initialized = jsonl_request(&mut server, "req_init", AppRequest::Initialize);
+    assert!(matches!(initialized.response, AppResponse::Accepted(_)));
+
+    let subscribed = accepted_body(jsonl_request(
+        &mut server,
+        "req_subscribe",
+        AppRequest::Subscribe {
+            cursor: Some(ProjectionCursor {
+                last_event_ordinal: 0,
+            }),
+        },
+    ));
+    let subscription_id = subscribed["subscription_id"].as_str().unwrap().to_string();
+
+    let started = accepted_body(jsonl_request(
+        &mut server,
+        "req_thread_start",
+        AppRequest::ThreadStart {
+            goal: "resource session conformance target".to_string(),
+            workspace: None,
+        },
+    ));
+    let thread_id = started["thread"]["client_thread_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let opened = accepted_body(jsonl_request(
+        &mut server,
+        "req_resource_open",
+        AppRequest::ResourceSessionOpen {
+            resource_type: ResourceSessionType::Terminal,
+            client_thread_id: Some(thread_id.clone()),
+            lease_expires_at: Some("2026-07-05T00:00:00Z".to_string()),
+            payload: json!({"cwd": "D:/work/example", "purpose": "conformance"}),
+        },
+    ));
+    let session_id = opened["resource_session"]["session_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(opened["resource_session"]["status"], "active");
+    assert_eq!(opened["resource_session"]["resource_type"], "terminal");
+    assert_eq!(opened["resource_session"]["client_thread_id"], thread_id);
+    assert_eq!(
+        opened["resource_session"]["payload"]["purpose"],
+        "conformance"
+    );
+
+    let read_active = accepted_body(jsonl_request(
+        &mut server,
+        "req_thread_read_active_resource",
+        AppRequest::ThreadRead {
+            client_thread_id: thread_id.clone(),
+        },
+    ));
+    assert!(read_active["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|resource| resource["session_id"] == session_id && resource["status"] == "active"));
+
+    let active_notifications = server.drain_notifications().unwrap();
+    assert!(active_notifications.iter().all(|notification| {
+        notification.subscription_id.as_deref() == Some(subscription_id.as_str())
+    }));
+    assert!(
+        active_notifications.iter().any(|notification| matches!(
+            &notification.notification,
+            AppNotification::ResourceUpdated(resource)
+                if resource.session_id == session_id && resource.status.as_str() == "active"
+        )),
+        "resource/session open must publish an active resource update"
+    );
+
+    let closed = accepted_body(jsonl_request(
+        &mut server,
+        "req_resource_close",
+        AppRequest::ResourceSessionClose {
+            session_id: session_id.clone(),
+        },
+    ));
+    assert_eq!(closed["resource_session"]["session_id"], session_id);
+    assert_eq!(closed["resource_session"]["status"], "closed");
+
+    let read_closed = accepted_body(jsonl_request(
+        &mut server,
+        "req_thread_read_closed_resource",
+        AppRequest::ThreadRead {
+            client_thread_id: thread_id,
+        },
+    ));
+    assert!(read_closed["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|resource| resource["session_id"] == session_id && resource["status"] == "closed"));
+
+    let notifications = server.drain_notifications().unwrap();
+    assert!(notifications.iter().all(|notification| {
+        notification.subscription_id.as_deref() == Some(subscription_id.as_str())
+    }));
+    assert!(
+        notifications.iter().any(|notification| matches!(
+            &notification.notification,
+            AppNotification::ResourceUpdated(resource)
+                if resource.session_id == session_id && resource.status.as_str() == "closed"
+        )),
+        "resource/session close must publish a closed resource update"
+    );
 }
 
 fn human_client() -> ClientConnection {

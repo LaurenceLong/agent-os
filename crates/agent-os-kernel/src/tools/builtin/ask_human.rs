@@ -17,7 +17,7 @@ fn descriptor(now: &str) -> ToolDescriptor {
         schema::DescriptorSpec {
             tool_id: "tool_ask_human",
             name: "ask_human",
-            description: "Ask a bounded human-facing question or escalation through the communication system.",
+            description: "Ask a bounded human-facing question or escalation through the communication system. This is a real tool call: the question is complete only after the tool returns message_id and delivery_status.",
             driver_class: ToolDriverClass::KernelBuiltin,
             risk_level: 2,
             input_schema: input_schema(),
@@ -61,7 +61,11 @@ fn input_schema() -> Value {
     schema::object(
         &["question"],
         json!({
-            "question": {"type": "string", "maxLength": 8000},
+            "question": {
+                "type": "string",
+                "maxLength": 8000,
+                "description": "Human-facing question text. Call ask_human with this field instead of only mentioning the question in prose."
+            },
             "message_type": {"enum": ["HumanQuestion", "HumanEscalation", "ApprovalRequest"]},
             "context": {"type": "object"},
             "artifact_refs": {"type": "array", "items": {"type": "string"}},
@@ -101,5 +105,20 @@ mod tests {
             descriptor("now").evidence_type,
             Some(EvidenceType::RuntimeTrace)
         );
+    }
+
+    #[test]
+    fn schema_makes_human_question_a_real_tool_call() {
+        let descriptor = descriptor("now");
+        assert!(descriptor.description.contains("real tool call"));
+        assert!(descriptor.description.contains("delivery_status"));
+        assert!(descriptor
+            .model_input_schema
+            .as_ref()
+            .unwrap()
+            .pointer("/properties/question/description")
+            .and_then(Value::as_str)
+            .unwrap()
+            .contains("instead of only mentioning"));
     }
 }

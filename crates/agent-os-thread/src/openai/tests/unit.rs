@@ -1310,6 +1310,26 @@ fn map_function_call_injects_workspace_root() {
 }
 
 #[test]
+fn map_function_call_drops_model_supplied_runtime_source_fields() {
+    let tmp = std::env::temp_dir().join(format!("aos-openai-rf-{}", new_id("t_")));
+    let request = make_request(&tmp);
+    let (tool_name, input, risk) = map_function_call(
+        "run_command",
+        json!({
+            "command": "cmd /C verify.cmd",
+            "workspace_root": "model-supplied-root"
+        }),
+        &request,
+    )
+    .unwrap();
+
+    assert_eq!(tool_name, "run_command");
+    assert_eq!(input["cwd"], tmp.to_string_lossy().to_string());
+    assert!(input.get("workspace_root").is_none());
+    assert_eq!(risk, 4);
+}
+
+#[test]
 fn map_function_call_keeps_apply_patch_delete_operation() {
     let tmp = std::env::temp_dir().join(format!("aos-openai-md-{}", new_id("t_")));
     let request = make_request(&tmp);
