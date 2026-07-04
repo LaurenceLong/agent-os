@@ -523,6 +523,93 @@ fn apply_patch_rejects_multiple_file_operations() {
 }
 
 #[test]
+fn apply_patch_reports_semantic_failures_through_broker() {
+    let fx = fixture();
+    let workspace = temp_workspace("agent-os-integration-apply-patch-failures");
+    fs::create_dir_all(workspace.join("dir")).unwrap();
+    fs::write(workspace.join("existing.txt"), "original\n").unwrap();
+    fs::write(workspace.join("target.txt"), "alpha\n").unwrap();
+
+    let supervisor = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_supervisor".to_string(),
+            owner: "integration-test".to_string(),
+            goal: "Exercise apply_patch semantic failure output".to_string(),
+            success_criteria: vec!["semantic patch failures are visible".to_string()],
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: vec![workspace.to_string_lossy().to_string()],
+        })
+        .unwrap();
+    attach_workspace_for_agent(&fx.kernel, &supervisor, &fx.task.task_id, &workspace);
+    let capability = fx
+        .kernel
+        .grant_capability(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            4,
+            None,
+        )
+        .unwrap();
+    let tools = ToolInvoker {
+        kernel: &fx.kernel,
+        agent: &supervisor,
+        task_id: &fx.task.task_id,
+        capability: &capability,
+    };
+
+    for (patch, expected) in [
+        (
+            "*** Begin Patch\n*** Add File: existing.txt\n+replacement\n*** End Patch\n",
+            "apply_patch add file target already exists",
+        ),
+        (
+            "*** Begin Patch\n*** Update File: target.txt\n@@\n-beta\n+gamma\n*** End Patch\n",
+            "apply_patch update hunk did not match file content",
+        ),
+        (
+            "*** Begin Patch\n*** Delete File: dir\n*** End Patch\n",
+            "apply_patch delete operation only deletes files",
+        ),
+    ] {
+        let invocation = tools.invoke(
+            4,
+            "apply_patch",
+            json!({
+                "workspace_root": workspace.to_string_lossy(),
+                "patch": patch
+            }),
+            Some("apply_patch semantic failure was reported"),
+        );
+        assert_eq!(invocation.status, ToolCallStatus::Failed);
+        assert!(invocation.evidence_ids.is_empty());
+        let error = invocation
+            .output
+            .as_ref()
+            .and_then(|output| output.get("error"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        assert!(error.contains(expected), "{error}");
+    }
+
+    assert_eq!(
+        fs::read_to_string(workspace.join("existing.txt")).unwrap(),
+        "original\n"
+    );
+    assert_eq!(
+        fs::read_to_string(workspace.join("target.txt")).unwrap(),
+        "alpha\n"
+    );
+    assert!(workspace.join("dir").is_dir());
+
+    let _ = fs::remove_dir_all(workspace);
+}
+
+#[test]
 fn apply_patch_accepts_plain_context_hunks_through_broker() {
     let fx = fixture();
     let workspace = temp_workspace("agent-os-integration-apply-patch-plain-context");
