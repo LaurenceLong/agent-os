@@ -585,6 +585,20 @@ fn skill_tools_enforce_scope_and_skill_root_resource_bounds() {
     for (tool_name, input, capability_id, expected_stage, expected_error) in [
         (
             "load_skill",
+            json!({}),
+            allowed.capability_id.clone(),
+            "input_schema",
+            "tool.input missing required field name",
+        ),
+        (
+            "load_skill",
+            json!({"name": 7}),
+            allowed.capability_id.clone(),
+            "input_schema",
+            "tool.input.name expected string",
+        ),
+        (
+            "load_skill",
             json!({"name": "review-skill", "offset": 0, "limit": 1}),
             allowed.capability_id.clone(),
             "input_schema",
@@ -603,6 +617,34 @@ fn skill_tools_enforce_scope_and_skill_root_resource_bounds() {
             broad_skill_access.capability_id.clone(),
             "driver",
             "skill missing-skill",
+        ),
+        (
+            "read_skill_resource",
+            json!({"path": "resources/checklist.md"}),
+            allowed.capability_id.clone(),
+            "input_schema",
+            "tool.input missing required field name",
+        ),
+        (
+            "read_skill_resource",
+            json!({"name": "review-skill"}),
+            allowed.capability_id.clone(),
+            "input_schema",
+            "tool.input missing required field path",
+        ),
+        (
+            "read_skill_resource",
+            json!({"name": 7, "path": "resources/checklist.md"}),
+            allowed.capability_id.clone(),
+            "input_schema",
+            "tool.input.name expected string",
+        ),
+        (
+            "read_skill_resource",
+            json!({"name": "review-skill", "path": 7}),
+            allowed.capability_id.clone(),
+            "input_schema",
+            "tool.input.path expected string",
         ),
         (
             "read_skill_resource",
