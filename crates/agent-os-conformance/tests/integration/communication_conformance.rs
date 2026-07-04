@@ -224,6 +224,105 @@ fn post_blackboard_reports_unproven_fact_failure_through_broker() {
 }
 
 #[test]
+fn post_blackboard_parameter_failures_do_not_publish_context() {
+    let fx = fixture();
+    let cap = fx
+        .kernel
+        .grant_capability(
+            &fx.worker.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            2,
+            None,
+        )
+        .unwrap();
+    let before = fx.kernel.state_snapshot().unwrap();
+    let before_blackboard_count = before.blackboard_entries.len();
+    let before_message_count = before.messages.len();
+    let before_evidence_count = before.evidence.len();
+
+    for (input, expected_error) in [
+        (
+            json!({
+                "channel_id": "risks",
+                "scope": "workspace",
+                "section": "risk",
+                "content": {"risk": "invalid scope should not publish"}
+            }),
+            "tool.input.scope does not match any enum value",
+        ),
+        (
+            json!({
+                "channel_id": "risks",
+                "scope": "task",
+                "section": "decision",
+                "content": {"decision": "invalid section should not publish"}
+            }),
+            "tool.input.section does not match any enum value",
+        ),
+        (
+            json!({
+                "channel_id": "risks",
+                "section": "risk",
+                "content": "risk text"
+            }),
+            "tool.input.content expected object",
+        ),
+        (
+            json!({
+                "channel_id": "risks",
+                "section": "risk",
+                "content": {"risk": "confidence too high"},
+                "confidence": 1.5
+            }),
+            "tool.input.confidence must be <= 1",
+        ),
+        (
+            json!({
+                "channel_id": "risks",
+                "section": "risk",
+                "content": {"risk": "bad evidence refs"},
+                "source_evidence_ids": ["evi_ok", 7]
+            }),
+            "tool.input.source_evidence_ids[1] expected string",
+        ),
+    ] {
+        let invocation = fx
+            .kernel
+            .invoke_tool(
+                &fx.worker.agent_id,
+                &fx.task.task_id,
+                &fx.worker.session_id,
+                cap.capability_id.clone(),
+                2,
+                ToolInvokeInput {
+                    tool_name: "post_blackboard".to_string(),
+                    input,
+                    evidence_claim: Some(
+                        "post_blackboard parameter failure was model-visible".to_string(),
+                    ),
+                },
+            )
+            .unwrap();
+        assert_eq!(invocation.status, ToolCallStatus::Failed);
+        assert!(invocation.evidence_ids.is_empty());
+        let output = invocation.output.as_ref().unwrap();
+        assert_eq!(output["status"], "failed");
+        assert_eq!(output["stage"], "input_schema");
+        let error = output["error"].as_str().unwrap_or_default();
+        assert!(
+            error.contains(expected_error),
+            "expected {expected_error:?}, got {error:?}"
+        );
+        let state = fx.kernel.state_snapshot().unwrap();
+        assert_eq!(state.blackboard_entries.len(), before_blackboard_count);
+        assert_eq!(state.messages.len(), before_message_count);
+        assert_eq!(state.evidence.len(), before_evidence_count);
+    }
+}
+
+#[test]
 fn control_plane_tools_execute_through_tool_broker() {
     let fx = fixture();
     let cap = fx
