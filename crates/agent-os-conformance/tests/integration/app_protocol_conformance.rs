@@ -4,9 +4,9 @@ use agent_os_host::AgentOsHost;
 use agent_os_sys::{
     app_protocol_json_schema, app_protocol_spec, app_protocol_typescript, app_protocol_version,
     AgentOsResult, AppMethodLifecycle, AppNotification, AppNotificationEnvelope, AppRequest,
-    AppRequestEnvelope, AppResponse, AppResponseEnvelope, ClientConnection, ClientKind,
-    EvidenceMapEntry, FinalSubmission, ProcessLifecycleState, ProjectionCursor, ProviderUsage,
-    SecurityLevel, StatsQuery, StatsSnapshot, ThreadStatus,
+    AppRequestEnvelope, AppResponse, AppResponseEnvelope, AutomationScheduleKind, ClientConnection,
+    ClientKind, EvidenceMapEntry, FinalSubmission, ProcessLifecycleState, ProjectionCursor,
+    ProviderUsage, SecurityLevel, StatsQuery, StatsSnapshot, ThreadStatus,
 };
 use agent_os_thread::{ModelAction, ModelClient, ModelTurnRequest, ModelTurnResponse, ToolAction};
 use serde_json::json;
@@ -438,6 +438,106 @@ fn app_server_process_stop_and_kill_cleanup_running_processes_through_kernel() {
     let killed = app_cleanup_running_process("process-kill", ProcessCleanupAction::Kill);
     assert_eq!(killed["state"], "terminated");
     assert_eq!(killed["error"], "conformance kill");
+}
+
+#[test]
+fn app_server_automation_schedule_and_run_projection_round_trips_through_store() {
+    let host = AgentOsHost::in_memory();
+    let mut server = AppServer::new(host.clone());
+    let initialized = jsonl_request(&mut server, "req_init", AppRequest::Initialize);
+    assert!(matches!(initialized.response, AppResponse::Accepted(_)));
+    let root = isolated_temp_dir("automation-conformance");
+    fs::create_dir_all(&root).unwrap();
+
+    let started = accepted_body(jsonl_request(
+        &mut server,
+        "req_thread_start",
+        AppRequest::ThreadStart {
+            goal: "automation conformance target".to_string(),
+            workspace: Some(root.to_string_lossy().to_string()),
+        },
+    ));
+    let thread_id = started["thread"]["client_thread_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let created = accepted_body(jsonl_request(
+        &mut server,
+        "req_automation_create",
+        AppRequest::AutomationScheduleCreate {
+            name: "conformance wakeup".to_string(),
+            kind: AutomationScheduleKind::ThreadWakeup,
+            target_thread_id: Some(thread_id.clone()),
+            workspace: None,
+            prompt: "continue conformance automation".to_string(),
+            next_run_at: Some("2026-06-30T00:00:00Z".to_string()),
+            interval_seconds: Some(60),
+            payload: json!({"source": "conformance"}),
+        },
+    ));
+    let schedule_id = created["automation_schedule"]["schedule_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        created["automation_schedule"]["created_by_client_id"],
+        "human_1"
+    );
+    assert_eq!(created["automation_schedule"]["status"], "active");
+
+    let listed = accepted_body(jsonl_request(
+        &mut server,
+        "req_automation_schedule_list",
+        AppRequest::AutomationScheduleList,
+    ));
+    assert!(listed["automation_schedules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|schedule| schedule["schedule_id"] == schedule_id));
+
+    let runs = host.run_due_automations_at("2026-06-30T00:00:01Z").unwrap();
+    assert_eq!(runs.len(), 1);
+    let run_id = runs[0].run_id.clone();
+    assert_eq!(runs[0].schedule_id, schedule_id);
+    assert_eq!(
+        runs[0].target_thread_id.as_deref(),
+        Some(thread_id.as_str())
+    );
+
+    let run_list = accepted_body(jsonl_request(
+        &mut server,
+        "req_automation_run_list",
+        AppRequest::AutomationRunList {
+            schedule_id: Some(schedule_id.clone()),
+        },
+    ));
+    assert_eq!(run_list["automation_runs"][0]["run_id"], run_id);
+    assert_eq!(run_list["automation_runs"][0]["status"], "queued");
+    assert_eq!(
+        run_list["automation_runs"][0]["payload"]["source"],
+        "conformance"
+    );
+
+    let read = accepted_body(jsonl_request(
+        &mut server,
+        "req_thread_read_after_automation",
+        AppRequest::ThreadRead {
+            client_thread_id: thread_id.clone(),
+        },
+    ));
+    assert!(read["automation_runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|run| run["run_id"] == run_id));
+    assert!(read["runtime_jobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|job| job["job"]["client_thread_id"] == thread_id && job["status"] == "queued"));
+    remove_dir_all_retry(&root);
 }
 
 fn human_client() -> ClientConnection {
