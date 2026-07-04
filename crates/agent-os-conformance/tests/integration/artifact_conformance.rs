@@ -321,6 +321,117 @@ fn submit_final_lifecycle_tool_records_final_submission() {
 }
 
 #[test]
+fn submit_final_failures_are_model_visible_without_final_side_effects() {
+    let fx = fixture();
+    let cap = fx
+        .kernel
+        .grant_capability(
+            &fx.worker.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            2,
+            None,
+        )
+        .unwrap();
+    let before = fx.kernel.state_snapshot().unwrap();
+    let before_thread = before.threads.get(&fx.worker.thread_id).unwrap().clone();
+    let before_final_count = before.final_submissions.len();
+    let before_verification_count = before.verifications.len();
+    let before_evidence_count = before.evidence.len();
+
+    for (input, expected_stage, expected_error) in [
+        (
+            json!({
+                "summary": "empty evidence map",
+                "evidence_map": []
+            }),
+            "input_schema",
+            "tool.input.evidence_map length must be >= 1",
+        ),
+        (
+            json!({
+                "summary": "missing evidence refs",
+                "evidence_map": [{"claim": "claim without refs"}]
+            }),
+            "input_schema",
+            "tool.input.evidence_map[0] missing required field evidence_refs",
+        ),
+        (
+            json!({
+                "summary": "tests_run must be array",
+                "evidence_map": [{
+                    "claim": "shape validation",
+                    "evidence_refs": ["evi_shape"]
+                }],
+                "tests_run": "cargo test"
+            }),
+            "input_schema",
+            "tool.input.tests_run expected array",
+        ),
+        (
+            json!({
+                "summary": "empty refs",
+                "evidence_map": [{
+                    "claim": "claim without refs",
+                    "evidence_refs": []
+                }]
+            }),
+            "driver",
+            "claim 'claim without refs' lacks evidence refs",
+        ),
+        (
+            json!({
+                "summary": "missing evidence",
+                "evidence_map": [{
+                    "claim": "references missing evidence",
+                    "evidence_refs": ["evi_missing"]
+                }]
+            }),
+            "driver",
+            "evidence evi_missing",
+        ),
+    ] {
+        let invocation = fx
+            .kernel
+            .invoke_tool(
+                &fx.worker.agent_id,
+                &fx.task.task_id,
+                &fx.worker.session_id,
+                cap.capability_id.clone(),
+                2,
+                ToolInvokeInput {
+                    tool_name: "submit_final".to_string(),
+                    input,
+                    evidence_claim: Some("submit_final failure was model-visible".to_string()),
+                },
+            )
+            .unwrap();
+        assert_eq!(invocation.status, ToolCallStatus::Failed);
+        assert!(invocation.evidence_ids.is_empty());
+        let output = invocation.output.as_ref().unwrap();
+        assert_eq!(output["status"], "failed");
+        let error = output["error"].as_str().unwrap_or_default();
+        assert_eq!(
+            output["stage"], expected_stage,
+            "expected stage {expected_stage:?} for {expected_error:?}, got {error:?}"
+        );
+        assert!(
+            error.contains(expected_error),
+            "expected {expected_error:?}, got {error:?}"
+        );
+
+        let state = fx.kernel.state_snapshot().unwrap();
+        let thread = state.threads.get(&fx.worker.thread_id).unwrap();
+        assert_eq!(state.final_submissions.len(), before_final_count);
+        assert_eq!(state.verifications.len(), before_verification_count);
+        assert_eq!(state.evidence.len(), before_evidence_count);
+        assert_eq!(thread.status, before_thread.status);
+        assert_eq!(thread.invocation_id, before_thread.invocation_id);
+    }
+}
+
+#[test]
 fn tool_invocation_routes_through_kernel_and_attaches_evidence() {
     let fx = fixture();
     let workspace = std::env::temp_dir().join(format!(
