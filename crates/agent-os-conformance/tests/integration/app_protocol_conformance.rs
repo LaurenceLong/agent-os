@@ -1,3 +1,5 @@
+use agent_os_app_server::AppServer;
+use agent_os_host::AgentOsHost;
 use agent_os_sys::{
     app_protocol_json_schema, app_protocol_spec, app_protocol_typescript, app_protocol_version,
     AppMethodLifecycle, AppNotification, AppNotificationEnvelope, AppRequest, AppRequestEnvelope,
@@ -158,6 +160,107 @@ fn app_protocol_schema_and_typescript_exports_match_versioned_contract() {
     assert!(typescript.contains("\"process/list\""));
 }
 
+#[test]
+fn app_server_jsonl_host_path_updates_kernel_projection_and_notifications() {
+    let host = AgentOsHost::in_memory();
+    let mut server = AppServer::new(host.clone());
+
+    let initialized = jsonl_request(&mut server, "req_init", AppRequest::Initialize);
+    assert_eq!(accepted_body(initialized)["client_id"], "human_1");
+
+    let subscribed = jsonl_request(
+        &mut server,
+        "req_subscribe",
+        AppRequest::Subscribe {
+            cursor: Some(ProjectionCursor {
+                last_event_ordinal: 0,
+            }),
+        },
+    );
+    let subscription_id = accepted_body(subscribed)["subscription_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let started = jsonl_request(
+        &mut server,
+        "req_thread_start",
+        AppRequest::ThreadStart {
+            goal: "exercise app server host conformance".to_string(),
+            workspace: Some("D:/work/app-server-conformance".to_string()),
+        },
+    );
+    let thread_id = accepted_body(started)["thread"]["client_thread_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let turn_started = jsonl_request(
+        &mut server,
+        "req_turn_start",
+        AppRequest::TurnStart {
+            client_thread_id: thread_id.clone(),
+            input: "start from the app protocol".to_string(),
+        },
+    );
+    let turn_id = accepted_body(turn_started)["turn"]["turn_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let read = jsonl_request(
+        &mut server,
+        "req_thread_read",
+        AppRequest::ThreadRead {
+            client_thread_id: thread_id.clone(),
+        },
+    );
+    let body = accepted_body(read);
+    assert_eq!(body["thread"]["client_thread_id"], thread_id);
+    assert!(body["turns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|turn| turn["turn_id"] == turn_id));
+    assert_eq!(body["runtime_jobs"].as_array().unwrap().len(), 1);
+
+    let listed = jsonl_request(
+        &mut server,
+        "req_thread_list",
+        AppRequest::ThreadList {
+            archived: Some(false),
+        },
+    );
+    assert!(accepted_body(listed)["threads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|thread| thread["client_thread_id"] == thread_id));
+
+    let notifications = server.drain_notifications().unwrap();
+    assert!(notifications.iter().all(|notification| {
+        notification.subscription_id.as_deref() == Some(subscription_id.as_str())
+    }));
+    assert!(notifications.iter().any(|notification| matches!(
+        &notification.notification,
+        AppNotification::ThreadChanged(thread) if thread.client_thread_id == thread_id
+    )));
+    assert!(notifications.iter().any(|notification| matches!(
+        &notification.notification,
+        AppNotification::TurnStarted(turn) if turn.turn_id == turn_id
+    )));
+
+    let state = host.kernel().state_snapshot().unwrap();
+    assert!(state.threads.contains_key(&thread_id));
+    assert!(host
+        .kernel()
+        .store()
+        .turn_summaries()
+        .unwrap()
+        .iter()
+        .any(|turn| turn.turn_id == turn_id));
+}
+
 fn human_client() -> ClientConnection {
     ClientConnection {
         client_id: "human_1".to_string(),
@@ -165,5 +268,33 @@ fn human_client() -> ClientConnection {
         client_kind: ClientKind::TerminalUi,
         authority: SecurityLevel::HUMAN_ROOT,
         connected_at: "2026-07-03T00:00:00Z".to_string(),
+    }
+}
+
+fn jsonl_request(
+    server: &mut AppServer<AgentOsHost>,
+    request_id: &str,
+    request: AppRequest,
+) -> AppResponseEnvelope {
+    let line = serde_json::to_string(&AppRequestEnvelope {
+        protocol: app_protocol_version(),
+        request_id: request_id.to_string(),
+        client: human_client(),
+        request,
+    })
+    .unwrap();
+    let response = server.handle_line(&line);
+    let envelope = serde_json::from_str::<AppResponseEnvelope>(&response).unwrap();
+    assert_eq!(envelope.protocol, app_protocol_version());
+    assert_eq!(envelope.request_id, request_id);
+    envelope
+}
+
+fn accepted_body(envelope: AppResponseEnvelope) -> serde_json::Value {
+    match envelope.response {
+        AppResponse::Accepted(body) => body,
+        AppResponse::Rejected { code, message } => {
+            panic!("app request rejected: {code}: {message}");
+        }
     }
 }

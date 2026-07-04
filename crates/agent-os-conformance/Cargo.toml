@@ -6,8 +6,10 @@ license-file.workspace = true
 
 [dependencies]
 agent-os-distro.workspace = true
+agent-os-app-server.workspace = true
 agent-os-config.workspace = true
 agent-os-ecosystem.workspace = true
+agent-os-host.workspace = true
 agent-os-kernel.workspace = true
 agent-os-store.workspace = true
 agent-os-sys.workspace = true
