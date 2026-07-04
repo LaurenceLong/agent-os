@@ -2957,6 +2957,80 @@ fn tool_search_returns_deferred_tool_summaries() {
 }
 
 #[test]
+fn tool_search_parameter_failures_are_model_visible_without_evidence() {
+    let fx = fixture();
+    let capability = fx
+        .kernel
+        .grant_capability(
+            &fx.worker.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            3,
+            None,
+        )
+        .unwrap();
+
+    for (input, expected_error) in [
+        (json!({}), "tool.input missing required field query"),
+        (json!({"query": 7}), "tool.input.query expected string"),
+        (
+            json!({"query": "echo", "limit": "2"}),
+            "tool.input.limit expected integer",
+        ),
+        (
+            json!({"query": "echo", "limit": 26}),
+            "tool.input.limit must be <= 25",
+        ),
+    ] {
+        let invocation = fx
+            .kernel
+            .invoke_tool(
+                &fx.worker.agent_id,
+                &fx.task.task_id,
+                &fx.worker.session_id,
+                capability.capability_id.clone(),
+                1,
+                ToolInvokeInput {
+                    tool_name: "tool_search".to_string(),
+                    input,
+                    evidence_claim: Some(
+                        "invalid tool_search parameters were rejected".to_string(),
+                    ),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(invocation.status, ToolCallStatus::Failed);
+        assert!(invocation.evidence_ids.is_empty());
+        assert_eq!(
+            invocation
+                .output
+                .as_ref()
+                .and_then(|output| output.get("status")),
+            Some(&json!("failed"))
+        );
+        assert_eq!(
+            invocation
+                .output
+                .as_ref()
+                .and_then(|output| output.get("stage")),
+            Some(&json!("input_schema"))
+        );
+        let error = invocation
+            .output
+            .as_ref()
+            .and_then(|output| output.get("error"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        assert!(error.contains(expected_error), "{error}");
+    }
+
+    let state = fx.kernel.state_snapshot().unwrap();
+    assert!(state.evidence.is_empty());
+}
+
+#[test]
 fn tool_invocation_rejects_input_schema_violations_before_side_effects() {
     let fx = fixture();
     let cap = fx
