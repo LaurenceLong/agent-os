@@ -238,6 +238,69 @@ fn cli_binaries_read_nonempty_sqlite_thread_and_process_projection_through_hostd
     remove_dir_all_retry(&root);
 }
 
+#[test]
+fn cli_run_binary_executes_external_model_through_hostd_and_replays_sqlite_state() {
+    let root = isolated_temp_dir("cli-run-binary");
+    fs::create_dir_all(&root).unwrap();
+    let target_dir = root.join("cargo-target");
+    build_cli_and_hostd_binaries(&target_dir);
+    let workspace = root.join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    let state_db = root.join("state").join("agent-os.sqlite");
+    fs::create_dir_all(state_db.parent().unwrap()).unwrap();
+    let model_program = compile_external_run_model(&root);
+
+    let output = Command::new(binary_path(&target_dir, "agent-os"))
+        .arg("run")
+        .arg("--workspace")
+        .arg(&workspace)
+        .arg("--task")
+        .arg("Write result.md from CLI binary conformance")
+        .arg("--output")
+        .arg("result.md")
+        .arg("--bundle-output")
+        .arg("bundle/run.json")
+        .arg("--state-db")
+        .arg(&state_db)
+        .arg("--model-command")
+        .arg(&model_program)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "agent-os run failed with status {}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["status"], "completed");
+    assert_eq!(value["runtime_job_status"], "completed");
+    assert_eq!(value["state_db"], state_db.to_string_lossy().to_string());
+    assert_eq!(
+        fs::read_to_string(workspace.join("result.md")).unwrap(),
+        "cli binary run completed\n"
+    );
+    let bundle_path = workspace.join("bundle").join("run.json");
+    assert_eq!(
+        PathBuf::from(value["bundle_path"].as_str().unwrap()),
+        bundle_path
+    );
+    let bundle: Value = serde_json::from_slice(&fs::read(bundle_path).unwrap()).unwrap();
+    assert_eq!(bundle["root_task_id"], value["task_id"]);
+
+    let replayed = Kernel::with_replayed_store(SqliteStore::open(&state_db).unwrap()).unwrap();
+    let replayed_state = replayed.state_snapshot().unwrap();
+    let task_id = value["task_id"].as_str().unwrap();
+    assert!(replayed_state.tasks.contains_key(task_id));
+    assert!(replayed_state.final_submissions.contains_key(task_id));
+    assert!(!value["artifact_ids"].as_array().unwrap().is_empty());
+    assert!(!value["evidence_ids"].as_array().unwrap().is_empty());
+
+    drop(replayed);
+    remove_dir_all_retry(&root);
+}
+
 fn build_cli_and_hostd_binaries(target_dir: &Path) {
     let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let output = Command::new(cargo)
@@ -287,6 +350,93 @@ fn isolated_temp_dir(label: &str) -> PathBuf {
         "agent-os-conformance-{label}-{}-{unique}",
         std::process::id()
     ))
+}
+
+fn compile_external_run_model(root: &Path) -> PathBuf {
+    let source_path = root.join("external_run_model.rs");
+    let model_program = root.join(format!(
+        "external_run_model{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    fs::write(
+        &source_path,
+        r##"
+use std::io::{self, Read};
+
+fn main() {
+    let mut input = String::new();
+    io::stdin().read_to_string(&mut input).unwrap();
+    match step_index(&input) {
+        0 => {
+            let workspace_root = json_string(&input, "workspace_root");
+            print!(
+                "{{\"actions\":[{{\"type\":\"tool_call\",\"tool_name\":\"apply_patch\",\"input\":{{\"workspace_root\":\"{}\",\"patch\":\"*** Begin Patch\\n*** Add File: result.md\\n+cli binary run completed\\n*** End Patch\\n\"}},\"risk_level\":4,\"evidence_claim\":\"cli binary run wrote result.md through apply_patch\"}}],\"usage\":{{\"input_tokens\":1,\"output_tokens\":1,\"cost\":0.0}}}}",
+                workspace_root
+            );
+        }
+        _ => {
+            let evidence_id = first_evidence_id(&input);
+            print!(
+                "{{\"actions\":[{{\"type\":\"final\",\"submission\":{{\"summary\":\"CLI binary run completed.\",\"changed_artifacts\":[],\"evidence_map\":[{{\"claim\":\"result.md was written\",\"evidence_refs\":[\"{}\"]}}],\"unverified_claims\":[],\"known_risks\":[],\"tests_run\":[\"agent-os run binary conformance\"],\"tests_not_run\":[],\"approvals\":[]}}}}],\"usage\":{{\"input_tokens\":1,\"output_tokens\":1,\"cost\":0.0}}}}",
+                evidence_id
+            );
+        }
+    }
+}
+
+fn step_index(input: &str) -> u32 {
+    let marker = "\"step_index\":";
+    let start = input.find(marker).unwrap() + marker.len();
+    let rest = &input[start..];
+    let end = rest
+        .find(|ch: char| !ch.is_ascii_digit())
+        .unwrap_or(rest.len());
+    rest[..end].parse().unwrap()
+}
+
+fn json_string(input: &str, field: &str) -> String {
+    let marker = format!("\"{}\":\"", field);
+    let start = input.find(&marker).unwrap() + marker.len();
+    let bytes = input.as_bytes();
+    let mut index = start;
+    let mut escaped = false;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if escaped {
+            escaped = false;
+        } else if byte == b'\\' {
+            escaped = true;
+        } else if byte == b'"' {
+            break;
+        }
+        index += 1;
+    }
+    input[start..index].to_string()
+}
+
+fn first_evidence_id(input: &str) -> String {
+    let marker = "\"evidence_ids\":[\"";
+    let start = input.find(marker).unwrap() + marker.len();
+    let rest = &input[start..];
+    let end = rest.find('"').unwrap();
+    rest[..end].to_string()
+}
+"##,
+    )
+    .unwrap();
+    let output = Command::new("rustc")
+        .arg(&source_path)
+        .arg("-o")
+        .arg(&model_program)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "rustc external model failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    model_program
 }
 
 fn wait_for_process_state(
