@@ -1,4 +1,4 @@
-﻿use agent_os_sys::AgentOsError;
+use agent_os_sys::AgentOsError;
 use serde_json::{json, Value};
 
 const ERROR_BODY_LIMIT: usize = 2048;
@@ -345,5 +345,125 @@ mod tests {
             error.into_agent_error(),
             AgentOsError::BudgetExhausted(message) if message.contains("quota")
         ));
+    }
+
+    #[test]
+    fn classifies_provider_status_matrix_and_agent_error_mapping() {
+        let cases = [
+            (
+                401,
+                json!({"error": {"message": "invalid api key"}}).to_string(),
+                ProviderApiErrorKind::Authentication,
+                false,
+                "PermissionDenied",
+            ),
+            (
+                403,
+                json!({"error": {"message": "model access forbidden"}}).to_string(),
+                ProviderApiErrorKind::Authorization,
+                false,
+                "PermissionDenied",
+            ),
+            (
+                404,
+                json!({"error": {"code": "model_not_found", "message": "model not found"}})
+                    .to_string(),
+                ProviderApiErrorKind::ModelNotFound,
+                false,
+                "Validation",
+            ),
+            (
+                422,
+                json!({"error": {"code": "invalid_request_error", "message": "bad tool schema"}})
+                    .to_string(),
+                ProviderApiErrorKind::InvalidRequest,
+                false,
+                "Validation",
+            ),
+            (
+                500,
+                json!({"error": {"message": "upstream unavailable"}}).to_string(),
+                ProviderApiErrorKind::Transient,
+                true,
+                "Validation",
+            ),
+            (
+                418,
+                json!({"error": {"message": "unexpected provider teapot"}}).to_string(),
+                ProviderApiErrorKind::Unknown,
+                false,
+                "Validation",
+            ),
+        ];
+
+        for (status, body, expected_kind, expected_retryable, expected_agent_error) in cases {
+            let error =
+                ProviderApiError::from_status("anthropic_messages", status, body, None, None);
+            assert_eq!(error.kind, expected_kind, "unexpected kind for {status}");
+            assert_eq!(
+                error.retryable, expected_retryable,
+                "unexpected retryability for {status}"
+            );
+            let agent_error = error.into_agent_error();
+            match expected_agent_error {
+                "PermissionDenied" => {
+                    assert!(matches!(agent_error, AgentOsError::PermissionDenied(_)))
+                }
+                "Validation" => assert!(matches!(agent_error, AgentOsError::Validation(_))),
+                other => panic!("unexpected expected error class {other}"),
+            }
+        }
+    }
+
+    #[test]
+    fn audit_event_preserves_classification_and_truncates_large_body() {
+        let large_body = format!(
+            "{{\"error\":{{\"message\":\"{}\"}}}}",
+            "provider body ".repeat(300)
+        );
+        let error =
+            ProviderApiError::from_status("openai_responses", 500, large_body, None, Some("3"));
+
+        assert_eq!(error.kind, ProviderApiErrorKind::Transient);
+        assert!(error.retryable);
+        assert_eq!(error.retry_after_ms, Some(3000));
+        let audit = error.to_audit_event();
+        assert_eq!(audit["type"], "provider_error");
+        assert_eq!(audit["provider"], "openai_responses");
+        assert_eq!(audit["kind"], "transient");
+        assert_eq!(audit["status_code"], 500);
+        assert_eq!(audit["retryable"], true);
+        assert_eq!(audit["retry_after_ms"], 3000);
+        let body = audit["response_body"].as_str().unwrap();
+        assert!(body.ends_with("...[truncated]"));
+        assert!(body.len() < 2_100);
+    }
+
+    #[test]
+    fn fallback_messages_cover_html_and_empty_error_bodies() {
+        let html = ProviderApiError::from_status(
+            "openai_chat_completions",
+            502,
+            "<html><body>gateway</body></html>".to_string(),
+            Some("0"),
+            Some("not-a-number"),
+        );
+        assert_eq!(
+            html.message,
+            "provider returned HTML error body for HTTP 502"
+        );
+        assert_eq!(html.retry_after_ms, None);
+        assert!(html.retryable);
+
+        let empty = ProviderApiError::from_status(
+            "openai_chat_completions",
+            503,
+            String::new(),
+            None,
+            None,
+        );
+        assert_eq!(empty.message, "provider returned HTTP 503");
+        assert_eq!(empty.response_body, None);
+        assert!(empty.retryable);
     }
 }
