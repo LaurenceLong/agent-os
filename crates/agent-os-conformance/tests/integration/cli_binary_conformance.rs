@@ -302,6 +302,116 @@ fn cli_run_binary_executes_external_model_through_hostd_and_replays_sqlite_state
 }
 
 #[test]
+fn cli_code_binary_applies_exact_edit_runs_verifier_and_replays_sqlite_state() {
+    let root = isolated_temp_dir("cli-code-binary");
+    fs::create_dir_all(&root).unwrap();
+    let target_dir = root.join("cargo-target");
+    build_cli_and_hostd_binaries(&target_dir);
+    let workspace = root.join("workspace");
+    fs::create_dir_all(workspace.join("src")).unwrap();
+    fs::write(
+        workspace.join("src").join("lib.rs"),
+        "pub fn answer() -> i32 { 1 }\n",
+    )
+    .unwrap();
+    let state_db = root.join("state").join("agent-os.sqlite");
+    fs::create_dir_all(state_db.parent().unwrap()).unwrap();
+    let model_program = compile_external_code_model(&root);
+    let test_program = env::current_exe().unwrap();
+
+    let output = Command::new(binary_path(&target_dir, "agent-os"))
+        .arg("code")
+        .arg("--workspace")
+        .arg(&workspace)
+        .arg("--task")
+        .arg("Change answer from one to two")
+        .arg("--file")
+        .arg("src/lib.rs")
+        .arg("--old")
+        .arg("1")
+        .arg("--new")
+        .arg("2")
+        .arg("--test-program")
+        .arg(&test_program)
+        .arg("--test-arg")
+        .arg("--help")
+        .arg("--bundle-output")
+        .arg("bundle/code.json")
+        .arg("--state-db")
+        .arg(&state_db)
+        .arg("--model-command")
+        .arg(&model_program)
+        .arg("--model-arg")
+        .arg(&test_program)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "agent-os code failed with status {}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["status"], "completed");
+    assert_eq!(value["runtime_status"], "Completed");
+    assert_eq!(value["runtime_job_status"], "completed");
+    assert_eq!(value["edit_plan_source"], "exact_prompt");
+    assert_eq!(value["planned_file"], "src/lib.rs");
+    assert_eq!(value["state_db"], state_db.to_string_lossy().to_string());
+    assert_eq!(
+        value["model_command"],
+        model_program.to_string_lossy().to_string()
+    );
+    assert_eq!(
+        fs::read_to_string(workspace.join("src").join("lib.rs")).unwrap(),
+        "pub fn answer() -> i32 { 2 }\n"
+    );
+    let changed_path = PathBuf::from(value["changed_path"].as_str().unwrap());
+    assert_eq!(changed_path, workspace.join("src").join("lib.rs"));
+    let bundle_path = workspace.join("bundle").join("code.json");
+    assert_eq!(
+        PathBuf::from(value["bundle_path"].as_str().unwrap()),
+        bundle_path
+    );
+    let bundle: Value = serde_json::from_slice(&fs::read(bundle_path).unwrap()).unwrap();
+    assert_eq!(bundle["root_task_id"], value["task_id"]);
+    assert!(!value["artifact_ids"].as_array().unwrap().is_empty());
+    assert!(value["evidence_ids"].as_array().unwrap().len() >= 2);
+    assert!(value["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|evidence| {
+            evidence["claim"] == "code binary model updated src/lib.rs through apply_patch"
+                && evidence["evidence_type"] == "diff_ref"
+        }));
+    assert!(value["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|evidence| {
+            evidence["claim"] == "code binary validation command ran"
+                && evidence["evidence_type"] == "command_log"
+                && evidence["metadata"]["output"]["exit_code"] == 0
+        }));
+
+    let replayed = Kernel::with_replayed_store(SqliteStore::open(&state_db).unwrap()).unwrap();
+    let replayed_state = replayed.state_snapshot().unwrap();
+    let task_id = value["task_id"].as_str().unwrap();
+    let thread_id = value["thread_id"].as_str().unwrap();
+    assert!(replayed_state.tasks.contains_key(task_id));
+    assert!(replayed_state.final_submissions.contains_key(task_id));
+    assert_eq!(
+        replayed_state.threads.get(thread_id).unwrap().status,
+        ThreadStatus::Completed
+    );
+
+    drop(replayed);
+    remove_dir_all_retry(&root);
+}
+
+#[test]
 fn cli_resume_binary_recovers_running_thread_and_completes_runtime_job_through_hostd() {
     let root = isolated_temp_dir("cli-resume-binary");
     fs::create_dir_all(&root).unwrap();
@@ -578,6 +688,106 @@ fn first_evidence_id(input: &str) -> String {
     assert!(
         output.status.success(),
         "rustc external model failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    model_program
+}
+
+fn compile_external_code_model(root: &Path) -> PathBuf {
+    let source_path = root.join("external_code_model.rs");
+    let model_program = root.join(format!(
+        "external_code_model{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    fs::write(
+        &source_path,
+        r##"
+use std::env;
+use std::io::{self, Read};
+
+fn main() {
+    let test_program = env::args().nth(1).expect("test program arg");
+    let mut input = String::new();
+    io::stdin().read_to_string(&mut input).unwrap();
+    match step_index(&input) {
+        0 => {
+            let workspace_root = json_string(&input, "workspace_root");
+            let patch = "*** Begin Patch\n*** Update File: src/lib.rs\n@@\n-pub fn answer() -> i32 { 1 }\n+pub fn answer() -> i32 { 2 }\n*** End Patch\n";
+            print!(
+                "{{\"actions\":[{{\"type\":\"tool_call\",\"tool_name\":\"apply_patch\",\"input\":{{\"workspace_root\":\"{}\",\"patch\":\"{}\"}},\"risk_level\":4,\"evidence_claim\":\"code binary model updated src/lib.rs through apply_patch\"}},{{\"type\":\"tool_call\",\"tool_name\":\"run_command\",\"input\":{{\"mode\":\"exec\",\"command\":\"{}\",\"args\":[\"--help\"],\"cwd\":\"{}\"}},\"risk_level\":4,\"evidence_claim\":\"code binary validation command ran\"}}],\"usage\":{{\"input_tokens\":1,\"output_tokens\":1,\"cost\":0.0}}}}",
+                workspace_root,
+                json_escape(patch),
+                json_escape(&test_program),
+                workspace_root
+            );
+        }
+        _ => {
+            let evidence_id = first_evidence_id(&input);
+            print!(
+                "{{\"actions\":[{{\"type\":\"final\",\"submission\":{{\"summary\":\"Code binary conformance completed.\",\"changed_artifacts\":[],\"evidence_map\":[{{\"claim\":\"src/lib.rs was edited and verifier ran\",\"evidence_refs\":[\"{}\"]}}],\"unverified_claims\":[],\"known_risks\":[],\"tests_run\":[\"agent-os code binary conformance\"],\"tests_not_run\":[],\"approvals\":[]}}}}],\"usage\":{{\"input_tokens\":1,\"output_tokens\":1,\"cost\":0.0}}}}",
+                evidence_id
+            );
+        }
+    }
+}
+
+fn step_index(input: &str) -> u32 {
+    let marker = "\"step_index\":";
+    let start = input.find(marker).unwrap() + marker.len();
+    let rest = &input[start..];
+    let end = rest
+        .find(|ch: char| !ch.is_ascii_digit())
+        .unwrap_or(rest.len());
+    rest[..end].parse().unwrap()
+}
+
+fn json_string(input: &str, field: &str) -> String {
+    let marker = format!("\"{}\":\"", field);
+    let start = input.find(&marker).unwrap() + marker.len();
+    let bytes = input.as_bytes();
+    let mut index = start;
+    let mut escaped = false;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if escaped {
+            escaped = false;
+        } else if byte == b'\\' {
+            escaped = true;
+        } else if byte == b'"' {
+            break;
+        }
+        index += 1;
+    }
+    input[start..index].to_string()
+}
+
+fn first_evidence_id(input: &str) -> String {
+    let marker = "\"evidence_ids\":[\"";
+    let start = input.find(marker).unwrap() + marker.len();
+    let rest = &input[start..];
+    let end = rest.find('"').unwrap();
+    rest[..end].to_string()
+}
+
+fn json_escape(input: &str) -> String {
+    input
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+}
+"##,
+    )
+    .unwrap();
+    let output = Command::new("rustc")
+        .arg(&source_path)
+        .arg("-o")
+        .arg(&model_program)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "rustc external code model failed\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
