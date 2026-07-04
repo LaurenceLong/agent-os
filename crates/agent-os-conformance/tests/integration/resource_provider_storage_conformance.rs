@@ -604,6 +604,104 @@ fn sqlite_store_replays_existing_events_and_continues_after_restart() {
 }
 
 #[test]
+fn sqlite_store_replays_context_memory_and_memento_after_restart() {
+    let db_path = env::temp_dir().join(format!(
+        "agent-os-conformance-context-restart-{}-{}.sqlite",
+        std::process::id(),
+        new_id("case_")
+    ));
+    let first = Kernel::with_replayed_store(SqliteStore::open(&db_path).unwrap()).unwrap();
+    let fx = fixture_with_kernel(first.clone());
+    let evidence = first
+        .attach_evidence(evidence_input(&fx, EvidenceType::SourceRef))
+        .unwrap();
+    let context = first
+        .load_context(LoadContextInput {
+            agent_id: fx.worker.agent_id.clone(),
+            task_id: fx.task.task_id.clone(),
+            loaded_refs: vec![evidence.evidence_id.clone()],
+            summary_artifact_id: None,
+            freshness: ContextFreshness::Fresh,
+            pollution_score: 0.0,
+            token_estimate: 128,
+        })
+        .unwrap();
+    let proposed_memory = first
+        .propose_memory_write(ProposeMemoryWriteInput {
+            namespace: "decisions".to_string(),
+            content: json!({"decision": "restart keeps context-affecting state"}),
+            created_by_agent_id: fx.worker.agent_id.clone(),
+            source_evidence_ids: vec![evidence.evidence_id.clone()],
+        })
+        .unwrap();
+    let active_memory = first
+        .commit_memory_write(CommitMemoryWriteInput {
+            memory_id: proposed_memory.memory_id.clone(),
+            approved_by: "conformance".to_string(),
+        })
+        .unwrap();
+    let memento = first
+        .create_memento(CreateMementoInput {
+            owner_agent_id: fx.worker.agent_id.clone(),
+            owner_thread_id: fx.worker.thread_id.clone(),
+            goal_id: fx.goal.goal_id.clone(),
+            task_id: fx.task.task_id.clone(),
+            anchor: MementoAnchor {
+                anchor_type: MementoAnchorType::Manual,
+                anchor_ref: Some("sqlite-context-restart".to_string()),
+                condition: None,
+            },
+            content: MementoContent {
+                title: "Restart context reminder".to_string(),
+                body: "SQLite replay must preserve owner context state.".to_string(),
+                checklist: Vec::new(),
+                structured: None,
+            },
+            projection: MementoProjection {
+                mode: MementoProjectionMode::OwnerContext,
+                priority: MementoPriority::High,
+                max_projection_count: Some(1),
+            },
+            links: MementoLinks::default(),
+            supersedes: None,
+            expires_at: None,
+        })
+        .unwrap();
+    let armed_memento = first
+        .arm_memento(&fx.worker.agent_id, &memento.memento_id)
+        .unwrap();
+    drop(fx);
+    drop(first);
+
+    let restarted = Kernel::with_replayed_store(SqliteStore::open(&db_path).unwrap()).unwrap();
+    let state = restarted.state_snapshot().unwrap();
+    assert!(state.context_snapshots.contains_key(&context.context_id));
+    let restarted_memory = state.memory_records.get(&active_memory.memory_id).unwrap();
+    assert_eq!(restarted_memory.status, MemoryStatus::Active);
+    assert_eq!(
+        restarted_memory.source_evidence_ids,
+        vec![evidence.evidence_id.clone()]
+    );
+    let restarted_memento = state.mementos.get(&armed_memento.memento_id).unwrap();
+    assert_eq!(restarted_memento.status, MementoStatus::Armed);
+    assert_eq!(
+        restarted_memento.owner_thread_id,
+        armed_memento.owner_thread_id
+    );
+    assert!(state.evidence.contains_key(&evidence.evidence_id));
+    let visible = restarted
+        .visible_mementos_for_thread(
+            &armed_memento.owner_thread_id,
+            &armed_memento.owner_thread_id,
+        )
+        .unwrap();
+    assert!(visible
+        .iter()
+        .any(|candidate| candidate.memento_id == armed_memento.memento_id));
+    let _ = fs::remove_file(db_path);
+}
+
+#[test]
 fn sqlite_idempotency_results_persist_across_restart_without_polluting_event_log() {
     let db_path = env::temp_dir().join(format!(
         "agent-os-conformance-idempotency-{}-{}.sqlite",
