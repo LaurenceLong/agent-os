@@ -1,4 +1,5 @@
 use agent_os_app_server::AppServer;
+use agent_os_config::AGENT_OS_HOME_ENV;
 use agent_os_host::AgentOsHost;
 use agent_os_sys::{
     app_protocol_json_schema, app_protocol_spec, app_protocol_typescript, app_protocol_version,
@@ -7,7 +8,13 @@ use agent_os_sys::{
     SecurityLevel, StatsQuery, StatsSnapshot,
 };
 use serde_json::json;
-use std::collections::HashSet;
+use std::{
+    collections::HashSet,
+    env, fs,
+    path::PathBuf,
+    sync::{Mutex, OnceLock},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 #[test]
 fn app_protocol_envelopes_are_explicitly_versioned() {
@@ -261,6 +268,165 @@ fn app_server_jsonl_host_path_updates_kernel_projection_and_notifications() {
         .any(|turn| turn.turn_id == turn_id));
 }
 
+#[test]
+fn app_server_config_model_and_provider_projection_uses_config_crate_contract() {
+    let _guard = config_env_lock().lock().unwrap();
+    let previous_home = env::var_os(AGENT_OS_HOME_ENV);
+    let root = isolated_temp_dir("app-config-provider");
+    let home = root.join("home");
+    let workspace = root.join("workspace");
+    fs::create_dir_all(home.join("config")).unwrap();
+    fs::create_dir_all(workspace.join(".agent-os")).unwrap();
+    fs::write(
+        home.join("config").join("config.json"),
+        serde_json::to_string_pretty(&json!({
+            "model": "openai/global-model",
+            "small_model": "openai/global-model",
+            "provider": {
+                "openai": {
+                    "api_key": "global-secret-key",
+                    "endpoint": "openai_responses",
+                    "options": {
+                        "base_url": "https://provider.example/v1",
+                        "timeout_ms": 45000
+                    },
+                    "models": {
+                        "global-model": {
+                            "name": "gpt-global",
+                            "limit": {"context": 128000, "input": 120000, "output": 4096},
+                            "capabilities": {
+                                "streaming": true,
+                                "tool_calling": true,
+                                "reasoning": false,
+                                "temperature": true,
+                                "image_input": false,
+                                "structured_output": true
+                            }
+                        }
+                    }
+                }
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        workspace.join(".agent-os").join("config.json"),
+        serde_json::to_string_pretty(&json!({
+            "model": "openai/project-model",
+            "provider": {
+                "openai": {
+                    "models": {
+                        "project-model": {
+                            "name": "gpt-project",
+                            "options": {"effort": "medium"},
+                            "limit": {"context": 64000, "input": 60000, "output": 2048},
+                            "capabilities": {
+                                "streaming": true,
+                                "tool_calling": true,
+                                "reasoning": true,
+                                "temperature": false,
+                                "image_input": true,
+                                "structured_output": true
+                            }
+                        }
+                    }
+                }
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    env::set_var(AGENT_OS_HOME_ENV, &home);
+
+    let result = std::panic::catch_unwind(|| {
+        let mut server = initialized_jsonl_server();
+        let workspace = workspace.to_string_lossy().to_string();
+
+        let config = accepted_body(jsonl_request(
+            &mut server,
+            "req_config_read",
+            AppRequest::ConfigRead {
+                workspace: Some(workspace.clone()),
+            },
+        ));
+        assert_eq!(config["config"]["model"], "openai/project-model");
+        assert_eq!(config["config"]["small_model"], "openai/global-model");
+        assert_eq!(
+            config["config"]["providers"][0]["credential"]["redacted"],
+            true
+        );
+        assert_eq!(
+            config["config"]["providers"][0]["credential"]["name"],
+            "provider/openai/api_key"
+        );
+        assert!(!serde_json::to_string(&config)
+            .unwrap()
+            .contains("global-secret-key"));
+        assert_eq!(
+            config["config"]["providers"][0]["base_url"],
+            "https://provider.example/v1"
+        );
+        assert_eq!(config["config"]["project"]["slug"], "workspace");
+
+        let models = accepted_body(jsonl_request(
+            &mut server,
+            "req_model_list",
+            AppRequest::ModelList {
+                workspace: Some(workspace.clone()),
+            },
+        ));
+        let model_ids = models["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|model| model["id"].as_str().unwrap())
+            .collect::<HashSet<_>>();
+        assert!(model_ids.contains("openai/global-model"));
+        assert!(model_ids.contains("openai/project-model"));
+
+        let capabilities = accepted_body(jsonl_request(
+            &mut server,
+            "req_provider_capabilities",
+            AppRequest::ProviderCapabilitiesRead {
+                workspace: Some(workspace),
+                provider_id: Some("openai".to_string()),
+            },
+        ));
+        let project_model = capabilities["providers"][0]["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|model| model["id"] == "openai/project-model")
+            .unwrap();
+        assert_eq!(project_model["provider_model_name"], "gpt-project");
+        assert_eq!(project_model["endpoint"], "open_ai_responses");
+        assert_eq!(project_model["limit"]["context"], 64000);
+        assert_eq!(project_model["options"]["effort"], "medium");
+        assert_eq!(project_model["capabilities"]["reasoning"], true);
+        assert_eq!(project_model["capabilities"]["image_input"], true);
+
+        let rejected = jsonl_request(
+            &mut server,
+            "req_missing_provider",
+            AppRequest::ProviderCapabilitiesRead {
+                workspace: None,
+                provider_id: Some("missing".to_string()),
+            },
+        );
+        assert!(matches!(
+            rejected.response,
+            AppResponse::Rejected { code, .. } if code == "not_found"
+        ));
+    });
+
+    restore_agent_os_home(previous_home);
+    fs::remove_dir_all(root).unwrap();
+    if let Err(payload) = result {
+        std::panic::resume_unwind(payload);
+    }
+}
+
 fn human_client() -> ClientConnection {
     ClientConnection {
         client_id: "human_1".to_string(),
@@ -269,6 +435,13 @@ fn human_client() -> ClientConnection {
         authority: SecurityLevel::HUMAN_ROOT,
         connected_at: "2026-07-03T00:00:00Z".to_string(),
     }
+}
+
+fn initialized_jsonl_server() -> AppServer<AgentOsHost> {
+    let mut server = AppServer::new(AgentOsHost::in_memory());
+    let initialized = jsonl_request(&mut server, "req_init", AppRequest::Initialize);
+    assert!(matches!(initialized.response, AppResponse::Accepted(_)));
+    server
 }
 
 fn jsonl_request(
@@ -296,5 +469,28 @@ fn accepted_body(envelope: AppResponseEnvelope) -> serde_json::Value {
         AppResponse::Rejected { code, message } => {
             panic!("app request rejected: {code}: {message}");
         }
+    }
+}
+
+fn config_env_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn isolated_temp_dir(label: &str) -> PathBuf {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    env::temp_dir().join(format!(
+        "agent-os-conformance-{label}-{}-{unique}",
+        std::process::id()
+    ))
+}
+
+fn restore_agent_os_home(previous_home: Option<std::ffi::OsString>) {
+    match previous_home {
+        Some(value) => env::set_var(AGENT_OS_HOME_ENV, value),
+        None => env::remove_var(AGENT_OS_HOME_ENV),
     }
 }
