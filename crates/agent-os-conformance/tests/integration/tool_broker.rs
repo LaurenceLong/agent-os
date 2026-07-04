@@ -871,6 +871,110 @@ fn agent_control_lifecycle_failures_are_model_visible_through_broker() {
 }
 
 #[test]
+fn agent_control_kill_failure_uses_approved_high_risk_broker_path() {
+    let fx = fixture();
+    let supervisor = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_supervisor".to_string(),
+            owner: "integration-test".to_string(),
+            goal: "Exercise approved high-risk kill failure".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: Vec::new(),
+        })
+        .unwrap();
+    let child = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_producer".to_string(),
+            owner: "integration-test".to_string(),
+            goal: "High-risk kill failure target".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: Some(supervisor.thread_id.clone()),
+            workspace_roots: Vec::new(),
+        })
+        .unwrap();
+    let approval = fx
+        .kernel
+        .request_approval(RequestApprovalInput {
+            goal_id: fx.goal.goal_id.clone(),
+            task_id: Some(fx.task.task_id.clone()),
+            requested_by_agent_id: supervisor.agent_id.clone(),
+            approval_type: ApprovalType::Human,
+            scope: ApprovalScope {
+                syscall_types: vec!["tool.invoke".to_string()],
+                resource_scopes: vec![json!("tool:*")],
+                risk_ceiling: 6,
+                goal_id: fx.goal.goal_id.clone(),
+                task_id: Some(fx.task.task_id.clone()),
+            },
+            risk_level: 6,
+            expires_at: None,
+        })
+        .unwrap();
+    fx.kernel
+        .record_approval(RecordApprovalInput {
+            approval_id: approval.approval_id.clone(),
+            status: ApprovalStatus::Approved,
+            decision_by: "integration-test".to_string(),
+            decision_reason: Some("approve high-risk broker kill failure test".to_string()),
+        })
+        .unwrap();
+    let capability = fx
+        .kernel
+        .grant_capability(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            6,
+            Some(approval.approval_id),
+        )
+        .unwrap();
+    let tools = ToolInvoker {
+        kernel: &fx.kernel,
+        agent: &supervisor,
+        task_id: &fx.task.task_id,
+        capability: &capability,
+    };
+
+    let invocation = tools.invoke(
+        6,
+        "agent_control",
+        json!({
+            "action": "kill",
+            "thread_id": child.thread_id.clone(),
+            "payload": {"process_id": "proc_missing_for_kill_broker_test"}
+        }),
+        None,
+    );
+
+    assert_eq!(invocation.status, ToolCallStatus::Failed);
+    assert!(invocation.evidence_ids.is_empty());
+    let output = invocation.output.as_ref().unwrap();
+    assert_eq!(output["status"], "failed");
+    assert_eq!(output["stage"], "driver");
+    assert!(output["error"]
+        .as_str()
+        .unwrap()
+        .contains("process session proc_missing_for_kill_broker_test"));
+    let child_after_failure = fx
+        .kernel
+        .state_snapshot()
+        .unwrap()
+        .threads
+        .get(&child.thread_id)
+        .cloned()
+        .unwrap();
+    assert_eq!(child_after_failure.status, child.status);
+}
+
+#[test]
 fn workspace_discovery_tools_cover_parameter_semantics_through_broker() {
     let fx = fixture();
     let workspace = temp_workspace("agent-os-integration-discovery-params");
