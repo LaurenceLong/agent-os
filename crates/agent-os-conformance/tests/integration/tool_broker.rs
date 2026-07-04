@@ -703,6 +703,174 @@ fn agent_control_permission_decision_failures_are_model_visible_through_broker()
 }
 
 #[test]
+fn agent_control_lifecycle_failures_are_model_visible_through_broker() {
+    let fx = fixture();
+    let supervisor = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_supervisor".to_string(),
+            owner: "integration-test".to_string(),
+            goal: "Exercise lifecycle failure outputs".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: Vec::new(),
+        })
+        .unwrap();
+    let child = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_producer".to_string(),
+            owner: "integration-test".to_string(),
+            goal: "Lifecycle failure target".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: Some(supervisor.thread_id.clone()),
+            workspace_roots: Vec::new(),
+        })
+        .unwrap();
+    let stranger_child = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_producer".to_string(),
+            owner: "integration-test".to_string(),
+            goal: "Not supervised by the requester".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: Vec::new(),
+        })
+        .unwrap();
+    let capability = fx
+        .kernel
+        .grant_capability(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            4,
+            None,
+        )
+        .unwrap();
+    let tools = ToolInvoker {
+        kernel: &fx.kernel,
+        agent: &supervisor,
+        task_id: &fx.task.task_id,
+        capability: &capability,
+    };
+    let assert_failed_with = |invocation: &ToolInvocation, expected: &str| {
+        assert_eq!(invocation.status, ToolCallStatus::Failed);
+        assert!(invocation.evidence_ids.is_empty());
+        let output = invocation.output.as_ref().unwrap();
+        assert_eq!(output["status"], "failed");
+        assert_eq!(output["stage"], "driver");
+        assert!(
+            output["error"].as_str().unwrap().contains(expected),
+            "expected error containing {expected:?}, got {output:?}"
+        );
+    };
+
+    let missing_target = tools.invoke(
+        1,
+        "agent_control",
+        json!({
+            "action": "output",
+            "payload": {"limit": 1}
+        }),
+        None,
+    );
+    assert_failed_with(
+        &missing_target,
+        "agent_control action requires agent_id or thread_id",
+    );
+
+    let stranger_target = tools.invoke(
+        1,
+        "agent_control",
+        json!({
+            "action": "status",
+            "thread_id": stranger_child.thread_id.clone()
+        }),
+        None,
+    );
+    assert_failed_with(
+        &stranger_target,
+        "agent_control can only target the requester thread or a direct child",
+    );
+
+    let missing_hook_prompt = tools.invoke(
+        4,
+        "agent_control",
+        json!({
+            "action": "set_hook",
+            "thread_id": child.thread_id.clone(),
+            "payload": {"interval_seconds": 30}
+        }),
+        None,
+    );
+    assert_failed_with(&missing_hook_prompt, "missing required field prompt");
+
+    let missing_timeout = tools.invoke(
+        4,
+        "agent_control",
+        json!({
+            "action": "set_timeout",
+            "thread_id": child.thread_id.clone(),
+            "payload": {}
+        }),
+        None,
+    );
+    assert_failed_with(
+        &missing_timeout,
+        "set_timeout requires timeout_ms or timeout_seconds",
+    );
+
+    let unknown_tool_output = tools.invoke(
+        1,
+        "agent_control",
+        json!({
+            "action": "output",
+            "thread_id": child.thread_id.clone(),
+            "payload": {"tool_call_id": "call_missing_for_broker_test"}
+        }),
+        None,
+    );
+    assert_failed_with(
+        &unknown_tool_output,
+        "tool call call_missing_for_broker_test",
+    );
+
+    for (action, risk) in [("output", 1), ("send", 4), ("stop", 4)] {
+        let invocation = tools.invoke(
+            risk,
+            "agent_control",
+            json!({
+                "action": action,
+                "thread_id": child.thread_id.clone(),
+                "payload": {"process_id": format!("proc_missing_for_{action}_broker_test")}
+            }),
+            None,
+        );
+        assert_failed_with(
+            &invocation,
+            &format!("process session proc_missing_for_{action}_broker_test"),
+        );
+    }
+
+    let state = fx.kernel.state_snapshot().unwrap();
+    let child_after_failures = state.threads.get(&child.thread_id).unwrap();
+    assert_eq!(child_after_failures.status, child.status);
+    assert_eq!(child_after_failures.budgets.wall_time_budget_ms, None);
+    assert!(state
+        .agent_hooks
+        .values()
+        .all(|hook| hook.thread_id != child.thread_id));
+}
+
+#[test]
 fn workspace_discovery_tools_cover_parameter_semantics_through_broker() {
     let fx = fixture();
     let workspace = temp_workspace("agent-os-integration-discovery-params");
