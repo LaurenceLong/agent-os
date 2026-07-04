@@ -864,6 +864,113 @@ fn agent_control_permission_decision_failures_are_model_visible_through_broker()
 }
 
 #[test]
+fn agent_control_start_parameter_failures_do_not_create_children_or_commands() {
+    let fx = fixture();
+    let supervisor = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_supervisor".to_string(),
+            owner: "integration-test".to_string(),
+            goal: "Exercise agent_control start parameter failures".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: Vec::new(),
+        })
+        .unwrap();
+    let capability = fx
+        .kernel
+        .grant_capability(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            4,
+            None,
+        )
+        .unwrap();
+    let before = fx.kernel.state_snapshot().unwrap();
+    let before_threads = before.threads.len();
+    let before_commands = before.agent_control_commands.len();
+
+    for (input, expected_stage, expected_error) in [
+        (
+            json!({"action": "restart"}),
+            "input_schema",
+            "tool.input.action does not match any enum value",
+        ),
+        (
+            json!({"action": "start", "payload": "start child"}),
+            "input_schema",
+            "tool.input.payload expected object",
+        ),
+        (
+            json!({"action": "start", "payload": {}}),
+            "driver",
+            "missing required field goal",
+        ),
+        (
+            json!({
+                "action": "start",
+                "payload": {
+                    "goal": "bad criteria",
+                    "success_criteria": ["ok", 7]
+                }
+            }),
+            "driver",
+            "success_criteria entries must be strings",
+        ),
+        (
+            json!({
+                "action": "start",
+                "payload": {
+                    "goal": "bad roots",
+                    "workspace_roots": "workspace"
+                }
+            }),
+            "driver",
+            "workspace_roots must be an array",
+        ),
+    ] {
+        let invocation = fx
+            .kernel
+            .invoke_tool(
+                &supervisor.agent_id,
+                &fx.task.task_id,
+                &supervisor.session_id,
+                capability.capability_id.clone(),
+                4,
+                ToolInvokeInput {
+                    tool_name: "agent_control".to_string(),
+                    input,
+                    evidence_claim: Some(
+                        "agent_control start parameter failure was model-visible".to_string(),
+                    ),
+                },
+            )
+            .unwrap();
+        assert_eq!(invocation.status, ToolCallStatus::Failed);
+        assert!(invocation.evidence_ids.is_empty());
+        let output = invocation.output.as_ref().unwrap();
+        assert_eq!(output["status"], "failed");
+        let error = output["error"].as_str().unwrap_or_default();
+        assert_eq!(
+            output["stage"], expected_stage,
+            "expected stage {expected_stage:?} for {expected_error:?}, got {error:?}"
+        );
+        assert!(
+            error.contains(expected_error),
+            "expected {expected_error:?}, got {error:?}"
+        );
+
+        let state = fx.kernel.state_snapshot().unwrap();
+        assert_eq!(state.threads.len(), before_threads);
+        assert_eq!(state.agent_control_commands.len(), before_commands);
+    }
+}
+
+#[test]
 fn agent_control_lifecycle_failures_are_model_visible_through_broker() {
     let fx = fixture();
     let supervisor = fx
