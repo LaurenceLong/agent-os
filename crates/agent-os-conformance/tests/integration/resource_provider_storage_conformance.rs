@@ -1,4 +1,5 @@
 use crate::common::*;
+use agent_os_store::{EventStore, IdempotencyStore};
 use agent_os_store_sqlite::SqliteStore;
 use std::{env, fs};
 
@@ -599,5 +600,57 @@ fn sqlite_store_replays_existing_events_and_continues_after_restart() {
     let replayed_state = replayed_again.state_snapshot().unwrap();
     assert!(replayed_state.goals.contains_key(&first_goal_id));
     assert!(replayed_state.goals.contains_key(&second_goal.goal_id));
+    let _ = fs::remove_file(db_path);
+}
+
+#[test]
+fn sqlite_idempotency_results_persist_across_restart_without_polluting_event_log() {
+    let db_path = env::temp_dir().join(format!(
+        "agent-os-conformance-idempotency-{}-{}.sqlite",
+        std::process::id(),
+        new_id("case_")
+    ));
+    let store = SqliteStore::open(&db_path).unwrap();
+    let accepted = SyscallResult::accepted(
+        "syscall_accept_1",
+        vec!["event_accept_1".to_string()],
+        json!({"status": "accepted"}),
+    );
+    let rejected = SyscallResult::rejected("syscall_reject_1", "risk ceiling exceeded");
+
+    store
+        .put_syscall_result("idem-accept".to_string(), accepted.clone())
+        .unwrap();
+    store
+        .put_syscall_result("idem-reject".to_string(), rejected.clone())
+        .unwrap();
+    assert!(matches!(
+        store.put_syscall_result("idem-accept".to_string(), accepted.clone()),
+        Err(AgentOsError::IdempotencyConflict(_))
+    ));
+    assert!(store.all_events().unwrap().is_empty());
+    drop(store);
+
+    let reopened = SqliteStore::open(&db_path).unwrap();
+    let accepted_after_restart = reopened.get_syscall_result("idem-accept").unwrap().unwrap();
+    assert_eq!(accepted_after_restart.syscall_id, accepted.syscall_id);
+    assert!(accepted_after_restart.accepted);
+    assert_eq!(accepted_after_restart.event_ids, accepted.event_ids);
+    assert_eq!(accepted_after_restart.output["status"], "accepted");
+
+    let rejected_after_restart = reopened.get_syscall_result("idem-reject").unwrap().unwrap();
+    assert_eq!(rejected_after_restart.syscall_id, rejected.syscall_id);
+    assert!(!rejected_after_restart.accepted);
+    assert_eq!(
+        rejected_after_restart.error.as_deref(),
+        Some("risk ceiling exceeded")
+    );
+    assert!(reopened
+        .get_syscall_result("idem-missing")
+        .unwrap()
+        .is_none());
+    assert!(reopened.all_events().unwrap().is_empty());
+
+    drop(reopened);
     let _ = fs::remove_file(db_path);
 }
