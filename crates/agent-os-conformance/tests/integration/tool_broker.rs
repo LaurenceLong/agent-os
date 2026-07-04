@@ -419,6 +419,290 @@ fn request_permissions_requires_direct_parent_through_broker() {
 }
 
 #[test]
+fn agent_control_permission_decision_failures_are_model_visible_through_broker() {
+    let fx = fixture();
+    let supervisor = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_supervisor".to_string(),
+            owner: "integration-test".to_string(),
+            goal: "Exercise permission decision failures".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: Vec::new(),
+        })
+        .unwrap();
+    let child = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_producer".to_string(),
+            owner: "integration-test".to_string(),
+            goal: "Request permission decisions".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: Some(supervisor.thread_id.clone()),
+            workspace_roots: Vec::new(),
+        })
+        .unwrap();
+    let supervisor_capability = fx
+        .kernel
+        .grant_capability(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            4,
+            None,
+        )
+        .unwrap();
+    let child_capability = fx
+        .kernel
+        .grant_capability(
+            &child.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            1,
+            None,
+        )
+        .unwrap();
+    let parent_tools = ToolInvoker {
+        kernel: &fx.kernel,
+        agent: &supervisor,
+        task_id: &fx.task.task_id,
+        capability: &supervisor_capability,
+    };
+    let child_tools = ToolInvoker {
+        kernel: &fx.kernel,
+        agent: &child,
+        task_id: &fx.task.task_id,
+        capability: &child_capability,
+    };
+    let read_file_permission = || {
+        json!({
+            "max_risk_level": 1,
+            "allowed_syscalls": ["tool.invoke"],
+            "resource_scopes": ["tool:read_file"],
+            "allowed_tool_names": ["read_file"],
+            "allowed_tool_driver_classes": ["filesystem"],
+            "approval_required_above": 1,
+            "requires_evidence_for": ["read_file"]
+        })
+    };
+    let request_permission = |reason: &str| {
+        let invocation = child_tools.invoke(
+            1,
+            "request_permissions",
+            json!({
+                "reason": reason,
+                "scope": "session",
+                "permissions": read_file_permission()
+            }),
+            None,
+        );
+        assert_eq!(invocation.status, ToolCallStatus::Completed);
+        invocation.output.as_ref().unwrap()["permission_request_id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let assert_failed_with = |invocation: &ToolInvocation, expected: &str| {
+        assert_eq!(invocation.status, ToolCallStatus::Failed);
+        assert!(invocation.evidence_ids.is_empty());
+        let output = invocation.output.as_ref().unwrap();
+        assert_eq!(output["status"], "failed");
+        assert_eq!(output["stage"], "driver");
+        assert!(
+            output["error"].as_str().unwrap().contains(expected),
+            "expected error containing {expected:?}, got {output:?}"
+        );
+    };
+    let assert_pending_without_grants = |request_id: &str| {
+        let state = fx.kernel.state_snapshot().unwrap();
+        assert_eq!(
+            state.permission_requests[request_id].status,
+            PermissionRequestStatus::Pending
+        );
+        assert!(state.permission_grants.is_empty());
+    };
+
+    let missing_permissions_request_id =
+        request_permission("exercise missing approval permissions");
+    let missing_permissions = parent_tools.invoke(
+        4,
+        "agent_control",
+        json!({
+            "action": "approve_permission",
+            "payload": {
+                "permission_request_id": missing_permissions_request_id
+            }
+        }),
+        None,
+    );
+    assert_failed_with(
+        &missing_permissions,
+        "approve_permission requires payload.permissions",
+    );
+    assert_pending_without_grants(&missing_permissions_request_id);
+
+    let high_risk_request_id = request_permission("exercise high-risk approval rejection");
+    let high_risk = parent_tools.invoke(
+        4,
+        "agent_control",
+        json!({
+            "action": "approve_permission",
+            "payload": {
+                "permission_request_id": high_risk_request_id,
+                "permissions": {
+                    "max_risk_level": 5,
+                    "allowed_syscalls": ["tool.invoke"],
+                    "resource_scopes": ["tool:read_file"],
+                    "allowed_tool_names": ["read_file"],
+                    "allowed_tool_driver_classes": ["filesystem"],
+                    "approval_required_above": 5,
+                    "requires_evidence_for": ["read_file"]
+                }
+            }
+        }),
+        None,
+    );
+    assert_failed_with(&high_risk, "approve_permission requires risk level 5");
+    assert_pending_without_grants(&high_risk_request_id);
+
+    let out_of_scope_request_id = request_permission("exercise out-of-scope approval rejection");
+    let out_of_scope = parent_tools.invoke(
+        4,
+        "agent_control",
+        json!({
+            "action": "approve_permission",
+            "payload": {
+                "permission_request_id": out_of_scope_request_id,
+                "permissions": {
+                    "max_risk_level": 1,
+                    "allowed_syscalls": ["tool.invoke"],
+                    "resource_scopes": ["tool:run_command"],
+                    "allowed_tool_names": ["run_command"],
+                    "allowed_tool_driver_classes": ["shell"],
+                    "approval_required_above": 1,
+                    "requires_evidence_for": ["run_command"]
+                }
+            }
+        }),
+        None,
+    );
+    assert_failed_with(
+        &out_of_scope,
+        "granted permissions must be a subset of requested permissions",
+    );
+    assert_pending_without_grants(&out_of_scope_request_id);
+
+    let stranger = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_supervisor".to_string(),
+            owner: "integration-test".to_string(),
+            goal: "Attempt non-parent permission response".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: Vec::new(),
+        })
+        .unwrap();
+    let stranger_capability = fx
+        .kernel
+        .grant_capability(
+            &stranger.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            4,
+            None,
+        )
+        .unwrap();
+    let stranger_tools = ToolInvoker {
+        kernel: &fx.kernel,
+        agent: &stranger,
+        task_id: &fx.task.task_id,
+        capability: &stranger_capability,
+    };
+    let non_parent_request_id = request_permission("exercise non-parent approval rejection");
+    let non_parent = stranger_tools.invoke(
+        4,
+        "agent_control",
+        json!({
+            "action": "deny_permission",
+            "payload": {
+                "permission_request_id": non_parent_request_id,
+                "decision_reason": "not the direct parent"
+            }
+        }),
+        None,
+    );
+    assert_failed_with(
+        &non_parent,
+        "permission request can only be answered by the direct parent",
+    );
+    assert_pending_without_grants(&non_parent_request_id);
+
+    let unknown_request = parent_tools.invoke(
+        4,
+        "agent_control",
+        json!({
+            "action": "deny_permission",
+            "payload": {
+                "permission_request_id": "permreq_missing_for_broker_test"
+            }
+        }),
+        None,
+    );
+    assert_failed_with(
+        &unknown_request,
+        "permission request permreq_missing_for_broker_test",
+    );
+
+    let approved_request_id = request_permission("exercise repeated approval rejection");
+    let approved = parent_tools.invoke(
+        4,
+        "agent_control",
+        json!({
+            "action": "approve_permission",
+            "payload": {
+                "permission_request_id": approved_request_id,
+                "permissions": read_file_permission()
+            }
+        }),
+        None,
+    );
+    assert_eq!(approved.status, ToolCallStatus::Completed);
+    let repeated_approval = parent_tools.invoke(
+        4,
+        "agent_control",
+        json!({
+            "action": "approve_permission",
+            "payload": {
+                "permission_request_id": approved_request_id,
+                "permissions": read_file_permission()
+            }
+        }),
+        None,
+    );
+    assert_failed_with(
+        &repeated_approval,
+        "permission request Approved -> response",
+    );
+    let state = fx.kernel.state_snapshot().unwrap();
+    assert_eq!(
+        state.permission_requests[&approved_request_id].status,
+        PermissionRequestStatus::Approved
+    );
+    assert_eq!(state.permission_grants.len(), 1);
+}
+
+#[test]
 fn workspace_discovery_tools_cover_parameter_semantics_through_broker() {
     let fx = fixture();
     let workspace = temp_workspace("agent-os-integration-discovery-params");
