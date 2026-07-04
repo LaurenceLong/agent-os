@@ -1380,6 +1380,129 @@ fn workspace_discovery_tools_cover_parameter_semantics_through_broker() {
 }
 
 #[test]
+fn workspace_discovery_tools_report_parameter_failures_through_broker() {
+    let fx = fixture();
+    let workspace = temp_workspace("agent-os-integration-discovery-param-failures");
+    fs::create_dir_all(&workspace).unwrap();
+
+    let worker = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_producer".to_string(),
+            owner: "integration-test".to_string(),
+            goal: "Exercise discovery tool parameter failures".to_string(),
+            success_criteria: vec!["parameter failures are model-visible".to_string()],
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: vec![workspace.to_string_lossy().to_string()],
+        })
+        .unwrap();
+    attach_workspace_for_agent(&fx.kernel, &worker, &fx.task.task_id, &workspace);
+    let capability = fx
+        .kernel
+        .grant_capability(
+            &worker.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            1,
+            None,
+        )
+        .unwrap();
+    let tools = ToolInvoker {
+        kernel: &fx.kernel,
+        agent: &worker,
+        task_id: &fx.task.task_id,
+        capability: &capability,
+    };
+
+    for (tool_name, input, expected_error) in [
+        (
+            "glob_files",
+            json!({"workspace_root": workspace.to_string_lossy()}),
+            "tool.input missing required field pattern",
+        ),
+        (
+            "glob_files",
+            json!({"workspace_root": workspace.to_string_lossy(), "pattern": 7}),
+            "tool.input.pattern expected string",
+        ),
+        (
+            "glob_files",
+            json!({"workspace_root": workspace.to_string_lossy(), "pattern": "*", "path": 7}),
+            "tool.input.path expected string",
+        ),
+        (
+            "glob_files",
+            json!({"workspace_root": workspace.to_string_lossy(), "pattern": "*", "offset": -1}),
+            "tool.input.offset must be >= 0",
+        ),
+        (
+            "glob_files",
+            json!({"workspace_root": workspace.to_string_lossy(), "pattern": "*", "limit": 201}),
+            "tool.input.limit must be <= 200",
+        ),
+        (
+            "glob_files",
+            json!({"pattern": "*"}),
+            "tool.input missing required field workspace_root",
+        ),
+        (
+            "grep_files",
+            json!({"workspace_root": workspace.to_string_lossy()}),
+            "tool.input missing required field pattern",
+        ),
+        (
+            "grep_files",
+            json!({"workspace_root": workspace.to_string_lossy(), "pattern": 7}),
+            "tool.input.pattern expected string",
+        ),
+        (
+            "grep_files",
+            json!({"workspace_root": workspace.to_string_lossy(), "pattern": "needle", "include": 7}),
+            "tool.input.include expected string",
+        ),
+        (
+            "grep_files",
+            json!({"workspace_root": workspace.to_string_lossy(), "pattern": "needle", "case_sensitive": "yes"}),
+            "tool.input.case_sensitive expected boolean",
+        ),
+        (
+            "grep_files",
+            json!({"workspace_root": workspace.to_string_lossy(), "pattern": "needle", "limit": 0}),
+            "tool.input.limit must be >= 1",
+        ),
+        (
+            "grep_files",
+            json!({"pattern": "needle"}),
+            "tool.input missing required field workspace_root",
+        ),
+    ] {
+        let invocation = tools.invoke(
+            1,
+            tool_name,
+            input,
+            Some("workspace discovery parameter failure was reported"),
+        );
+        assert_eq!(invocation.status, ToolCallStatus::Failed);
+        assert!(invocation.evidence_ids.is_empty());
+        let output = invocation.output.as_ref().unwrap();
+        assert_eq!(output["status"], "failed");
+        assert_eq!(output["stage"], "input_schema");
+        let error = output["error"].as_str().unwrap_or_default();
+        assert!(
+            error.contains(expected_error),
+            "{tool_name}: expected {expected_error:?}, got {error:?}"
+        );
+    }
+
+    assert!(fx.kernel.state_snapshot().unwrap().evidence.is_empty());
+
+    let _ = fs::remove_dir_all(workspace);
+}
+
+#[test]
 fn apply_patch_rejects_multiple_file_operations() {
     let fx = fixture();
     let workspace = temp_workspace("agent-os-integration-apply-patch-one-op");
