@@ -1,6 +1,9 @@
 use super::*;
 use crate::ModelTurnResponse;
-use agent_os_kernel::{RegisterGoalInput, SpawnAgentInput, SpawnTaskInput};
+use agent_os_kernel::{
+    CompactContextInput, ForkThreadInput, LoadContextInput, RegisterGoalInput, RollbackThreadInput,
+    SpawnAgentInput, SpawnTaskInput,
+};
 use std::{
     collections::VecDeque,
     env, fs,
@@ -2427,6 +2430,241 @@ fn runtime_projects_failed_run_command_results_for_model_recovery() {
 }
 
 #[test]
+fn runtime_context_projection_is_scoped_to_current_task_and_thread() {
+    struct AssertsScopedContext {
+        calls: u8,
+        current_context_id: String,
+        sibling_context_id: String,
+        current_compaction_id: String,
+        sibling_compaction_id: String,
+        current_fork_id: String,
+        sibling_fork_id: String,
+        current_rollback_id: String,
+        sibling_rollback_id: String,
+    }
+
+    impl ModelClient for AssertsScopedContext {
+        fn next(&mut self, request: &ModelTurnRequest) -> AgentOsResult<ModelTurnResponse> {
+            if self.calls == 0 {
+                self.calls += 1;
+                assert!(request
+                    .context
+                    .context_snapshots
+                    .iter()
+                    .any(|snapshot| snapshot.context_id == self.current_context_id));
+                assert!(!request
+                    .context
+                    .context_snapshots
+                    .iter()
+                    .any(|snapshot| snapshot.context_id == self.sibling_context_id));
+                assert!(request
+                    .context
+                    .context_compactions
+                    .iter()
+                    .any(|compaction| compaction.compaction_id == self.current_compaction_id));
+                assert!(!request
+                    .context
+                    .context_compactions
+                    .iter()
+                    .any(|compaction| compaction.compaction_id == self.sibling_compaction_id));
+                assert!(request
+                    .context
+                    .thread_forks
+                    .iter()
+                    .any(|fork| fork.fork_id == self.current_fork_id));
+                assert!(!request
+                    .context
+                    .thread_forks
+                    .iter()
+                    .any(|fork| fork.fork_id == self.sibling_fork_id));
+                assert!(request
+                    .context
+                    .thread_rollbacks
+                    .iter()
+                    .any(|rollback| rollback.rollback_id == self.current_rollback_id));
+                assert!(!request
+                    .context
+                    .thread_rollbacks
+                    .iter()
+                    .any(|rollback| rollback.rollback_id == self.sibling_rollback_id));
+                return Ok(ModelTurnResponse::single(ModelAction::ToolCall(
+                    ToolAction::new(
+                        "record_evidence",
+                        json!({
+                            "evidence_type": "runtime_trace",
+                            "claim": "scoped context projection was observed",
+                            "metadata": {"scope": "current task and thread only"}
+                        }),
+                        2,
+                        Some("scoped context projection was observed".to_string()),
+                    ),
+                )));
+            }
+
+            let evidence_id = request
+                .context
+                .tool_results
+                .iter()
+                .find(|result| result.tool_name == "record_evidence")
+                .and_then(|result| result.output.as_ref())
+                .and_then(|output| output.get("evidence_id"))
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    AgentOsError::Validation(
+                        "record_evidence result missing evidence_id".to_string(),
+                    )
+                })?;
+
+            Ok(ModelTurnResponse::single(ModelAction::Final {
+                submission: FinalSubmission {
+                    summary: "Scoped context projection verified.".to_string(),
+                    changed_artifacts: Vec::new(),
+                    evidence_map: vec![EvidenceMapEntry {
+                        claim: "scoped context projection was observed".to_string(),
+                        evidence_refs: vec![evidence_id.to_string()],
+                    }],
+                    unverified_claims: Vec::new(),
+                    known_risks: Vec::new(),
+                    tests_run: vec![
+                        "runtime_context_projection_is_scoped_to_current_task_and_thread"
+                            .to_string(),
+                    ],
+                    tests_not_run: Vec::new(),
+                    approvals: Vec::new(),
+                },
+            }))
+        }
+    }
+
+    let workspace = temp_workspace("runtime-context-scope");
+    let kernel = Kernel::new();
+    let current = spawn_runtime_agent(&kernel, &workspace, "Current scoped context");
+    let sibling = spawn_runtime_agent(&kernel, &workspace, "Sibling scoped context");
+    let current_context = kernel
+        .load_context(LoadContextInput {
+            agent_id: current.agent_id.clone(),
+            task_id: current.task.task_id.clone(),
+            loaded_refs: vec!["current-ref".to_string()],
+            summary_artifact_id: None,
+            freshness: ContextFreshness::Fresh,
+            pollution_score: 0.0,
+            token_estimate: 64,
+        })
+        .unwrap();
+    let sibling_context = kernel
+        .load_context(LoadContextInput {
+            agent_id: sibling.agent_id.clone(),
+            task_id: sibling.task.task_id.clone(),
+            loaded_refs: vec!["sibling-ref".to_string()],
+            summary_artifact_id: None,
+            freshness: ContextFreshness::Fresh,
+            pollution_score: 0.0,
+            token_estimate: 64,
+        })
+        .unwrap();
+    let current_compaction = kernel
+        .compact_context(CompactContextInput {
+            thread_id: current.thread_id.clone(),
+            agent_id: current.agent_id.clone(),
+            task_id: current.task.task_id.clone(),
+            summary_artifact_id: None,
+            superseded_refs: vec![format!("context_snapshot:{}", current_context.context_id)],
+            token_estimate: 128,
+        })
+        .unwrap();
+    let sibling_compaction = kernel
+        .compact_context(CompactContextInput {
+            thread_id: sibling.thread_id.clone(),
+            agent_id: sibling.agent_id.clone(),
+            task_id: sibling.task.task_id.clone(),
+            summary_artifact_id: None,
+            superseded_refs: vec![format!("context_snapshot:{}", sibling_context.context_id)],
+            token_estimate: 128,
+        })
+        .unwrap();
+    let (current_fork, _) = kernel
+        .fork_thread(ForkThreadInput {
+            source_thread_id: current.thread_id.clone(),
+            from_turn_id: None,
+            created_by_client_id: "agent-os-thread-test".to_string(),
+            title: Some("current fork".to_string()),
+            goal: Some("current fork".to_string()),
+        })
+        .unwrap();
+    let (sibling_fork, _) = kernel
+        .fork_thread(ForkThreadInput {
+            source_thread_id: sibling.thread_id.clone(),
+            from_turn_id: None,
+            created_by_client_id: "agent-os-thread-test".to_string(),
+            title: Some("sibling fork".to_string()),
+            goal: Some("sibling fork".to_string()),
+        })
+        .unwrap();
+    let current_thread_event_id = kernel
+        .events()
+        .unwrap()
+        .into_iter()
+        .find(|event| {
+            event.aggregate_id == current.thread_id && event.event_type == "ThreadConfigured"
+        })
+        .unwrap()
+        .event_id;
+    let sibling_thread_event_id = kernel
+        .events()
+        .unwrap()
+        .into_iter()
+        .find(|event| {
+            event.aggregate_id == sibling.thread_id && event.event_type == "ThreadConfigured"
+        })
+        .unwrap()
+        .event_id;
+    let (current_rollback, _) = kernel
+        .rollback_thread(RollbackThreadInput {
+            thread_id: current.thread_id.clone(),
+            target_turn_id: None,
+            target_item_id: None,
+            target_event_id: Some(current_thread_event_id),
+            reason: "current rollback marker".to_string(),
+            created_by_client_id: "agent-os-thread-test".to_string(),
+        })
+        .unwrap();
+    let (sibling_rollback, _) = kernel
+        .rollback_thread(RollbackThreadInput {
+            thread_id: sibling.thread_id.clone(),
+            target_turn_id: None,
+            target_item_id: None,
+            target_event_id: Some(sibling_thread_event_id),
+            reason: "sibling rollback marker".to_string(),
+            created_by_client_id: "agent-os-thread-test".to_string(),
+        })
+        .unwrap();
+
+    let mut runtime = ThreadRuntime::new(
+        kernel.clone(),
+        current.thread_id.clone(),
+        AssertsScopedContext {
+            calls: 0,
+            current_context_id: current_context.context_id,
+            sibling_context_id: sibling_context.context_id,
+            current_compaction_id: current_compaction.compaction_id,
+            sibling_compaction_id: sibling_compaction.compaction_id,
+            current_fork_id: current_fork.fork_id,
+            sibling_fork_id: sibling_fork.fork_id,
+            current_rollback_id: current_rollback.rollback_id,
+            sibling_rollback_id: sibling_rollback.rollback_id,
+        },
+    );
+
+    let report = runtime
+        .run_to_completion(RuntimeConfig::workspace_write(&workspace))
+        .unwrap();
+
+    assert_eq!(report.status, ThreadStatus::Completed);
+    assert!(report.final_submitted);
+    let _ = fs::remove_dir_all(workspace);
+}
+
+#[test]
 fn runtime_resumes_with_persisted_failed_tool_results() {
     struct RecoversFromHydratedFailure;
 
@@ -2764,6 +3002,90 @@ fn context_budget_prunes_only_old_non_evidence_tool_results() {
         .and_then(|output| output.get("content"))
         .and_then(serde_json::Value::as_str)
         .is_some_and(|content| content.len() == 12_000));
+}
+
+#[test]
+fn tool_result_projection_compacts_old_evidence_and_preserves_recent_model_outcomes() {
+    let mut records = (0..10)
+        .map(|index| ToolExecutionRecord {
+            call_id: format!("call_{index}"),
+            tool_name: "read_file".to_string(),
+            status: ToolCallStatus::Completed,
+            input: Some(json!({"path": format!("file-{index}.txt")})),
+            output: Some(json!({"content": "x".repeat(8_000)})),
+            evidence_ids: Vec::new(),
+            evidence_claim: None,
+        })
+        .collect::<Vec<_>>();
+    records[0].evidence_ids = vec!["ev_old".to_string()];
+    records[0].evidence_claim = Some("old evidence must remain visible".to_string());
+    records[7].status = ToolCallStatus::Failed;
+    records[7].output = Some(json!({
+        "status": "failed",
+        "message": "recent failure should remain complete for the next turn"
+    }));
+    records[8].status = ToolCallStatus::Denied;
+    records[8].output = Some(json!({
+        "status": "denied",
+        "message": "recent denial should remain complete for the next turn"
+    }));
+    records[9].status = ToolCallStatus::Running;
+    records[9].output = Some(json!({
+        "status": "running",
+        "process_id": "proc_recent"
+    }));
+
+    let projected = super::context_projection::project_tool_results(&records);
+
+    assert_eq!(projected.len(), 9);
+    assert!(projected.iter().all(|record| record.call_id != "call_1"));
+    let old_evidence = projected
+        .iter()
+        .find(|record| record.call_id == "call_0")
+        .unwrap();
+    assert_eq!(old_evidence.evidence_ids, vec!["ev_old"]);
+    assert_eq!(
+        old_evidence
+            .output
+            .as_ref()
+            .and_then(|output| output.get("projection_truncated"))
+            .and_then(serde_json::Value::as_bool),
+        Some(true)
+    );
+    assert!(old_evidence
+        .output
+        .as_ref()
+        .and_then(|output| output.get("content"))
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|content| content.contains("truncated for projection")));
+
+    let failed = projected
+        .iter()
+        .find(|record| record.call_id == "call_7")
+        .unwrap();
+    assert_eq!(failed.status, ToolCallStatus::Failed);
+    assert_eq!(
+        failed.output.as_ref().unwrap()["message"],
+        "recent failure should remain complete for the next turn"
+    );
+    let denied = projected
+        .iter()
+        .find(|record| record.call_id == "call_8")
+        .unwrap();
+    assert_eq!(denied.status, ToolCallStatus::Denied);
+    assert_eq!(
+        denied.output.as_ref().unwrap()["message"],
+        "recent denial should remain complete for the next turn"
+    );
+    let running = projected
+        .iter()
+        .find(|record| record.call_id == "call_9")
+        .unwrap();
+    assert_eq!(running.status, ToolCallStatus::Running);
+    assert_eq!(
+        running.output.as_ref().unwrap()["process_id"],
+        "proc_recent"
+    );
 }
 
 #[test]
