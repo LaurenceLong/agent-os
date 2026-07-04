@@ -2263,6 +2263,89 @@ mod tests {
     }
 
     #[test]
+    fn host_notifications_project_failed_tool_update_with_thread_context() {
+        let host = AgentOsHost::in_memory();
+        let workspace = temp_workspace("failed-tool-notification");
+        let mut server = initialized_server_with_host(host.clone());
+        let thread_id = start_thread_with_workspace(&mut server, workspace.to_string_lossy());
+        let thread = host
+            .kernel()
+            .state_snapshot()
+            .unwrap()
+            .threads
+            .get(&thread_id)
+            .cloned()
+            .unwrap();
+        let environment = host
+            .kernel()
+            .create_environment(
+                agent_os_sys::BackendType::IsolatedWorktree,
+                workspace.to_string_lossy(),
+                "sbox_workspace_write",
+                agent_os_sys::ReusePolicy::TaskScoped,
+            )
+            .unwrap();
+        host.kernel()
+            .attach_environment(
+                &environment.environment_id,
+                &thread.agent_id,
+                &thread.thread_id,
+                &thread.task.task_id,
+                agent_os_sys::AttachMode::ReadOnly,
+            )
+            .unwrap();
+        let capability = host
+            .kernel()
+            .grant_capability(
+                &thread.agent_id,
+                &thread.task.task_id,
+                vec!["tool.invoke".to_string()],
+                vec!["tool:read_file".to_string()],
+                1,
+                None,
+            )
+            .unwrap();
+        let cursor = ProjectionCursor {
+            last_event_ordinal: host.event_count().unwrap() as u64,
+        };
+
+        let failed = host
+            .kernel()
+            .invoke_tool(
+                &thread.agent_id,
+                &thread.task.task_id,
+                &thread.session_id,
+                capability.capability_id,
+                1,
+                agent_os_kernel::ToolInvokeInput {
+                    tool_name: "read_file".to_string(),
+                    input: serde_json::json!({
+                        "workspace_root": workspace.to_string_lossy(),
+                        "path": "missing-host-notification.txt"
+                    }),
+                    evidence_claim: Some(
+                        "failed tool notification carries thread context".to_string(),
+                    ),
+                },
+            )
+            .unwrap();
+        assert_eq!(failed.status, agent_os_sys::ToolCallStatus::Failed);
+
+        let notifications = host.app_notifications_since(&cursor).unwrap();
+
+        assert!(notifications.iter().any(|envelope| matches!(
+            &envelope.notification,
+            agent_os_sys::AppNotification::ToolUpdate(item)
+                if item.client_thread_id.as_deref() == Some(thread_id.as_str())
+                    && item.payload["call_id"] == failed.call_id
+                    && item.payload["tool_name"] == "read_file"
+                    && item.payload["status"] == "Failed"
+                    && item.payload["output"]["status"] == "failed"
+        )));
+        let _ = fs::remove_dir_all(workspace);
+    }
+
+    #[test]
     fn sqlite_host_replays_projection_after_restart() {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
