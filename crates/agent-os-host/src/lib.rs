@@ -963,11 +963,13 @@ fn package_for_source<'a>(
 mod tests {
     use super::*;
     use agent_os_app_server::{AppKernelService, AppServer};
+    use agent_os_config::AGENT_OS_HOME_ENV;
     use agent_os_sys::{
         AppRequest, AppRequestEnvelope, AppResponse, AutomationScheduleKind, ClientConnection,
-        ClientKind, EvidenceMapEntry, FinalSubmission, ProcessLifecycleState, ProjectionCursor,
-        ProviderStreamEventType, ProviderUsage, ResourceSessionType, SecurityLevel, StatsQuery,
-        StatsSnapshot, StreamRequest, TurnStatus,
+        ClientKind, CommandDefinition, EcosystemSourceKind, EcosystemSourceScope, EvidenceMapEntry,
+        FinalSubmission, ProcessLifecycleState, ProjectionCursor, ProviderStreamEventType,
+        ProviderUsage, ResourceSessionType, SecurityLevel, StatsQuery, StatsSnapshot,
+        StreamRequest, TurnStatus,
     };
     use agent_os_thread::{
         ModelAction, ModelClient, ModelTurnRequest, ModelTurnResponse, ToolAction,
@@ -1120,6 +1122,87 @@ mod tests {
                 .unwrap()
                 >= 1
         );
+    }
+
+    #[test]
+    fn app_server_config_read_projects_imported_ecosystem_counts() {
+        let previous_home = env::var_os(AGENT_OS_HOME_ENV);
+        let home = temp_workspace("config-read-home");
+        fs::create_dir_all(home.join("config")).unwrap();
+        fs::write(
+            home.join("config").join("config.json"),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "model": "openai/gpt-4o",
+                "provider": {
+                    "openai": {
+                        "api_key": "test-secret-key",
+                        "endpoint": "openai_responses",
+                        "options": {
+                            "base_url": "https://provider.example/v1",
+                            "timeout_ms": 30000
+                        },
+                        "models": {
+                            "gpt-4o": {
+                                "name": "gpt-4o",
+                                "limit": {"context": 128000, "input": 120000, "output": 4096},
+                                "capabilities": {
+                                    "streaming": true,
+                                    "tool_calling": true,
+                                    "reasoning": true,
+                                    "temperature": true,
+                                    "image_input": true,
+                                    "structured_output": true
+                                }
+                            }
+                        }
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        env::set_var(AGENT_OS_HOME_ENV, &home);
+        let host = AgentOsHost::in_memory();
+        let source = EcosystemSource {
+            source_kind: EcosystemSourceKind::AgentOs,
+            source_scope: EcosystemSourceScope::Project,
+            source_path: "D:/repo/.agent-os/commands/code/review.md".to_string(),
+        };
+        host.kernel()
+            .import_command_definition(CommandDefinition {
+                command_id: "cmd_code_review".to_string(),
+                name: "code/review".to_string(),
+                description: Some("Review one target file.".to_string()),
+                agent: None,
+                model: None,
+                template: "Review $1 with $ARGUMENTS.".to_string(),
+                argument_hints: vec!["$ARGUMENTS".to_string(), "$1".to_string()],
+                source: source.clone(),
+                content_hash: "hash_command".to_string(),
+                created_at: "2026-07-05T00:00:00Z".to_string(),
+            })
+            .unwrap();
+        let mut server = initialized_server_with_host(host);
+
+        let config = request(
+            &mut server,
+            "req_config_read_ecosystem",
+            AppRequest::ConfigRead { workspace: None },
+        );
+        let body = accepted_body(config);
+
+        assert_eq!(body["config"]["ecosystem"]["commands"], 1);
+        assert_eq!(
+            body["config"]["ecosystem"]["sources"][0]["source_path"],
+            source.source_path
+        );
+        assert_eq!(body["config"]["ecosystem"]["sources"][0]["commands"], 1);
+
+        match previous_home {
+            Some(value) => env::set_var(AGENT_OS_HOME_ENV, value),
+            None => env::remove_var(AGENT_OS_HOME_ENV),
+        }
+        let _ = fs::remove_dir_all(home);
     }
 
     #[test]
