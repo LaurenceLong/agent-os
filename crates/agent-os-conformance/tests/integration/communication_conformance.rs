@@ -383,6 +383,193 @@ fn control_plane_tools_execute_through_tool_broker() {
 }
 
 #[test]
+fn control_plane_tool_failures_are_model_visible_without_state_side_effects() {
+    let fx = fixture();
+    let cap = fx
+        .kernel
+        .grant_capability(
+            &fx.worker.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            2,
+            None,
+        )
+        .unwrap();
+    let supervisor = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_supervisor".to_string(),
+            owner: "tester".to_string(),
+            goal: "exercise human failure output".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: vec![".".to_string()],
+        })
+        .unwrap();
+    let supervisor_cap = fx
+        .kernel
+        .grant_capability(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            2,
+            None,
+        )
+        .unwrap();
+    let before = fx.kernel.state_snapshot().unwrap();
+    let before_task = before.tasks.get(&fx.task.task_id).unwrap().clone();
+    let before_thread = before.threads.get(&fx.worker.thread_id).unwrap().clone();
+    let before_evidence_count = before.evidence.len();
+    let before_message_count = before.messages.len();
+
+    for (tool_name, input, expected_stage, expected_error) in [
+        (
+            "update_checklist",
+            json!({"items": [{"text": "bad status", "status": "done"}]}),
+            "input_schema",
+            "tool.input.items[0].status does not match any enum value",
+        ),
+        (
+            "update_checklist",
+            json!({"task_id": "task_other", "items": [{"text": "wrong task"}]}),
+            "driver",
+            "work-state tools can only update the current task",
+        ),
+        (
+            "record_evidence",
+            json!({"evidence_type": "unknown", "claim": "invalid evidence type"}),
+            "input_schema",
+            "tool.input.evidence_type does not match any enum value",
+        ),
+        (
+            "record_evidence",
+            json!({
+                "evidence_type": "external_reference",
+                "claim": "wrong task evidence",
+                "task_id": "task_other"
+            }),
+            "driver",
+            "work-state tools can only update the current task",
+        ),
+        (
+            "report_supervisor",
+            json!({"message": "bad message type", "message_type": "Progress"}),
+            "input_schema",
+            "tool.input.message_type does not match any enum value",
+        ),
+        (
+            "accomplish_goal",
+            json!({"summary": "bad evidence ref", "evidence_refs": [7]}),
+            "input_schema",
+            "tool.input.evidence_refs[0] expected string",
+        ),
+        (
+            "accomplish_goal",
+            json!({"summary": "bad artifact ref", "artifact_refs": [7]}),
+            "input_schema",
+            "tool.input.artifact_refs[0] expected string",
+        ),
+    ] {
+        let invocation = fx
+            .kernel
+            .invoke_tool(
+                &fx.worker.agent_id,
+                &fx.task.task_id,
+                &fx.worker.session_id,
+                cap.capability_id.clone(),
+                2,
+                ToolInvokeInput {
+                    tool_name: tool_name.to_string(),
+                    input,
+                    evidence_claim: Some(format!("{tool_name} failure was model-visible")),
+                },
+            )
+            .unwrap();
+        assert_eq!(invocation.status, ToolCallStatus::Failed);
+        assert!(invocation.evidence_ids.is_empty());
+        let output = invocation.output.as_ref().unwrap();
+        assert_eq!(output["status"], "failed");
+        let error = output["error"].as_str().unwrap_or_default();
+        assert_eq!(
+            output["stage"], expected_stage,
+            "expected stage {expected_stage:?} for {expected_error:?}, got {tool_name}: {error:?}"
+        );
+        assert!(
+            error.contains(expected_error),
+            "expected {expected_error:?}, got {tool_name}: {error:?}"
+        );
+    }
+
+    let ask_human = fx
+        .kernel
+        .invoke_tool(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            &supervisor.session_id,
+            supervisor_cap.capability_id.clone(),
+            2,
+            ToolInvokeInput {
+                tool_name: "ask_human".to_string(),
+                input: json!({"question": "bad human type", "message_type": "StatusUpdate"}),
+                evidence_claim: Some("ask_human failure was model-visible".to_string()),
+            },
+        )
+        .unwrap();
+    assert_eq!(ask_human.status, ToolCallStatus::Failed);
+    assert!(ask_human.evidence_ids.is_empty());
+    let output = ask_human.output.as_ref().unwrap();
+    assert_eq!(output["status"], "failed");
+    assert_eq!(output["stage"], "input_schema");
+    let error = output["error"].as_str().unwrap_or_default();
+    assert!(
+        error.contains("tool.input.message_type does not match any enum value"),
+        "{error}"
+    );
+
+    let set_goal = fx
+        .kernel
+        .invoke_tool(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            &supervisor.session_id,
+            supervisor_cap.capability_id,
+            2,
+            ToolInvokeInput {
+                tool_name: "set_goal".to_string(),
+                input: json!({"goal": "bad success criteria", "success_criteria": ["ok", 7]}),
+                evidence_claim: Some("set_goal failure was model-visible".to_string()),
+            },
+        )
+        .unwrap();
+    assert_eq!(set_goal.status, ToolCallStatus::Failed);
+    assert!(set_goal.evidence_ids.is_empty());
+    let output = set_goal.output.as_ref().unwrap();
+    assert_eq!(output["status"], "failed");
+    assert_eq!(output["stage"], "input_schema");
+    let error = output["error"].as_str().unwrap_or_default();
+    assert!(
+        error.contains("tool.input.success_criteria[1] expected string"),
+        "{error}"
+    );
+
+    let after = fx.kernel.state_snapshot().unwrap();
+    let after_task = after.tasks.get(&fx.task.task_id).unwrap();
+    let after_thread = after.threads.get(&fx.worker.thread_id).unwrap();
+    assert_eq!(after_task.checklist, before_task.checklist);
+    assert_eq!(after_thread.task.goal, before_thread.task.goal);
+    assert_eq!(
+        after_thread.task.goal_status,
+        before_thread.task.goal_status
+    );
+    assert_eq!(after.evidence.len(), before_evidence_count);
+    assert_eq!(after.messages.len(), before_message_count);
+}
+
+#[test]
 fn memento_is_owner_scoped_and_triggered_by_child_completion() {
     let fx = fixture();
     let supervisor = fx
