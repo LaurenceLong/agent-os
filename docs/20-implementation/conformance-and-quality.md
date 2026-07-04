@@ -237,6 +237,15 @@ prompt and normal runtime loop; test fixtures may define the task goal and
 workspace state, but MUST NOT add hidden prompts that force a specific per-tool
 call sequence.
 
+Adding or behaviorally changing a live LLM e2e test requires actually running
+the exact new or changed ignored test before handoff. Run it with
+`--ignored --nocapture` against the real provider endpoint and record the
+command, provider or endpoint, result, and audit log path. Unit, adapter, mock,
+deterministic integration, or unexecuted ignored tests are not substitutes for
+the live increment. If credentials, network access, provider availability, or
+spend approval are unavailable, the change is blocked for handoff until the
+live increment can run.
+
 Live e2e commands resolve provider variables from the process environment first
 and then from the repository-root `.env` file. Required variables:
 

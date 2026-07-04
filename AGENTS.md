@@ -134,6 +134,14 @@ forward-only system design.
   but every model action in the e2e path must come from a live provider
   response. Live LLM e2e tests may be `#[ignore]` by default when they require
   credentials, network access, or provider spend.
+- Adding or behaviorally changing a live LLM e2e test requires actually running
+  the exact new or changed ignored test before handoff. Run it with
+  `--ignored --nocapture` against the real provider endpoint and record the
+  command, provider or endpoint, result, and audit log path. Do not treat unit,
+  adapter, mock, deterministic integration, or unexecuted ignored tests as a
+  substitute for this live increment. If credentials, network access, provider
+  availability, or spend approval are unavailable, the change is blocked for
+  handoff until the live increment can run.
 - Goal-driven e2e coverage must exercise every model-visible tool and every
   subcommand/action in that tool surface. For `agent_control`, cover `start`,
   `status`, `output`, `set_hook`, `send`, `resume`, `stop`, `set_timeout`,
