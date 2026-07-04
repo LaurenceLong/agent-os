@@ -7,7 +7,7 @@ use std::{
 };
 
 #[test]
-fn cli_status_binary_starts_hostd_and_reads_empty_sqlite_projection() {
+fn cli_status_and_process_list_binaries_start_hostd_and_read_sqlite_projection() {
     let root = isolated_temp_dir("cli-status-binary");
     fs::create_dir_all(&root).unwrap();
     let target_dir = root.join("cargo-target");
@@ -35,6 +35,35 @@ fn cli_status_binary_starts_hostd_and_reads_empty_sqlite_projection() {
     assert_eq!(value["threads"].as_array().unwrap().len(), 0);
     assert_eq!(value["stats"]["provider_calls"], 0);
     assert!(state_db.is_file());
+
+    let process_output = Command::new(binary_path(&target_dir, "agent-os"))
+        .arg("process")
+        .arg("list")
+        .arg("--state")
+        .arg("running")
+        .arg("--state-db")
+        .arg(&state_db)
+        .output()
+        .unwrap();
+
+    assert!(
+        process_output.status.success(),
+        "agent-os process list failed with status {}\nstdout:\n{}\nstderr:\n{}",
+        process_output.status,
+        String::from_utf8_lossy(&process_output.stdout),
+        String::from_utf8_lossy(&process_output.stderr)
+    );
+    let process_stdout = String::from_utf8(process_output.stdout).unwrap();
+    let process_value: Value = serde_json::from_str(&process_stdout).unwrap();
+    assert_eq!(
+        process_value["state_db"],
+        state_db.to_string_lossy().to_string()
+    );
+    assert_eq!(process_value["action"], "list");
+    assert_eq!(
+        process_value["process_sessions"].as_array().unwrap().len(),
+        0
+    );
 
     fs::remove_dir_all(root).unwrap();
 }
