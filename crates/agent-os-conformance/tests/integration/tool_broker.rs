@@ -1535,6 +1535,110 @@ fn apply_patch_reports_semantic_failures_through_broker() {
 }
 
 #[test]
+fn apply_patch_parameter_failures_do_not_mutate_workspace_or_evidence() {
+    let fx = fixture();
+    let workspace = temp_workspace("agent-os-integration-apply-patch-parameters");
+    fs::create_dir_all(&workspace).unwrap();
+    fs::write(workspace.join("stable.txt"), "stable\n").unwrap();
+
+    let supervisor = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_supervisor".to_string(),
+            owner: "integration-test".to_string(),
+            goal: "Exercise apply_patch parameter failure output".to_string(),
+            success_criteria: vec![
+                "parameter failures are visible and side-effect free".to_string()
+            ],
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: vec![workspace.to_string_lossy().to_string()],
+        })
+        .unwrap();
+    attach_workspace_for_agent(&fx.kernel, &supervisor, &fx.task.task_id, &workspace);
+    let capability = fx
+        .kernel
+        .grant_capability(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            4,
+            None,
+        )
+        .unwrap();
+    let tools = ToolInvoker {
+        kernel: &fx.kernel,
+        agent: &supervisor,
+        task_id: &fx.task.task_id,
+        capability: &capability,
+    };
+
+    for (input, expected_error) in [
+        (
+            json!({"workspace_root": workspace.to_string_lossy()}),
+            "tool.input missing required field patch",
+        ),
+        (
+            json!({"workspace_root": workspace.to_string_lossy(), "patch": 7}),
+            "tool.input.patch expected string",
+        ),
+        (
+            json!({"patch": "*** Begin Patch\n*** Add File: created.txt\n+created\n*** End Patch\n"}),
+            "tool.input missing required field workspace_root",
+        ),
+        (
+            json!({
+                "workspace_root": 7,
+                "patch": "*** Begin Patch\n*** Add File: created.txt\n+created\n*** End Patch\n"
+            }),
+            "tool.input.workspace_root expected string",
+        ),
+    ] {
+        let invocation = tools.invoke(
+            4,
+            "apply_patch",
+            input,
+            Some("invalid apply_patch parameters were rejected"),
+        );
+        assert_eq!(invocation.status, ToolCallStatus::Failed);
+        assert!(invocation.evidence_ids.is_empty());
+        assert_eq!(
+            invocation
+                .output
+                .as_ref()
+                .and_then(|output| output.get("status")),
+            Some(&json!("failed"))
+        );
+        assert_eq!(
+            invocation
+                .output
+                .as_ref()
+                .and_then(|output| output.get("stage")),
+            Some(&json!("input_schema"))
+        );
+        let error = invocation
+            .output
+            .as_ref()
+            .and_then(|output| output.get("error"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        assert!(error.contains(expected_error), "{error}");
+    }
+
+    assert_eq!(
+        fs::read_to_string(workspace.join("stable.txt")).unwrap(),
+        "stable\n"
+    );
+    assert!(!workspace.join("created.txt").exists());
+    let state = fx.kernel.state_snapshot().unwrap();
+    assert!(state.evidence.is_empty());
+
+    let _ = fs::remove_dir_all(workspace);
+}
+
+#[test]
 fn apply_patch_accepts_plain_context_hunks_through_broker() {
     let fx = fixture();
     let workspace = temp_workspace("agent-os-integration-apply-patch-plain-context");
