@@ -491,7 +491,8 @@ fn read_projection_state(conn: &rusqlite::Connection) -> AgentOsResult<Projectio
     .map(|evidence| (evidence.evidence_id.clone(), evidence))
     .collect::<BTreeMap<_, _>>();
     let checkpoints = read_checkpoints(conn)?;
-    let agent_threads = read_agent_thread_index(conn)?;
+    let mut agent_threads = agent_thread_index_from_timeline(&timeline_items);
+    agent_threads.extend(read_agent_thread_index(conn)?);
     Ok(ProjectionState {
         threads,
         agent_threads,
@@ -506,6 +507,23 @@ fn read_projection_state(conn: &rusqlite::Connection) -> AgentOsResult<Projectio
         evidence,
         checkpoints,
     })
+}
+
+fn agent_thread_index_from_timeline(timeline_items: &[TimelineItem]) -> BTreeMap<String, String> {
+    let mut index = BTreeMap::new();
+    for item in timeline_items {
+        if item.item_type != agent_os_sys::TimelineItemType::ThreadChanged {
+            continue;
+        }
+        let Some(agent_id) = item.agent_id.clone() else {
+            continue;
+        };
+        let Some(client_thread_id) = item.client_thread_id.clone() else {
+            continue;
+        };
+        index.insert(agent_id, client_thread_id);
+    }
+    index
 }
 
 fn read_agent_thread_index(conn: &rusqlite::Connection) -> AgentOsResult<BTreeMap<String, String>> {
@@ -640,7 +658,9 @@ where
 mod tests {
     use super::*;
     use agent_os_store::{EventStore, ProjectionStore};
-    use agent_os_sys::{StatsQuery, TimelineItemType, ToolCallStatus, ToolInvocation};
+    use agent_os_sys::{
+        StatsQuery, TimelineItem, TimelineItemType, ToolCallStatus, ToolInvocation,
+    };
     use serde_json::json;
 
     #[test]
@@ -740,5 +760,60 @@ mod tests {
                 .last_event_ordinal,
             1
         );
+    }
+
+    #[test]
+    fn append_projected_restores_agent_thread_index_for_tool_timeline() {
+        let store = SqliteStore::in_memory().unwrap();
+        let state = ProjectionState {
+            timeline_items: vec![TimelineItem {
+                item_id: "item_thread".to_string(),
+                event_id: "evt_thread".to_string(),
+                item_type: TimelineItemType::ThreadChanged,
+                client_thread_id: Some("thread_1".to_string()),
+                agent_id: Some("agt_1".to_string()),
+                task_id: Some("task_1".to_string()),
+                turn_id: None,
+                summary: "ThreadConfigured thread_1".to_string(),
+                payload: json!({"client_thread_id": "thread_1"}),
+                created_at: "2026-06-30T00:00:00Z".to_string(),
+            }],
+            ..ProjectionState::default()
+        };
+        store.replace_projection_state(&state).unwrap();
+
+        let invocation = ToolInvocation {
+            call_id: "call_1".to_string(),
+            tool_id: "tool_read_file".to_string(),
+            tool_name: "read_file".to_string(),
+            agent_id: "agt_1".to_string(),
+            task_id: "task_1".to_string(),
+            status: ToolCallStatus::Failed,
+            risk_level: 1,
+            input: json!({"path": "missing.txt"}),
+            output: Some(json!({"status": "failed"})),
+            evidence_ids: Vec::new(),
+            audit_refs: Vec::new(),
+            created_at: "2026-06-30T00:00:01Z".to_string(),
+            completed_at: Some("2026-06-30T00:00:02Z".to_string()),
+        };
+        let tool_event = EventEnvelope::new(
+            "ToolCallFailed",
+            "tool_invocation",
+            &invocation.call_id,
+            Some(invocation.agent_id.clone()),
+            Some(invocation.task_id.clone()),
+            None,
+            Some("goal_1".to_string()),
+            serde_json::to_value(&invocation).unwrap(),
+        );
+        store.append_projected(tool_event).unwrap();
+
+        let items = store.timeline_items(Some("thread_1")).unwrap();
+        assert!(items
+            .iter()
+            .any(|item| item.item_type == TimelineItemType::ToolUpdated
+                && item.client_thread_id.as_deref() == Some("thread_1")
+                && item.agent_id.as_deref() == Some("agt_1")));
     }
 }

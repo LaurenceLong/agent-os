@@ -180,6 +180,31 @@ fn cli_binaries_read_nonempty_sqlite_thread_and_process_projection_through_hostd
         ToolCallStatus::Completed,
         "seed run_command failed: {invocation:#?}"
     );
+    let read_capability = kernel
+        .grant_capability(
+            &agent.agent_id,
+            &task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:read_file".to_string()],
+            1,
+            None,
+        )
+        .unwrap();
+    let failed_read = kernel
+        .invoke_tool(
+            &agent.agent_id,
+            &task.task_id,
+            &agent.session_id,
+            read_capability.capability_id,
+            1,
+            ToolInvokeInput {
+                tool_name: "read_file".to_string(),
+                input: json!({"path": "missing-cli-status.txt"}),
+                evidence_claim: Some("failed read_file is projected to CLI status".to_string()),
+            },
+        )
+        .unwrap();
+    assert_eq!(failed_read.status, ToolCallStatus::Failed);
     let process_id = invocation
         .output
         .as_ref()
@@ -213,6 +238,14 @@ fn cli_binaries_read_nonempty_sqlite_thread_and_process_projection_through_hostd
         .unwrap()
         .iter()
         .any(|process| process["process_id"] == process_id && process["state"] == "exited"));
+    assert!(status["timeline"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["payload"]["call_id"] == failed_read.call_id
+            && item["payload"]["tool_name"] == "read_file"
+            && item["payload"]["status"] == "Failed"
+            && item["payload"]["output"]["status"] == "failed"));
 
     let process_output = Command::new(binary_path(&target_dir, "agent-os"))
         .arg("process")
@@ -690,15 +723,14 @@ fn cli_resume_binary_recovers_running_thread_and_completes_runtime_job_through_h
 
 fn build_cli_and_hostd_binaries(target_dir: &Path) {
     static BUILD_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    static SHARED_BUILD_READY: OnceLock<()> = OnceLock::new();
     let _guard = BUILD_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
     let shared_target_dir = workspace_root()
         .join("target")
         .join("agent-os-conformance-cli-binaries");
-    if !binary_path(&shared_target_dir, "agent-os").exists()
-        || !binary_path(&shared_target_dir, "agent-os-hostd").exists()
-    {
+    SHARED_BUILD_READY.get_or_init(|| {
         build_shared_cli_and_hostd_binaries(&shared_target_dir);
-    }
+    });
     let binary_dir = target_dir.join("debug");
     fs::create_dir_all(&binary_dir).unwrap();
     for stem in ["agent-os", "agent-os-hostd"] {
