@@ -743,6 +743,9 @@ fn local_stdio_mcp_registers_and_executes_with_kernel_permissions() {
 fn runtime_projects_ecosystem_into_model_context() {
     let workspace = temp_workspace("agent-os-ecosystem-runtime-projection");
     fs::create_dir_all(workspace.join(".agent-os/skills/review-skill")).unwrap();
+    fs::create_dir_all(workspace.join(".agent-os/commands/code")).unwrap();
+    fs::create_dir_all(workspace.join(".agent-os/agents")).unwrap();
+    let server = compile_mcp_fixture(&workspace);
     fs::write(
         workspace.join("AGENTS.md"),
         "Project rule: use skills on demand.\n",
@@ -751,6 +754,30 @@ fn runtime_projects_ecosystem_into_model_context() {
     fs::write(
         workspace.join(".agent-os/skills/review-skill/SKILL.md"),
         "---\nname: review-skill\ndescription: Review code with local criteria.\n---\nSECRET_SKILL_BODY\n",
+    )
+    .unwrap();
+    fs::write(
+        workspace.join(".agent-os/commands/code/review.md"),
+        "---\ndescription: Review one target file.\n---\nReview $1 with $ARGUMENTS.\n",
+    )
+    .unwrap();
+    fs::write(
+        workspace.join(".agent-os/agents/reviewer.md"),
+        "---\ndescription: Focused reviewer.\nmode: subagent\n---\nAct as a focused reviewer.\n",
+    )
+    .unwrap();
+    fs::write(
+        workspace.join(".agent-os/config.json"),
+        json!({
+            "mcp": {
+                "local_stdio": {
+                    "echo": {
+                        "command": [server.to_string_lossy()]
+                    }
+                }
+            }
+        })
+        .to_string(),
     )
     .unwrap();
     let kernel = Kernel::new();
@@ -815,6 +842,58 @@ fn runtime_projects_ecosystem_into_model_context() {
         .find(|skill| skill.name == "review-skill")
         .unwrap();
     assert_eq!(skill.content, "SECRET_SKILL_BODY");
+    let command = request
+        .context
+        .command_definitions
+        .iter()
+        .find(|command| command.name == "code/review")
+        .unwrap();
+    assert_eq!(
+        command.description.as_deref(),
+        Some("Review one target file.")
+    );
+    assert_eq!(
+        command.argument_hints,
+        vec!["$ARGUMENTS".to_string(), "$1".to_string()]
+    );
+    let agent_profile = request
+        .context
+        .imported_agent_profiles
+        .iter()
+        .find(|profile| profile.name == "reviewer")
+        .unwrap();
+    assert_eq!(
+        agent_profile.description.as_deref(),
+        Some("Focused reviewer.")
+    );
+    let mcp_tool = request
+        .context
+        .mcp_tools
+        .iter()
+        .find(|tool| tool.model_tool_name == "mcp__echo__echo")
+        .unwrap();
+    assert_eq!(mcp_tool.server_name, "echo");
+    assert_eq!(mcp_tool.tool_name, "echo");
+    assert_eq!(
+        mcp_tool.input_schema.pointer("/required/0"),
+        Some(&json!("text"))
+    );
+    let mcp_resource = request
+        .context
+        .mcp_resources
+        .iter()
+        .find(|resource| resource.uri == "fixture://status")
+        .unwrap();
+    assert_eq!(mcp_resource.name.as_deref(), Some("Fixture Status"));
+    assert_eq!(mcp_resource.server_name, "echo");
+    let mcp_template = request
+        .context
+        .mcp_resource_templates
+        .iter()
+        .find(|template| template.uri_template == "fixture://items/{id}")
+        .unwrap();
+    assert_eq!(mcp_template.name.as_deref(), Some("Fixture Item"));
+    assert_eq!(mcp_template.server_name, "echo");
     let _ = fs::remove_dir_all(workspace);
 }
 
