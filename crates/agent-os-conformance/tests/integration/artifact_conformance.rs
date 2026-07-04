@@ -1855,7 +1855,67 @@ fn process_tools_report_parameter_failures_through_broker() {
         )
         .unwrap();
 
-    for (tool_name, input, expected) in [
+    for (tool_name, input, expected_stage, expected_error) in [
+        (
+            "run_command",
+            json!({
+                "mode": "python",
+                "command": "echo should-not-run",
+                "cwd": workspace.to_string_lossy()
+            }),
+            "input_schema",
+            "tool.input.mode does not match any enum value",
+        ),
+        (
+            "run_command",
+            json!({
+                "stdin": "interactive",
+                "command": "echo should-not-run",
+                "cwd": workspace.to_string_lossy()
+            }),
+            "input_schema",
+            "tool.input.stdin does not match any enum value",
+        ),
+        (
+            "run_command",
+            json!({
+                "command": "echo should-not-run",
+                "args": "unexpected",
+                "cwd": workspace.to_string_lossy()
+            }),
+            "input_schema",
+            "tool.input.args expected array",
+        ),
+        (
+            "run_command",
+            json!({
+                "command": "echo should-not-run",
+                "args": ["ok", 7],
+                "cwd": workspace.to_string_lossy()
+            }),
+            "input_schema",
+            "tool.input.args[1] expected string",
+        ),
+        (
+            "run_command",
+            json!({
+                "command": "echo should-not-run",
+                "cwd": workspace.to_string_lossy(),
+                "env": "unexpected"
+            }),
+            "input_schema",
+            "tool.input.env expected object",
+        ),
+        (
+            "run_command",
+            json!({
+                "command": "echo should-not-run",
+                "cwd": workspace.to_string_lossy(),
+                "env": {"AGENT_OS_TEST": 7}
+            }),
+            "driver",
+            "run_command env values must be strings",
+        ),
         (
             "run_command",
             json!({
@@ -1864,6 +1924,7 @@ fn process_tools_report_parameter_failures_through_broker() {
                 "args": ["unexpected"],
                 "cwd": workspace.to_string_lossy()
             }),
+            "driver",
             "run_command args require exec mode",
         ),
         (
@@ -1873,6 +1934,7 @@ fn process_tools_report_parameter_failures_through_broker() {
                 "cwd": workspace.to_string_lossy(),
                 "env": {"": "empty-key"}
             }),
+            "driver",
             "run_command env keys must not be empty",
         ),
         (
@@ -1881,6 +1943,7 @@ fn process_tools_report_parameter_failures_through_broker() {
                 "process_id": "proc_missing",
                 "write_id": "stdin-no-text"
             }),
+            "driver",
             "write_stdin write_id requires text",
         ),
         (
@@ -1889,6 +1952,7 @@ fn process_tools_report_parameter_failures_through_broker() {
                 "process_id": "proc_missing",
                 "text": "text without write id\n"
             }),
+            "driver",
             "write_stdin text requires write_id",
         ),
     ] {
@@ -1909,14 +1973,100 @@ fn process_tools_report_parameter_failures_through_broker() {
             .unwrap();
         assert_eq!(invocation.status, ToolCallStatus::Failed);
         assert!(invocation.evidence_ids.is_empty());
-        let error = invocation
-            .output
-            .as_ref()
-            .and_then(|output| output.get("error"))
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default();
-        assert!(error.contains(expected), "{tool_name}: {error}");
+        let output = invocation.output.as_ref().unwrap();
+        assert_eq!(output["status"], "failed");
+        let error = output["error"].as_str().unwrap_or_default();
+        assert_eq!(
+            output["stage"], expected_stage,
+            "expected stage {expected_stage:?} for {expected_error:?}, got {tool_name}: {error:?}"
+        );
+        assert!(
+            error.contains(expected_error),
+            "expected {expected_error:?}, got {tool_name}: {error:?}"
+        );
     }
+
+    let _ = std::fs::remove_dir_all(workspace);
+}
+
+#[test]
+fn run_command_args_without_mode_infers_exec_through_broker() {
+    let fx = fixture();
+    let workspace = std::env::temp_dir().join(format!(
+        "agent-os-run-command-exec-infer-{}-{}",
+        std::process::id(),
+        new_id("case_")
+    ));
+    let env = fx
+        .kernel
+        .create_environment(
+            BackendType::IsolatedWorktree,
+            workspace.to_string_lossy(),
+            "sbox_workspace_write",
+            ReusePolicy::TaskScoped,
+        )
+        .unwrap();
+    fx.kernel
+        .attach_environment(
+            &env.environment_id,
+            &fx.worker.agent_id,
+            &fx.worker.thread_id,
+            &fx.task.task_id,
+            AttachMode::WorkspaceWrite,
+        )
+        .unwrap();
+    let cap = fx
+        .kernel
+        .grant_capability(
+            &fx.worker.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string(), "process:*".to_string()],
+            4,
+            None,
+        )
+        .unwrap();
+    let command_path = std::env::current_exe()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+
+    let invocation = fx
+        .kernel
+        .invoke_tool(
+            &fx.worker.agent_id,
+            &fx.task.task_id,
+            &fx.worker.session_id,
+            cap.capability_id,
+            4,
+            ToolInvokeInput {
+                tool_name: "run_command".to_string(),
+                input: json!({
+                    "command": command_path,
+                    "args": ["--help"],
+                    "cwd": workspace.to_string_lossy()
+                }),
+                evidence_claim: Some("run_command inferred exec mode".to_string()),
+            },
+        )
+        .unwrap();
+    assert_eq!(invocation.status, ToolCallStatus::Completed);
+    assert_eq!(invocation.evidence_ids.len(), 1);
+    let output = invocation.output.as_ref().unwrap();
+    assert_eq!(output["execution_mode"], "exec");
+    assert_eq!(output["stdin_mode"], "closed");
+    assert_eq!(
+        output["executed_program"].as_str(),
+        Some(command_path.as_str())
+    );
+    assert_eq!(output["executed_args"], json!(["--help"]));
+    assert_eq!(output["exit_code"], 0);
+    let process_id = output["process_id"].as_str().unwrap();
+    let state = fx.kernel.state_snapshot().unwrap();
+    let session = state.process_sessions.get(process_id).unwrap();
+    assert_eq!(session.command_mode, ProcessCommandMode::Exec);
+    assert_eq!(session.stdin_mode, ProcessStdinMode::Closed);
+    assert_eq!(session.args, vec!["--help".to_string()]);
 
     let _ = std::fs::remove_dir_all(workspace);
 }
