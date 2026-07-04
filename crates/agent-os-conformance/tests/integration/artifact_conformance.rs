@@ -1734,6 +1734,93 @@ fn write_stdin_tool_continues_own_process_and_polls_output() {
 }
 
 #[test]
+fn process_tools_report_parameter_failures_through_broker() {
+    let fx = fixture();
+    let workspace = std::env::temp_dir().join(format!(
+        "agent-os-process-parameter-failures-{}-{}",
+        std::process::id(),
+        new_id("case_")
+    ));
+    std::fs::create_dir_all(&workspace).unwrap();
+    let cap = fx
+        .kernel
+        .grant_capability(
+            &fx.worker.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string(), "process:*".to_string()],
+            4,
+            None,
+        )
+        .unwrap();
+
+    for (tool_name, input, expected) in [
+        (
+            "run_command",
+            json!({
+                "mode": "shell",
+                "command": "echo should-not-run",
+                "args": ["unexpected"],
+                "cwd": workspace.to_string_lossy()
+            }),
+            "run_command args require exec mode",
+        ),
+        (
+            "run_command",
+            json!({
+                "command": "echo should-not-run",
+                "cwd": workspace.to_string_lossy(),
+                "env": {"": "empty-key"}
+            }),
+            "run_command env keys must not be empty",
+        ),
+        (
+            "write_stdin",
+            json!({
+                "process_id": "proc_missing",
+                "write_id": "stdin-no-text"
+            }),
+            "write_stdin write_id requires text",
+        ),
+        (
+            "write_stdin",
+            json!({
+                "process_id": "proc_missing",
+                "text": "text without write id\n"
+            }),
+            "write_stdin text requires write_id",
+        ),
+    ] {
+        let invocation = fx
+            .kernel
+            .invoke_tool(
+                &fx.worker.agent_id,
+                &fx.task.task_id,
+                &fx.worker.session_id,
+                cap.capability_id.clone(),
+                4,
+                ToolInvokeInput {
+                    tool_name: tool_name.to_string(),
+                    input,
+                    evidence_claim: Some(format!("{tool_name} parameter failure was reported")),
+                },
+            )
+            .unwrap();
+        assert_eq!(invocation.status, ToolCallStatus::Failed);
+        assert!(invocation.evidence_ids.is_empty());
+        let error = invocation
+            .output
+            .as_ref()
+            .and_then(|output| output.get("error"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        assert!(error.contains(expected), "{tool_name}: {error}");
+    }
+
+    let _ = std::fs::remove_dir_all(workspace);
+}
+
+#[test]
 fn process_stop_and_kill_record_interrupted_and_terminated_sessions() {
     let fx = fixture();
     let workspace = std::env::temp_dir().join(format!(
