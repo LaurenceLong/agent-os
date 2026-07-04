@@ -1060,6 +1060,50 @@ fn read_image_reports_model_visible_failures() {
         )
         .unwrap();
 
+    for (input, expected_error) in [
+        (
+            json!({"workspace_root": workspace.to_string_lossy()}),
+            "tool.input missing required field path",
+        ),
+        (
+            json!({"workspace_root": workspace.to_string_lossy(), "path": 7}),
+            "tool.input.path expected string",
+        ),
+        (
+            json!({"path": "empty.png"}),
+            "tool.input missing required field workspace_root",
+        ),
+        (
+            json!({"workspace_root": 7, "path": "empty.png"}),
+            "tool.input.workspace_root expected string",
+        ),
+    ] {
+        let invocation = fx
+            .kernel
+            .invoke_tool(
+                &fx.worker.agent_id,
+                &fx.task.task_id,
+                &fx.worker.session_id,
+                cap.capability_id.clone(),
+                1,
+                ToolInvokeInput {
+                    tool_name: "read_image".to_string(),
+                    input,
+                    evidence_claim: Some(
+                        "read_image parameter failure was model-visible".to_string(),
+                    ),
+                },
+            )
+            .unwrap();
+        assert_eq!(invocation.status, ToolCallStatus::Failed);
+        assert!(invocation.evidence_ids.is_empty());
+        let output = invocation.output.as_ref().unwrap();
+        assert_eq!(output["status"], "failed");
+        assert_eq!(output["stage"], "input_schema");
+        let error = output["error"].as_str().unwrap_or_default();
+        assert!(error.contains(expected_error), "{error}");
+    }
+
     for (path, expected) in [
         (
             "vector.svg",
@@ -1096,6 +1140,8 @@ fn read_image_reports_model_visible_failures() {
             .unwrap_or_default();
         assert!(error.contains(expected), "{path}: {error}");
     }
+
+    assert!(fx.kernel.state_snapshot().unwrap().evidence.is_empty());
 
     let _ = std::fs::remove_dir_all(workspace);
 }
