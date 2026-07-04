@@ -1027,8 +1027,9 @@ mod tests {
         AgentOsConfigFile, AgentOsPaths, ModelConfigEntry, ProviderConfigEntry, ProviderOptions,
     };
     use agent_os_sys::{
-        EcosystemSourceKind, EcosystemSourceScope, InstructionDocument, LlmApiStyle,
-        McpResourceDefinition, McpResourceTemplateDefinition, McpServerSpec, McpTransportKind,
+        CommandDefinition, EcosystemSourceKind, EcosystemSourceScope, ImportedAgentMode,
+        ImportedAgentProfile, InstructionDocument, LlmApiStyle, McpResourceDefinition,
+        McpResourceTemplateDefinition, McpServerSpec, McpToolDefinition, McpTransportKind,
         ModelCapabilities, ModelLimit, SkillDefinition,
     };
     use std::collections::BTreeMap;
@@ -1148,15 +1149,57 @@ mod tests {
             })
             .unwrap();
         host.kernel()
-            .register_mcp_server_spec(McpServerSpec {
-                server_id: "mcp_echo".to_string(),
-                name: "echo".to_string(),
-                transport: McpTransportKind::LocalStdio,
-                command: vec!["echo-mcp".to_string()],
-                environment: BTreeMap::new(),
-                enabled: true,
-                timeout_ms: 30_000,
+            .import_command_definition(CommandDefinition {
+                command_id: "cmd_code_review".to_string(),
+                name: "code/review".to_string(),
+                description: Some("Review one target file.".to_string()),
+                agent: None,
+                model: None,
+                template: "Review $1 with $ARGUMENTS.".to_string(),
+                argument_hints: vec!["$ARGUMENTS".to_string(), "$1".to_string()],
                 source: source.clone(),
+                content_hash: "hash_command".to_string(),
+                created_at: "2026-07-03T00:00:00Z".to_string(),
+            })
+            .unwrap();
+        let mcp_server = McpServerSpec {
+            server_id: "mcp_echo".to_string(),
+            name: "echo".to_string(),
+            transport: McpTransportKind::LocalStdio,
+            command: vec!["echo-mcp".to_string()],
+            environment: BTreeMap::new(),
+            enabled: true,
+            timeout_ms: 30_000,
+            source: source.clone(),
+            created_at: "2026-07-03T00:00:00Z".to_string(),
+        };
+        host.kernel()
+            .register_mcp_server_spec(mcp_server.clone())
+            .unwrap();
+        let mcp_input_schema = json!({
+            "type": "object",
+            "properties": {"text": {"type": "string"}},
+            "required": ["text"]
+        });
+        host.kernel()
+            .register_mcp_tool_definition(McpToolDefinition {
+                mcp_tool_id: "mcp_tool_echo".to_string(),
+                server_name: "echo".to_string(),
+                tool_name: "echo".to_string(),
+                model_tool_name: "mcp__echo__echo".to_string(),
+                description: "Echo text through fixture MCP.".to_string(),
+                input_schema: mcp_input_schema.clone(),
+                output_schema: json!({"type": "object"}),
+                source: source.clone(),
+                tool_descriptor: agent_os_kernel::mcp_tool_descriptor(
+                    &mcp_server,
+                    "echo",
+                    "Echo text through fixture MCP.",
+                    mcp_input_schema,
+                    json!({"type": "object"}),
+                    "2026-07-03T00:00:00Z",
+                )
+                .unwrap(),
                 created_at: "2026-07-03T00:00:00Z".to_string(),
             })
             .unwrap();
@@ -1184,6 +1227,22 @@ mod tests {
                 created_at: "2026-07-03T00:00:00Z".to_string(),
             })
             .unwrap();
+        host.kernel()
+            .register_imported_agent_profile(ImportedAgentProfile {
+                imported_agent_profile_id: "reviewer".to_string(),
+                name: "reviewer".to_string(),
+                description: Some("Focused reviewer.".to_string()),
+                mode: ImportedAgentMode::Subagent,
+                prompt: "Act as a focused reviewer.".to_string(),
+                model: None,
+                role_profile_id: None,
+                permission_profile_id: None,
+                source: source.clone(),
+                content_hash: "hash_agent".to_string(),
+                metadata: json!({}),
+                created_at: "2026-07-03T00:00:00Z".to_string(),
+            })
+            .unwrap();
 
         let projection = host.ecosystem_projection().unwrap();
         let source_projection = projection
@@ -1194,9 +1253,12 @@ mod tests {
 
         assert_eq!(projection.instructions, 1);
         assert_eq!(projection.skills, 1);
+        assert_eq!(projection.commands, 1);
         assert_eq!(projection.mcp_servers, 1);
+        assert_eq!(projection.mcp_tools, 1);
         assert_eq!(projection.mcp_resources, 1);
         assert_eq!(projection.mcp_resource_templates, 1);
+        assert_eq!(projection.agents, 1);
         assert_eq!(source_projection.source_kind, EcosystemSourceKind::Agents);
         assert_eq!(
             source_projection.source_scope,
@@ -1205,8 +1267,11 @@ mod tests {
         assert_eq!(source_projection.precedence_rank, Some(7));
         assert_eq!(source_projection.instructions, 1);
         assert_eq!(source_projection.skills, 1);
+        assert_eq!(source_projection.commands, 1);
         assert_eq!(source_projection.mcp_servers, 1);
+        assert_eq!(source_projection.mcp_tools, 1);
         assert_eq!(source_projection.mcp_resources, 1);
         assert_eq!(source_projection.mcp_resource_templates, 1);
+        assert_eq!(source_projection.agents, 1);
     }
 }
