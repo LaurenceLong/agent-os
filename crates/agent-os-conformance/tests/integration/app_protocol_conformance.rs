@@ -3,10 +3,12 @@ use agent_os_config::AGENT_OS_HOME_ENV;
 use agent_os_host::AgentOsHost;
 use agent_os_sys::{
     app_protocol_json_schema, app_protocol_spec, app_protocol_typescript, app_protocol_version,
-    AppMethodLifecycle, AppNotification, AppNotificationEnvelope, AppRequest, AppRequestEnvelope,
-    AppResponse, AppResponseEnvelope, ClientConnection, ClientKind, ProjectionCursor,
-    SecurityLevel, StatsQuery, StatsSnapshot,
+    AgentOsResult, AppMethodLifecycle, AppNotification, AppNotificationEnvelope, AppRequest,
+    AppRequestEnvelope, AppResponse, AppResponseEnvelope, ClientConnection, ClientKind,
+    EvidenceMapEntry, FinalSubmission, ProcessLifecycleState, ProjectionCursor, ProviderUsage,
+    SecurityLevel, StatsQuery, StatsSnapshot, ThreadStatus,
 };
+use agent_os_thread::{ModelAction, ModelClient, ModelTurnRequest, ModelTurnResponse, ToolAction};
 use serde_json::json;
 use std::{
     collections::HashSet,
@@ -427,6 +429,17 @@ fn app_server_config_model_and_provider_projection_uses_config_crate_contract() 
     }
 }
 
+#[test]
+fn app_server_process_stop_and_kill_cleanup_running_processes_through_kernel() {
+    let stopped = app_cleanup_running_process("process-stop", ProcessCleanupAction::Stop);
+    assert_eq!(stopped["state"], "interrupted");
+    assert_eq!(stopped["error"], "conformance stop");
+
+    let killed = app_cleanup_running_process("process-kill", ProcessCleanupAction::Kill);
+    assert_eq!(killed["state"], "terminated");
+    assert_eq!(killed["error"], "conformance kill");
+}
+
 fn human_client() -> ClientConnection {
     ClientConnection {
         client_id: "human_1".to_string(),
@@ -434,6 +447,179 @@ fn human_client() -> ClientConnection {
         client_kind: ClientKind::TerminalUi,
         authority: SecurityLevel::HUMAN_ROOT,
         connected_at: "2026-07-03T00:00:00Z".to_string(),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ProcessCleanupAction {
+    Stop,
+    Kill,
+}
+
+fn app_cleanup_running_process(label: &str, action: ProcessCleanupAction) -> serde_json::Value {
+    let root = isolated_temp_dir(label);
+    fs::create_dir_all(&root).unwrap();
+    let host = AgentOsHost::in_memory();
+    let mut server = AppServer::new(host.clone());
+    let initialized = jsonl_request(&mut server, "req_init", AppRequest::Initialize);
+    assert!(matches!(initialized.response, AppResponse::Accepted(_)));
+
+    let started = accepted_body(jsonl_request(
+        &mut server,
+        "req_thread_start",
+        AppRequest::ThreadStart {
+            goal: format!("start {label} process"),
+            workspace: Some(root.to_string_lossy().to_string()),
+        },
+    ));
+    let thread_id = started["thread"]["client_thread_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    jsonl_request(
+        &mut server,
+        "req_turn_start",
+        AppRequest::TurnStart {
+            client_thread_id: thread_id.clone(),
+            input: "start a long-running process".to_string(),
+        },
+    );
+
+    let report = host
+        .run_next_runtime_job(LongRunningCommandModel {
+            workspace: root.clone(),
+            used: false,
+        })
+        .unwrap()
+        .expect("queued runtime job");
+    assert_eq!(report.status, ThreadStatus::WaitingTool);
+
+    let read = accepted_body(jsonl_request(
+        &mut server,
+        "req_thread_read_running_process",
+        AppRequest::ThreadRead {
+            client_thread_id: thread_id,
+        },
+    ));
+    let process_id = read["process_sessions"][0]["process_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(read["process_sessions"][0]["state"], "running");
+
+    let running = accepted_body(jsonl_request(
+        &mut server,
+        "req_process_list_running",
+        AppRequest::ProcessList {
+            state: Some(ProcessLifecycleState::Running),
+        },
+    ));
+    assert_eq!(running["process_sessions"][0]["process_id"], process_id);
+
+    let cleaned = match action {
+        ProcessCleanupAction::Stop => accepted_body(jsonl_request(
+            &mut server,
+            "req_process_stop",
+            AppRequest::ProcessStop {
+                process_id: process_id.clone(),
+                reason: Some("conformance stop".to_string()),
+            },
+        )),
+        ProcessCleanupAction::Kill => accepted_body(jsonl_request(
+            &mut server,
+            "req_process_kill",
+            AppRequest::ProcessKill {
+                process_id: process_id.clone(),
+                reason: Some("conformance kill".to_string()),
+            },
+        )),
+    };
+    let process_session = cleaned["process_session"].clone();
+
+    let after = accepted_body(jsonl_request(
+        &mut server,
+        "req_process_list_running_after_cleanup",
+        AppRequest::ProcessList {
+            state: Some(ProcessLifecycleState::Running),
+        },
+    ));
+    assert!(after["process_sessions"].as_array().unwrap().is_empty());
+
+    remove_dir_all_retry(&root);
+    process_session
+}
+
+#[derive(Debug, Clone)]
+struct LongRunningCommandModel {
+    workspace: PathBuf,
+    used: bool,
+}
+
+impl ModelClient for LongRunningCommandModel {
+    fn next(&mut self, request: &ModelTurnRequest) -> AgentOsResult<ModelTurnResponse> {
+        if self.used {
+            let evidence_map = request
+                .context
+                .tool_results
+                .iter()
+                .filter(|result| !result.evidence_ids.is_empty())
+                .filter_map(|result| {
+                    result
+                        .evidence_claim
+                        .as_ref()
+                        .map(|claim| EvidenceMapEntry {
+                            claim: claim.clone(),
+                            evidence_refs: result.evidence_ids.clone(),
+                        })
+                })
+                .collect();
+            return Ok(ModelTurnResponse::single(ModelAction::Final {
+                submission: FinalSubmission {
+                    summary: "long process cleanup complete".to_string(),
+                    changed_artifacts: Vec::new(),
+                    evidence_map,
+                    unverified_claims: Vec::new(),
+                    known_risks: Vec::new(),
+                    tests_run: Vec::new(),
+                    tests_not_run: Vec::new(),
+                    approvals: Vec::new(),
+                },
+            }));
+        }
+        self.used = true;
+        let (command, args) = long_running_command();
+        Ok(ModelTurnResponse {
+            actions: vec![ModelAction::ToolCall(ToolAction::new(
+                "run_command",
+                json!({
+                    "command": command,
+                    "mode": "exec",
+                    "args": args,
+                    "cwd": self.workspace.to_string_lossy(),
+                }),
+                4,
+                Some("long-running process started".to_string()),
+            ))],
+            usage: ProviderUsage::default(),
+        })
+    }
+}
+
+fn long_running_command() -> (String, Vec<String>) {
+    if cfg!(windows) {
+        (
+            "powershell".to_string(),
+            vec![
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                "Start-Sleep -Seconds 30".to_string(),
+            ],
+        )
+    } else {
+        (
+            "sh".to_string(),
+            vec!["-c".to_string(), "sleep 30".to_string()],
+        )
     }
 }
 
@@ -486,6 +672,24 @@ fn isolated_temp_dir(label: &str) -> PathBuf {
         "agent-os-conformance-{label}-{}-{unique}",
         std::process::id()
     ))
+}
+
+fn remove_dir_all_retry(path: &std::path::Path) {
+    for attempt in 0..20 {
+        match fs::remove_dir_all(path) {
+            Ok(()) => return,
+            Err(error) if attempt < 19 => {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                if !path.exists() {
+                    return;
+                }
+                if error.kind() == std::io::ErrorKind::NotFound {
+                    return;
+                }
+            }
+            Err(error) => panic!("remove temp dir {}: {error}", path.display()),
+        }
+    }
 }
 
 fn restore_agent_os_home(previous_home: Option<std::ffi::OsString>) {
