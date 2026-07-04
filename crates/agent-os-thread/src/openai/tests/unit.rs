@@ -4,6 +4,7 @@ use crate::openai::tools::{
     anthropic_tool_definitions_for_request, anthropic_tool_definitions_for_thread,
     tool_definitions_for_request, tool_definitions_for_thread,
 };
+use crate::ModelTurnResponse;
 
 #[test]
 fn build_messages_includes_system_and_user() {
@@ -1432,10 +1433,37 @@ fn map_function_call_supports_skill_and_mcp_tools() {
 }
 
 #[test]
-fn parse_response_preserves_non_visible_tool_call_for_runtime_feedback() {
+fn map_function_call_preserves_hidden_builtin_for_runtime_visibility_feedback() {
+    let tmp = std::env::temp_dir().join(format!("aos-openai-hidden-builtin-{}", new_id("t_")));
+    let mut request = make_request(&tmp);
+    request
+        .context
+        .tool_descriptors
+        .retain(|descriptor| descriptor.name != "run_command");
+
+    let (tool_name, input, risk) =
+        map_function_call("run_command", json!({"command": "echo hidden"}), &request).unwrap();
+
+    assert_eq!(tool_name, "run_command");
+    assert_eq!(input, json!({"command": "echo hidden"}));
+    assert_eq!(risk, 0);
+    assert!(input.get("cwd").is_none());
+    assert!(input.get("workspace_root").is_none());
+}
+
+#[test]
+fn provider_parsers_preserve_non_visible_tool_calls_for_runtime_feedback() {
     let tmp = std::env::temp_dir().join(format!("aos-openai-hidden-tool-{}", new_id("t_")));
     let request = make_request(&tmp);
-    let body = json!({
+    let assert_hidden_tool = |response: ModelTurnResponse| {
+        let ModelAction::ToolCall(action) = &response.actions[0] else {
+            panic!("expected non-visible tool action");
+        };
+        assert_eq!(action.tool_name, "mcp__echo__echo");
+        assert_eq!(action.input, json!({"text": "hidden"}));
+        assert_eq!(action.risk_level, 0);
+    };
+    let chat_body = json!({
         "choices": [{
             "message": {
                 "role": "assistant",
@@ -1452,14 +1480,27 @@ fn parse_response_preserves_non_visible_tool_call_for_runtime_feedback() {
         }],
         "usage": {"prompt_tokens": 1, "completion_tokens": 1}
     });
+    let responses_body = json!({
+        "output": [{
+            "type": "function_call",
+            "name": "mcp__echo__echo",
+            "arguments": "{\"text\":\"hidden\"}"
+        }],
+        "usage": {"input_tokens": 1, "output_tokens": 1}
+    });
+    let anthropic_body = json!({
+        "content": [{
+            "type": "tool_use",
+            "id": "toolu_hidden",
+            "name": "mcp__echo__echo",
+            "input": {"text": "hidden"}
+        }],
+        "usage": {"input_tokens": 1, "output_tokens": 1}
+    });
 
-    let response = parse_response(&body, &request).unwrap();
-    let ModelAction::ToolCall(action) = &response.actions[0] else {
-        panic!("expected non-visible tool action");
-    };
-    assert_eq!(action.tool_name, "mcp__echo__echo");
-    assert_eq!(action.input, json!({"text": "hidden"}));
-    assert_eq!(action.risk_level, 0);
+    assert_hidden_tool(parse_response(&chat_body, &request).unwrap());
+    assert_hidden_tool(parse_openai_responses_response(&responses_body, &request).unwrap());
+    assert_hidden_tool(parse_anthropic_response(&anthropic_body, &request).unwrap());
 }
 
 #[test]
