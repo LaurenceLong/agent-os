@@ -1,7 +1,8 @@
 use super::*;
 use crate::ModelTurnResponse;
 use agent_os_kernel::{
-    CompactContextInput, ForkThreadInput, LoadContextInput, RegisterGoalInput, RollbackThreadInput,
+    AttachEvidenceInput, CommitMemoryWriteInput, CompactContextInput, ForkThreadInput,
+    LoadContextInput, ProposeMemoryWriteInput, RegisterGoalInput, RollbackThreadInput,
     SpawnAgentInput, SpawnTaskInput,
 };
 use std::{
@@ -2652,6 +2653,170 @@ fn runtime_context_projection_is_scoped_to_current_task_and_thread() {
             sibling_fork_id: sibling_fork.fork_id,
             current_rollback_id: current_rollback.rollback_id,
             sibling_rollback_id: sibling_rollback.rollback_id,
+        },
+    );
+
+    let report = runtime
+        .run_to_completion(RuntimeConfig::workspace_write(&workspace))
+        .unwrap();
+
+    assert_eq!(report.status, ThreadStatus::Completed);
+    assert!(report.final_submitted);
+    let _ = fs::remove_dir_all(workspace);
+}
+
+#[test]
+fn runtime_projects_only_active_memory_records_into_model_context() {
+    struct AssertsActiveMemoryProjection {
+        calls: u8,
+        active_memory_id: String,
+        proposed_memory_id: String,
+        invalidated_memory_id: String,
+    }
+
+    impl ModelClient for AssertsActiveMemoryProjection {
+        fn next(&mut self, request: &ModelTurnRequest) -> AgentOsResult<ModelTurnResponse> {
+            if self.calls == 0 {
+                self.calls += 1;
+                assert!(request
+                    .context
+                    .memory_records
+                    .iter()
+                    .all(|record| record.status == MemoryStatus::Active));
+                let active = request
+                    .context
+                    .memory_records
+                    .iter()
+                    .find(|record| record.memory_id == self.active_memory_id)
+                    .expect("active memory projected into model context");
+                assert_eq!(
+                    active.content["decision"],
+                    "ship deterministic runtime memory projection"
+                );
+                assert!(!request
+                    .context
+                    .memory_records
+                    .iter()
+                    .any(|record| record.memory_id == self.proposed_memory_id));
+                assert!(!request
+                    .context
+                    .memory_records
+                    .iter()
+                    .any(|record| record.memory_id == self.invalidated_memory_id));
+                return Ok(ModelTurnResponse::single(ModelAction::ToolCall(
+                    ToolAction::new(
+                        "record_evidence",
+                        json!({
+                            "evidence_type": "runtime_trace",
+                            "claim": "active memory projection was observed",
+                            "metadata": {"memory_id": self.active_memory_id}
+                        }),
+                        2,
+                        Some("active memory projection was observed".to_string()),
+                    ),
+                )));
+            }
+
+            let evidence_id = request
+                .context
+                .tool_results
+                .iter()
+                .find(|result| result.tool_name == "record_evidence")
+                .and_then(|result| result.output.as_ref())
+                .and_then(|output| output.get("evidence_id"))
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    AgentOsError::Validation(
+                        "record_evidence result missing evidence_id".to_string(),
+                    )
+                })?;
+
+            Ok(ModelTurnResponse::single(ModelAction::Final {
+                submission: FinalSubmission {
+                    summary: "Active memory projection verified.".to_string(),
+                    changed_artifacts: Vec::new(),
+                    evidence_map: vec![EvidenceMapEntry {
+                        claim: "active memory projection was observed".to_string(),
+                        evidence_refs: vec![evidence_id.to_string()],
+                    }],
+                    unverified_claims: Vec::new(),
+                    known_risks: Vec::new(),
+                    tests_run: vec![
+                        "runtime_projects_only_active_memory_records_into_model_context"
+                            .to_string(),
+                    ],
+                    tests_not_run: Vec::new(),
+                    approvals: Vec::new(),
+                },
+            }))
+        }
+    }
+
+    let workspace = temp_workspace("runtime-memory-projection");
+    let kernel = Kernel::new();
+    let agent = spawn_runtime_agent(&kernel, &workspace, "Project active memory");
+    let evidence = kernel
+        .attach_evidence(AttachEvidenceInput {
+            goal_id: agent.task.goal_id.clone(),
+            task_id: Some(agent.task.task_id.clone()),
+            artifact_id: None,
+            evidence_type: EvidenceType::SourceRef,
+            producer_agent_id: Some(agent.agent_id.clone()),
+            claim: Some("memory provenance source".to_string()),
+            blob_ref: Some("memory://runtime-projection-source".to_string()),
+            content_hash: None,
+            inline_bytes: None,
+            metadata: json!({"source": "runtime memory projection test"}),
+        })
+        .unwrap();
+    let active_memory = kernel
+        .propose_memory_write(ProposeMemoryWriteInput {
+            namespace: "decisions".to_string(),
+            content: json!({"decision": "ship deterministic runtime memory projection"}),
+            created_by_agent_id: agent.agent_id.clone(),
+            source_evidence_ids: vec![evidence.evidence_id.clone()],
+        })
+        .unwrap();
+    kernel
+        .commit_memory_write(CommitMemoryWriteInput {
+            memory_id: active_memory.memory_id.clone(),
+            approved_by: "agent-os-thread-test".to_string(),
+        })
+        .unwrap();
+    let proposed_memory = kernel
+        .propose_memory_write(ProposeMemoryWriteInput {
+            namespace: "decisions".to_string(),
+            content: json!({"decision": "do not project proposed memory"}),
+            created_by_agent_id: agent.agent_id.clone(),
+            source_evidence_ids: vec![evidence.evidence_id.clone()],
+        })
+        .unwrap();
+    let invalidated_memory = kernel
+        .propose_memory_write(ProposeMemoryWriteInput {
+            namespace: "decisions".to_string(),
+            content: json!({"decision": "do not project invalidated memory"}),
+            created_by_agent_id: agent.agent_id.clone(),
+            source_evidence_ids: vec![evidence.evidence_id],
+        })
+        .unwrap();
+    kernel
+        .commit_memory_write(CommitMemoryWriteInput {
+            memory_id: invalidated_memory.memory_id.clone(),
+            approved_by: "agent-os-thread-test".to_string(),
+        })
+        .unwrap();
+    kernel
+        .invalidate_memory(&invalidated_memory.memory_id)
+        .unwrap();
+
+    let mut runtime = ThreadRuntime::new(
+        kernel.clone(),
+        agent.thread_id.clone(),
+        AssertsActiveMemoryProjection {
+            calls: 0,
+            active_memory_id: active_memory.memory_id,
+            proposed_memory_id: proposed_memory.memory_id,
+            invalidated_memory_id: invalidated_memory.memory_id,
         },
     );
 
