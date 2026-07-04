@@ -180,7 +180,47 @@ fn tool_broker_integration_runs_all_model_visible_tool_families() {
         }),
         None,
     );
-    tools.invoke(
+    let child = tools.invoke(
+        4,
+        "agent_control",
+        json!({
+            "action": "start",
+            "payload": {
+                "goal": "inspect integration broker child",
+                "success_criteria": ["child agent was spawned"]
+            }
+        }),
+        None,
+    );
+    let child_thread_id = child.output.as_ref().unwrap()["thread_id"]
+        .as_str()
+        .unwrap();
+    let child_thread = fx
+        .kernel
+        .state_snapshot()
+        .unwrap()
+        .threads
+        .get(child_thread_id)
+        .cloned()
+        .unwrap();
+    let child_capability = fx
+        .kernel
+        .grant_capability(
+            &child_thread.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            1,
+            None,
+        )
+        .unwrap();
+    let child_tools = ToolInvoker {
+        kernel: &fx.kernel,
+        agent: &child_thread,
+        task_id: &fx.task.task_id,
+        capability: &child_capability,
+    };
+    child_tools.invoke(
         1,
         "request_permissions",
         json!({
@@ -194,18 +234,6 @@ fn tool_broker_integration_runs_all_model_visible_tool_families() {
                 "allowed_tool_driver_classes": ["filesystem"],
                 "approval_required_above": 1,
                 "requires_evidence_for": []
-            }
-        }),
-        None,
-    );
-    let child = tools.invoke(
-        4,
-        "agent_control",
-        json!({
-            "action": "start",
-            "payload": {
-                "goal": "inspect integration broker child",
-                "success_criteria": ["child agent was spawned"]
             }
         }),
         None,
@@ -315,6 +343,79 @@ fn tool_broker_integration_runs_all_model_visible_tool_families() {
         state.tool_invocations.len()
     );
     let _ = fs::remove_dir_all(workspace);
+}
+
+#[test]
+fn request_permissions_requires_direct_parent_through_broker() {
+    let fx = fixture();
+    let supervisor = fx
+        .kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: fx.task.task_id.clone(),
+            role_profile_id: "role_supervisor".to_string(),
+            owner: "integration-test".to_string(),
+            goal: "Exercise root permission request rejection".to_string(),
+            success_criteria: Vec::new(),
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: Vec::new(),
+        })
+        .unwrap();
+    let capability = fx
+        .kernel
+        .grant_capability(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            1,
+            None,
+        )
+        .unwrap();
+
+    let invocation = fx
+        .kernel
+        .invoke_tool(
+            &supervisor.agent_id,
+            &fx.task.task_id,
+            &supervisor.session_id,
+            capability.capability_id,
+            1,
+            ToolInvokeInput {
+                tool_name: "request_permissions".to_string(),
+                input: json!({
+                    "reason": "root agents have no direct parent approver",
+                    "scope": "session",
+                    "permissions": {
+                        "max_risk_level": 1,
+                        "allowed_syscalls": ["tool.invoke"],
+                        "resource_scopes": ["tool:*"],
+                        "allowed_tool_names": ["read_file"],
+                        "allowed_tool_driver_classes": ["filesystem"],
+                        "approval_required_above": 1,
+                        "requires_evidence_for": []
+                    }
+                }),
+                evidence_claim: None,
+            },
+        )
+        .unwrap();
+
+    assert_eq!(invocation.status, ToolCallStatus::Failed);
+    assert!(invocation.evidence_ids.is_empty());
+    let output = invocation.output.as_ref().unwrap();
+    assert_eq!(output["status"], "failed");
+    assert_eq!(output["stage"], "driver");
+    assert!(output["error"]
+        .as_str()
+        .unwrap()
+        .contains("permission requests require a direct parent approver"));
+    assert!(fx
+        .kernel
+        .state_snapshot()
+        .unwrap()
+        .permission_requests
+        .is_empty());
 }
 
 #[test]

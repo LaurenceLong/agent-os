@@ -76,16 +76,16 @@ impl Kernel {
             .find(|thread| thread.agent_id == requester_agent_id)
             .cloned()
             .ok_or_else(|| AgentOsError::NotFound(format!("agent {requester_agent_id}")))?;
-        let approver = match &requester.parent_thread_id {
-            Some(parent_thread_id) => Some(
-                state
-                    .threads
-                    .get(parent_thread_id)
-                    .cloned()
-                    .ok_or_else(|| AgentOsError::NotFound(format!("thread {parent_thread_id}")))?,
-            ),
-            None => None,
-        };
+        let parent_thread_id = requester.parent_thread_id.as_ref().ok_or_else(|| {
+            AgentOsError::PermissionDenied(
+                "permission requests require a direct parent approver".to_string(),
+            )
+        })?;
+        let approver = state
+            .threads
+            .get(parent_thread_id)
+            .cloned()
+            .ok_or_else(|| AgentOsError::NotFound(format!("thread {parent_thread_id}")))?;
         let turn_id = match scope {
             PermissionGrantScope::Turn => {
                 Some(requester.active_turn.turn_id.clone().ok_or_else(|| {
@@ -103,8 +103,8 @@ impl Kernel {
             permission_request_id: new_id("permreq_"),
             requester_agent_id: requester.agent_id.clone(),
             requester_thread_id: requester.thread_id.clone(),
-            approver_agent_id: approver.as_ref().map(|thread| thread.agent_id.clone()),
-            approver_thread_id: approver.as_ref().map(|thread| thread.thread_id.clone()),
+            approver_agent_id: Some(approver.agent_id.clone()),
+            approver_thread_id: Some(approver.thread_id.clone()),
             task_id: requester.task.task_id.clone(),
             goal_id: requester.task.goal_id.clone(),
             session_id: requester.session_id.clone(),

@@ -1947,7 +1947,7 @@ fn assert_process_stdin_parameters_observed(report: &RuntimeRunReport, stdin_com
     );
 }
 
-fn assert_request_permissions_parameters_observed(report: &RuntimeRunReport) {
+fn assert_request_permissions_direct_parent_failure_observed(report: &RuntimeRunReport) {
     let record = report
         .tool_results
         .iter()
@@ -2012,21 +2012,13 @@ fn assert_request_permissions_parameters_observed(report: &RuntimeRunReport) {
         .output
         .as_ref()
         .unwrap_or_else(|| panic!("missing request_permissions output: {record:?}"));
-    assert_eq!(
-        output.get("status").and_then(Value::as_str),
-        Some("pending")
-    );
-    assert_eq!(
-        output.get("request_status").and_then(Value::as_str),
-        Some("Pending")
-    );
-    assert_eq!(output.get("scope").and_then(Value::as_str), Some("turn"));
+    assert_eq!(output.get("status").and_then(Value::as_str), Some("failed"));
+    assert_eq!(output.get("stage").and_then(Value::as_str), Some("driver"));
     assert!(
-        output
-            .get("permission_request_id")
-            .and_then(Value::as_str)
-            .is_some_and(|id| !id.is_empty()),
-        "request_permissions output omitted permission_request_id: {record:?}"
+        output.get("error").and_then(Value::as_str).is_some_and(
+            |error| error.contains("permission requests require a direct parent approver")
+        ),
+        "request_permissions output omitted direct-parent failure: {record:?}"
     );
 }
 
@@ -2362,7 +2354,21 @@ fn run_live_llm_goal_driven_control_plane_e2e(
     let (kernel, request) = make_kernel_request_for_role_with_blob_store_and_requirements(
             &tmp,
             "role_supervisor",
-                "Complete this live control-plane checklist as a supervisor. 1. read_file coordination_seed.md. 2. update_checklist with one completed item. 3. request_permissions with reason exactly Need bounded read_file permission for this control-plane validation., scope turn, and permissions containing max_risk_level 2, allowed_syscalls [tool.invoke], resource_scopes [tool:read_file], allowed_tool_names [read_file], allowed_tool_driver_classes [filesystem], approval_required_above 2, and requires_evidence_for [read_file]. After the permission request returns pending, continue without approving it and without checking its status. 4. record_evidence for the coordination seed. 5. report_supervisor with a concise progress message. 6. post_blackboard one risk note with channel_id exactly risks, scope task, and section risk. 7. Call the ask_human tool exactly once with question exactly Is there any extra scope for this live control-plane validation? and message_type HumanQuestion; wait for its tool result with delivery_status before proceeding. Do not merely mention ask_human in prose or summaries. 8. Only after the ask_human tool result, call agent_control start exactly once for a child producer with role_profile_id role_producer and a one-sentence goal in payload.goal; do not call agent_control status, output, send, resume, stop, kill, delete_session, purge_state, or export_trace in this checklist. 9. set_goal with target_thread_id set to the child thread_id returned by agent_control start and goal saying the live control-plane goal is achieved; do not set_goal on your own thread. 10. accomplish_goal with a concise summary. 11. submit_final with summary exactly Control-plane coordination complete., evidence_map citing only evidence_ids arrays returned by completed tool results, tests_run containing read_file coordination_seed.md, and known_risks as an empty array. Do not invent evidence ids from message_id, entry_id, thread_id, output_handle, goal_revision, or permission_request_id fields. submit_final must be the last tool call. Do not skip request_permissions, ask_human, agent_control start, set_goal, or report_supervisor.",
+                concat!(
+                    "Complete this live control-plane checklist as a supervisor. ",
+                    "1. read_file coordination_seed.md. ",
+                    "2. update_checklist with one completed item. ",
+                    "3. request_permissions with reason exactly Need bounded read_file permission for this control-plane validation., scope turn, and permissions containing max_risk_level 2, allowed_syscalls [tool.invoke], resource_scopes [tool:read_file], allowed_tool_names [read_file], allowed_tool_driver_classes [filesystem], approval_required_above 2, and requires_evidence_for [read_file]. This root supervisor has no direct parent, so request_permissions is expected to return a failed tool result saying a direct parent approver is required; after that failed tool result, continue without retrying it. ",
+                    "4. record_evidence for the coordination seed. ",
+                    "5. report_supervisor with a concise progress message. ",
+                    "6. post_blackboard one risk note with channel_id exactly risks, scope task, and section risk. ",
+                    "7. Call the ask_human tool exactly once with question exactly Is there any extra scope for this live control-plane validation? and message_type HumanQuestion. The ask_human call is required even though report_supervisor also returns delivery_status; do not treat report_supervisor as ask_human evidence. Wait for the ask_human tool result before proceeding, and do not merely mention ask_human in prose, summaries, or accomplish_goal. ",
+                    "8. Only after the ask_human tool result, call agent_control start exactly once for a child producer with role_profile_id role_producer and a one-sentence goal in payload.goal; do not call agent_control status, output, send, resume, stop, kill, delete_session, purge_state, or export_trace in this checklist. ",
+                    "9. set_goal with target_thread_id set to the child thread_id returned by agent_control start and goal saying the live control-plane goal is achieved; do not set_goal on your own thread. ",
+                    "10. accomplish_goal with a concise summary. ",
+                    "11. submit_final with summary exactly Control-plane coordination complete., evidence_map citing only values from evidence_ids arrays or evidence_id fields returned by completed tool results, tests_run containing read_file coordination_seed.md, and known_risks as an empty array. Do not invent evidence ids from message_id, entry_id, thread_id, output_handle, goal_revision, or permission_request_id fields. submit_final must be the last tool call. ",
+                    "Do not skip request_permissions, ask_human, agent_control start, set_goal, or report_supervisor.",
+                ),
             Vec::new(),
             Vec::new(),
             vec![EvidenceType::SourceRef],
@@ -2389,7 +2395,7 @@ fn run_live_llm_goal_driven_control_plane_e2e(
     let config = live_runtime_config(&tmp, 16);
     let report = runtime.run_to_completion(config).unwrap();
     assert!(report.final_submitted);
-    assert_all_tool_calls_completed(&report);
+    assert_all_tool_calls_completed_or_expected_root_permission_failure(&report);
     assert_live_goal_tools(
         &audit_log_path,
         provider,
@@ -2409,7 +2415,7 @@ fn run_live_llm_goal_driven_control_plane_e2e(
             "submit_final",
         ],
     );
-    assert_request_permissions_parameters_observed(&report);
+    assert_request_permissions_direct_parent_failure_observed(&report);
     println!("live_goal_control_plane_log={}", audit_log_path.display());
     let _ = std::fs::remove_dir_all(tmp);
 }
@@ -2578,7 +2584,20 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
         make_kernel_request_for_role_with_blob_store_and_requirements(
             &tmp,
             "role_supervisor",
-            "Complete this focused control-plane validation. Read coordination_seed.md, update_checklist with one completed item, request_permissions with reason exactly Need bounded read_file permission for this control-plane validation., scope turn, and permissions containing max_risk_level 2, allowed_syscalls [tool.invoke], resource_scopes [tool:read_file], allowed_tool_names [read_file], allowed_tool_driver_classes [filesystem], approval_required_above 2, and requires_evidence_for [read_file]; after it returns pending, continue without approving it and without checking its status. Record_evidence for coordination_seed.md as source_ref, report_supervisor with a short progress message, post_blackboard on channel test-results with scope task and section test_result, ask_human exactly once whether there is extra scope and continue after delivery, agent_control start exactly once for one child producer with role_profile_id role_producer and payload.goal; do not call agent_control status, output, send, resume, stop, kill, delete_session, purge_state, or export_trace in this segment. Then set_goal with target_thread_id set to the child thread_id returned by agent_control start and goal saying the live full-surface control-plane segment is achieved; do not set_goal on your own thread. Then call accomplish_goal with a concise summary, then submit_final with summary exactly Control-plane surface complete., evidence_map citing only evidence_ids arrays returned by completed tool results, tests_run containing read_file coordination_seed.md, and known_risks as an empty array. Do not invent evidence ids from message_id, entry_id, thread_id, output_handle, goal_revision, or permission_request_id fields. submit_final must be the last tool call.",
+            concat!(
+                "Complete this focused control-plane validation. ",
+                "1. read_file coordination_seed.md. ",
+                "2. update_checklist with one completed item. ",
+                "3. request_permissions with reason exactly Need bounded read_file permission for this control-plane validation., scope turn, and permissions containing max_risk_level 2, allowed_syscalls [tool.invoke], resource_scopes [tool:read_file], allowed_tool_names [read_file], allowed_tool_driver_classes [filesystem], approval_required_above 2, and requires_evidence_for [read_file]. This root supervisor has no direct parent, so request_permissions is expected to return a failed tool result saying a direct parent approver is required; after that failed tool result, continue without retrying it. ",
+                "4. record_evidence for coordination_seed.md as source_ref. ",
+                "5. report_supervisor with a short progress message. ",
+                "6. post_blackboard on channel test-results with scope task and section test_result. ",
+                "7. Call the ask_human tool exactly once with question asking whether there is extra scope. The ask_human call is required even though report_supervisor also returns delivery_status; do not treat report_supervisor as ask_human evidence. Wait for the ask_human tool result before continuing, and do not merely mention ask_human in prose, summaries, or accomplish_goal. ",
+                "8. Only after the ask_human tool result, call agent_control start exactly once for one child producer with role_profile_id role_producer and payload.goal; do not call agent_control status, output, send, resume, stop, kill, delete_session, purge_state, or export_trace in this segment. ",
+                "9. Then set_goal with target_thread_id set to the child thread_id returned by agent_control start and goal saying the live full-surface control-plane segment is achieved; do not set_goal on your own thread. ",
+                "10. Then call accomplish_goal with a concise summary. ",
+                "11. Then submit_final with summary exactly Control-plane surface complete., evidence_map citing only values from evidence_ids arrays or evidence_id fields returned by completed tool results, tests_run containing read_file coordination_seed.md, and known_risks as an empty array. Do not invent evidence ids from message_id, entry_id, thread_id, output_handle, goal_revision, or permission_request_id fields. submit_final must be the last tool call.",
+            ),
             Vec::new(),
             Vec::new(),
             vec![EvidenceType::SourceRef],
@@ -2593,10 +2612,10 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
         control_request.thread.thread_id.clone(),
         control_client,
     );
-    let control_config = live_runtime_config(&tmp, 15);
+    let control_config = live_runtime_config(&tmp, 18);
     let control_report = control_runtime.run_to_completion(control_config).unwrap();
     assert!(control_report.final_submitted);
-    assert_all_tool_calls_completed(&control_report);
+    assert_all_tool_calls_completed_or_expected_root_permission_failure(&control_report);
     assert_live_goal_tools(
         &audit_log_path,
         provider,
@@ -2616,7 +2635,7 @@ fn run_live_llm_goal_driven_full_tool_surface_e2e(
             "submit_final",
         ],
     );
-    assert_request_permissions_parameters_observed(&control_report);
+    assert_request_permissions_direct_parent_failure_observed(&control_report);
     assert_agent_control_actions(
         &audit_log_path,
         provider,
@@ -3472,6 +3491,56 @@ fn assert_all_tool_calls_completed(report: &RuntimeRunReport) {
         })
         .collect();
     assert!(failed.is_empty(), "tool calls did not complete: {failed:?}");
+}
+
+fn assert_all_tool_calls_completed_or_expected_root_permission_failure(report: &RuntimeRunReport) {
+    let mut completed_tools = report
+        .tool_results
+        .iter()
+        .filter(|record| record.status == ToolCallStatus::Completed)
+        .map(|record| record.tool_name.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    if report.final_submitted {
+        completed_tools.insert("submit_final");
+    }
+    let failed: Vec<_> = report
+        .tool_results
+        .iter()
+        .filter(|record| {
+            record.tool_name != "runtime_feedback"
+                && record.status != ToolCallStatus::Completed
+                && !completed_tools.contains(record.tool_name.as_str())
+                && !is_expected_root_permission_failure(record)
+        })
+        .collect();
+    assert!(failed.is_empty(), "tool calls did not complete: {failed:?}");
+    assert!(
+        report
+            .tool_results
+            .iter()
+            .any(is_expected_root_permission_failure),
+        "missing expected root request_permissions failure: {:?}",
+        report.tool_results
+    );
+}
+
+fn is_expected_root_permission_failure(record: &ToolExecutionRecord) -> bool {
+    record.tool_name == "request_permissions"
+        && record.status == ToolCallStatus::Failed
+        && record
+            .output
+            .as_ref()
+            .and_then(|output| output.get("stage"))
+            .and_then(Value::as_str)
+            == Some("driver")
+        && record
+            .output
+            .as_ref()
+            .and_then(|output| output.get("error"))
+            .and_then(Value::as_str)
+            .is_some_and(|error| {
+                error.contains("permission requests require a direct parent approver")
+            })
 }
 
 fn assert_agent_control_actions(
