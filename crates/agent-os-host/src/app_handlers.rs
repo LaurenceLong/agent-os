@@ -1028,6 +1028,7 @@ mod tests {
     };
     use agent_os_sys::{
         EcosystemSourceKind, EcosystemSourceScope, InstructionDocument, LlmApiStyle,
+        McpResourceDefinition, McpResourceTemplateDefinition, McpServerSpec, McpTransportKind,
         ModelCapabilities, ModelLimit, SkillDefinition,
     };
     use std::collections::BTreeMap;
@@ -1146,6 +1147,43 @@ mod tests {
                 created_at: "2026-07-03T00:00:00Z".to_string(),
             })
             .unwrap();
+        host.kernel()
+            .register_mcp_server_spec(McpServerSpec {
+                server_id: "mcp_echo".to_string(),
+                name: "echo".to_string(),
+                transport: McpTransportKind::LocalStdio,
+                command: vec!["echo-mcp".to_string()],
+                environment: BTreeMap::new(),
+                enabled: true,
+                timeout_ms: 30_000,
+                source: source.clone(),
+                created_at: "2026-07-03T00:00:00Z".to_string(),
+            })
+            .unwrap();
+        host.kernel()
+            .register_mcp_resource_definition(McpResourceDefinition {
+                mcp_resource_id: "mcp_resource_status".to_string(),
+                server_name: "echo".to_string(),
+                uri: "fixture://status".to_string(),
+                name: Some("Fixture Status".to_string()),
+                description: Some("Current fixture status".to_string()),
+                mime_type: Some("application/json".to_string()),
+                source: source.clone(),
+                created_at: "2026-07-03T00:00:00Z".to_string(),
+            })
+            .unwrap();
+        host.kernel()
+            .register_mcp_resource_template_definition(McpResourceTemplateDefinition {
+                mcp_resource_template_id: "mcp_template_item".to_string(),
+                server_name: "echo".to_string(),
+                uri_template: "fixture://items/{id}".to_string(),
+                name: Some("Fixture Item".to_string()),
+                description: Some("Fixture item by id".to_string()),
+                mime_type: Some("application/json".to_string()),
+                source: source.clone(),
+                created_at: "2026-07-03T00:00:00Z".to_string(),
+            })
+            .unwrap();
 
         let projection = host.ecosystem_projection().unwrap();
         let source_projection = projection
@@ -1156,6 +1194,9 @@ mod tests {
 
         assert_eq!(projection.instructions, 1);
         assert_eq!(projection.skills, 1);
+        assert_eq!(projection.mcp_servers, 1);
+        assert_eq!(projection.mcp_resources, 1);
+        assert_eq!(projection.mcp_resource_templates, 1);
         assert_eq!(source_projection.source_kind, EcosystemSourceKind::Agents);
         assert_eq!(
             source_projection.source_scope,
@@ -1164,5 +1205,8 @@ mod tests {
         assert_eq!(source_projection.precedence_rank, Some(7));
         assert_eq!(source_projection.instructions, 1);
         assert_eq!(source_projection.skills, 1);
+        assert_eq!(source_projection.mcp_servers, 1);
+        assert_eq!(source_projection.mcp_resources, 1);
+        assert_eq!(source_projection.mcp_resource_templates, 1);
     }
 }
