@@ -167,6 +167,63 @@ fn blackboard_post_rejects_unallowed_type_and_unproven_fact() {
 }
 
 #[test]
+fn post_blackboard_reports_unproven_fact_failure_through_broker() {
+    let fx = fixture();
+    let cap = fx
+        .kernel
+        .grant_capability(
+            &fx.worker.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            2,
+            None,
+        )
+        .unwrap();
+
+    let invocation = fx
+        .kernel
+        .invoke_tool(
+            &fx.worker.agent_id,
+            &fx.task.task_id,
+            &fx.worker.session_id,
+            cap.capability_id,
+            2,
+            ToolInvokeInput {
+                tool_name: "post_blackboard".to_string(),
+                input: json!({
+                    "channel_id": "facts",
+                    "scope": "goal",
+                    "section": "known_fact",
+                    "content": {"fact": "unsupported broker fact"},
+                    "confidence": 0.5
+                }),
+                evidence_claim: Some(
+                    "unproven blackboard fact failure was model-visible".to_string(),
+                ),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(invocation.status, ToolCallStatus::Failed);
+    assert!(invocation.evidence_ids.is_empty());
+    let output = invocation.output.as_ref().unwrap();
+    assert_eq!(output["status"], "failed");
+    assert_eq!(output["stage"], "driver");
+    assert!(output["error"]
+        .as_str()
+        .unwrap()
+        .contains("facts and decisions require evidence provenance"));
+
+    let state = fx.kernel.state_snapshot().unwrap();
+    assert!(state.blackboard_entries.is_empty());
+    assert!(state
+        .messages
+        .values()
+        .all(|message| message.route != MessageRoute::Blackboard));
+}
+
+#[test]
 fn control_plane_tools_execute_through_tool_broker() {
     let fx = fixture();
     let cap = fx

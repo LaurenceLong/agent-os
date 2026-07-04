@@ -241,9 +241,7 @@ pub(crate) fn map_function_call(
         };
         return Ok((name.to_string(), arguments, risk));
     }
-    Err(AgentOsError::Validation(format!(
-        "model called non-visible tool `{name}`"
-    )))
+    Ok((name.to_string(), arguments, 0))
 }
 
 fn agent_control_risk(arguments: &Value) -> u8 {

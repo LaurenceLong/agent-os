@@ -1432,7 +1432,7 @@ fn map_function_call_supports_skill_and_mcp_tools() {
 }
 
 #[test]
-fn parse_response_rejects_non_visible_tool_call() {
+fn parse_response_preserves_non_visible_tool_call_for_runtime_feedback() {
     let tmp = std::env::temp_dir().join(format!("aos-openai-hidden-tool-{}", new_id("t_")));
     let request = make_request(&tmp);
     let body = json!({
@@ -1453,10 +1453,13 @@ fn parse_response_rejects_non_visible_tool_call() {
         "usage": {"prompt_tokens": 1, "completion_tokens": 1}
     });
 
-    let err = parse_response(&body, &request).unwrap_err();
-    assert!(err
-        .to_string()
-        .contains("model called non-visible tool `mcp__echo__echo`"));
+    let response = parse_response(&body, &request).unwrap();
+    let ModelAction::ToolCall(action) = &response.actions[0] else {
+        panic!("expected non-visible tool action");
+    };
+    assert_eq!(action.tool_name, "mcp__echo__echo");
+    assert_eq!(action.input, json!({"text": "hidden"}));
+    assert_eq!(action.risk_level, 0);
 }
 
 #[test]

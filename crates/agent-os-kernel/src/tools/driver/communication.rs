@@ -53,6 +53,21 @@ pub(in crate::tools) fn run_post_blackboard(
         .cloned()
         .ok_or_else(|| AgentOsError::Validation("missing required field content".to_string()))?;
     let source_evidence_ids = string_array(input, "source_evidence_ids")?;
+    let entry = kernel.post_blackboard_with_cause(
+        PostBlackboardInput {
+            source_agent_id: syscall.agent_id.clone(),
+            source_thread_id: acb.thread_id.clone(),
+            channel_id: Some(channel_id.clone()),
+            goal_id: acb.task.goal_id.clone(),
+            task_id: (scope == CommunicationScope::Task).then_some(syscall.task_id.clone()),
+            scope,
+            section,
+            content,
+            confidence: input.get("confidence").and_then(Value::as_f64),
+            source_evidence_ids,
+        },
+        Some(syscall.syscall_id.clone()),
+    )?;
     let message = send_control_message(
         kernel,
         syscall,
@@ -62,28 +77,13 @@ pub(in crate::tools) fn run_post_blackboard(
             message_type: "BlackboardPost".to_string(),
             payload: json!({
                 "scope": scope,
-                "entry_type": crate::blackboard::blackboard_section_key(section),
-                "content": content.clone(),
+                "entry_type": crate::blackboard::blackboard_section_key(entry.section),
+                "content": entry.content.clone(),
             }),
-            channel_id: Some(channel_id.clone()),
-            artifact_refs: Vec::new(),
-            evidence_refs: source_evidence_ids.clone(),
-        },
-    )?;
-    let entry = kernel.post_blackboard_with_cause(
-        PostBlackboardInput {
-            source_agent_id: syscall.agent_id.clone(),
-            source_thread_id: acb.thread_id,
             channel_id: Some(channel_id),
-            goal_id: acb.task.goal_id,
-            task_id: (scope == CommunicationScope::Task).then_some(syscall.task_id.clone()),
-            scope,
-            section,
-            content,
-            confidence: input.get("confidence").and_then(Value::as_f64),
-            source_evidence_ids,
+            artifact_refs: Vec::new(),
+            evidence_refs: entry.source_evidence_ids.clone(),
         },
-        Some(syscall.syscall_id.clone()),
     )?;
     Ok(json!({
         "tool": descriptor.name.clone(),
