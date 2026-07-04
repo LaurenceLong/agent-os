@@ -26,6 +26,7 @@ const CHECKPOINT_NAMES: [&str; 11] = [
 #[derive(Debug, Clone, Default)]
 pub struct ProjectionState {
     pub threads: BTreeMap<String, ClientThread>,
+    pub agent_threads: BTreeMap<String, String>,
     pub turns: BTreeMap<String, TurnRecord>,
     pub timeline_items: Vec<TimelineItem>,
     pub stats: StatsSnapshot,
@@ -157,18 +158,22 @@ impl ProjectionState {
     fn apply_thread(&mut self, thread: &AgentControlBlock, event: &EventEnvelope) {
         let active_turn_id = thread.active_turn.turn_id.clone();
         let existing = self.threads.get(&thread.thread_id);
+        let title = existing
+            .map(|thread| thread.title.clone())
+            .unwrap_or_else(|| thread.task.goal.clone());
+        let archived = existing.map(|thread| thread.archived).unwrap_or(false);
+        let deleted = existing.map(|thread| thread.deleted).unwrap_or(false);
+        self.index_agent_thread(thread);
         let client_thread = ClientThread {
             client_thread_id: thread.thread_id.clone(),
             agent_thread_id: thread.thread_id.clone(),
             task_id: Some(thread.task.task_id.clone()),
             goal_id: Some(thread.task.goal_id.clone()),
-            title: existing
-                .map(|thread| thread.title.clone())
-                .unwrap_or_else(|| thread.task.goal.clone()),
+            title,
             status: thread.status,
             active_turn_id: active_turn_id.clone(),
-            archived: existing.map(|thread| thread.archived).unwrap_or(false),
-            deleted: existing.map(|thread| thread.deleted).unwrap_or(false),
+            archived,
+            deleted,
             updated_at: event.created_at.clone(),
         };
         self.threads
@@ -224,6 +229,11 @@ impl ProjectionState {
                 summary: format!("{} {}", event.event_type, thread.thread_id),
             },
         );
+    }
+
+    pub fn index_agent_thread(&mut self, thread: &AgentControlBlock) {
+        self.agent_threads
+            .insert(thread.agent_id.clone(), thread.thread_id.clone());
     }
 
     fn apply_client_thread_update(&mut self, mut thread: ClientThread, event: &EventEnvelope) {
@@ -343,12 +353,13 @@ impl ProjectionState {
             | ToolCallStatus::PendingApproval
             | ToolCallStatus::Running => {}
         }
+        let client_thread_id = self.agent_threads.get(&invocation.agent_id).cloned();
         self.touch_stats(event);
         self.push_timeline_item(
             event,
             TimelineDraft {
                 item_type: TimelineItemType::ToolUpdated,
-                client_thread_id: None,
+                client_thread_id,
                 agent_id: Some(invocation.agent_id.clone()),
                 task_id: Some(invocation.task_id.clone()),
                 turn_id: None,

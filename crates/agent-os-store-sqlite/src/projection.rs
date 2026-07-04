@@ -3,10 +3,10 @@ use crate::events::insert_event_row;
 use crate::store::SqliteStore;
 use agent_os_store::{EventStore, ProjectionState, ProjectionStore};
 use agent_os_sys::{
-    AgentOsResult, ApprovalQueueProjection, ArtifactIndexProjection, AutomationRunProjection,
-    AutomationScheduleProjection, ClientThread, EventEnvelope, EvidenceIndexProjection,
-    ProjectionCheckpoint, ResourceSessionProjection, StatsQuery, StatsSnapshot, TimelineItem,
-    TurnRecord,
+    AgentControlBlock, AgentOsResult, ApprovalQueueProjection, ArtifactIndexProjection,
+    AutomationRunProjection, AutomationScheduleProjection, ClientThread, EventEnvelope,
+    EvidenceIndexProjection, ProjectionCheckpoint, ResourceSessionProjection, StatsQuery,
+    StatsSnapshot, TimelineItem, TurnRecord,
 };
 use rusqlite::params;
 use std::collections::BTreeMap;
@@ -491,8 +491,10 @@ fn read_projection_state(conn: &rusqlite::Connection) -> AgentOsResult<Projectio
     .map(|evidence| (evidence.evidence_id.clone(), evidence))
     .collect::<BTreeMap<_, _>>();
     let checkpoints = read_checkpoints(conn)?;
+    let agent_threads = read_agent_thread_index(conn)?;
     Ok(ProjectionState {
         threads,
+        agent_threads,
         turns,
         timeline_items,
         stats,
@@ -504,6 +506,32 @@ fn read_projection_state(conn: &rusqlite::Connection) -> AgentOsResult<Projectio
         evidence,
         checkpoints,
     })
+}
+
+fn read_agent_thread_index(conn: &rusqlite::Connection) -> AgentOsResult<BTreeMap<String, String>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT event_json FROM events WHERE event_type IN (
+                'ThreadConfigured',
+                'ThreadStatusChanged',
+                'AgentStatePurged',
+                'ThreadGoalAccomplished',
+                'TurnStarted',
+                'CheckpointCommitted'
+            ) ORDER BY ordinal ASC",
+        )
+        .map_err(sqlite_error)?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(sqlite_error)?;
+    let mut index = BTreeMap::new();
+    for row in rows {
+        let json = row.map_err(sqlite_error)?;
+        let event: EventEnvelope = serde_json::from_str(&json)?;
+        let thread: AgentControlBlock = serde_json::from_value(event.payload)?;
+        index.insert(thread.agent_id, thread.thread_id);
+    }
+    Ok(index)
 }
 
 fn read_stats_snapshot(conn: &rusqlite::Connection) -> AgentOsResult<StatsSnapshot> {

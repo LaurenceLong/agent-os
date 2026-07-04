@@ -1,12 +1,14 @@
 use agent_os_app_server::AppServer;
 use agent_os_config::AGENT_OS_HOME_ENV;
 use agent_os_host::AgentOsHost;
+use agent_os_kernel::ToolInvokeInput;
 use agent_os_sys::{
     app_protocol_json_schema, app_protocol_spec, app_protocol_typescript, app_protocol_version,
     AgentOsResult, AppMethodLifecycle, AppNotification, AppNotificationEnvelope, AppRequest,
     AppRequestEnvelope, AppResponse, AppResponseEnvelope, AutomationScheduleKind, ClientConnection,
     ClientKind, EvidenceMapEntry, FinalSubmission, ProcessLifecycleState, ProjectionCursor,
     ProviderUsage, ResourceSessionType, SecurityLevel, StatsQuery, StatsSnapshot, ThreadStatus,
+    ToolCallStatus,
 };
 use agent_os_thread::{ModelAction, ModelClient, ModelTurnRequest, ModelTurnResponse, ToolAction};
 use serde_json::json;
@@ -268,6 +270,98 @@ fn app_server_jsonl_host_path_updates_kernel_projection_and_notifications() {
         .unwrap()
         .iter()
         .any(|turn| turn.turn_id == turn_id));
+}
+
+#[test]
+fn app_server_thread_projection_includes_failed_tool_invocation_output() {
+    let host = AgentOsHost::in_memory();
+    let mut server = AppServer::new(host.clone());
+    let initialized = jsonl_request(&mut server, "req_init", AppRequest::Initialize);
+    assert!(matches!(initialized.response, AppResponse::Accepted(_)));
+
+    let started = accepted_body(jsonl_request(
+        &mut server,
+        "req_thread_start",
+        AppRequest::ThreadStart {
+            goal: "surface failed tool output in app thread timeline".to_string(),
+            workspace: None,
+        },
+    ));
+    let thread_id = started["thread"]["client_thread_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let thread = host
+        .kernel()
+        .state_snapshot()
+        .unwrap()
+        .threads
+        .get(&thread_id)
+        .cloned()
+        .unwrap();
+    let capability = host
+        .kernel()
+        .grant_capability(
+            &thread.agent_id,
+            &thread.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:read_file".to_string()],
+            1,
+            None,
+        )
+        .unwrap();
+    let failed = host
+        .kernel()
+        .invoke_tool(
+            &thread.agent_id,
+            &thread.task.task_id,
+            &thread.session_id,
+            capability.capability_id,
+            1,
+            ToolInvokeInput {
+                tool_name: "read_file".to_string(),
+                input: json!({"path": "missing.txt"}),
+                evidence_claim: Some(
+                    "failed read_file should be visible to app clients".to_string(),
+                ),
+            },
+        )
+        .unwrap();
+    assert_eq!(failed.status, ToolCallStatus::Failed);
+
+    let read = accepted_body(jsonl_request(
+        &mut server,
+        "req_thread_read_failed_tool",
+        AppRequest::ThreadRead {
+            client_thread_id: thread_id.clone(),
+        },
+    ));
+    let timeline = read["timeline"].as_array().unwrap();
+    let failed_item = timeline
+        .iter()
+        .find(|item| item["payload"]["call_id"] == failed.call_id)
+        .unwrap_or_else(|| panic!("thread/read omitted failed tool item: {timeline:#?}"));
+    assert_eq!(failed_item["item_type"], "tool_updated");
+    assert_eq!(failed_item["client_thread_id"], thread_id);
+    assert_eq!(failed_item["payload"]["tool_name"], "read_file");
+    assert_eq!(failed_item["payload"]["status"], "Failed");
+    assert_eq!(failed_item["payload"]["output"]["status"], "failed");
+
+    let items = accepted_body(jsonl_request(
+        &mut server,
+        "req_thread_items_failed_tool",
+        AppRequest::ThreadItemsRead {
+            client_thread_id: thread_id.clone(),
+            offset: 0,
+            limit: 100,
+        },
+    ));
+    assert!(items["items"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["payload"]["call_id"] == failed.call_id
+            && item["payload"]["status"] == "Failed"));
 }
 
 #[test]
