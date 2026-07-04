@@ -104,6 +104,145 @@ fn selected_task_bundle_exports_replayable_projection_slice() {
 }
 
 #[test]
+fn selected_task_bundle_exports_context_memory_and_memento_projection_slice() {
+    let fx = fixture();
+    let evidence = fx
+        .kernel
+        .attach_evidence(evidence_input(&fx, EvidenceType::SourceRef))
+        .unwrap();
+    let context = fx
+        .kernel
+        .load_context(LoadContextInput {
+            agent_id: fx.worker.agent_id.clone(),
+            task_id: fx.task.task_id.clone(),
+            loaded_refs: vec![evidence.evidence_id.clone()],
+            summary_artifact_id: None,
+            freshness: ContextFreshness::Fresh,
+            pollution_score: 0.0,
+            token_estimate: 256,
+        })
+        .unwrap();
+    let proposed_memory = fx
+        .kernel
+        .propose_memory_write(ProposeMemoryWriteInput {
+            namespace: "decisions".to_string(),
+            content: json!({"decision": "bundle exports context-affecting memory"}),
+            created_by_agent_id: fx.worker.agent_id.clone(),
+            source_evidence_ids: vec![evidence.evidence_id.clone()],
+        })
+        .unwrap();
+    let active_memory = fx
+        .kernel
+        .commit_memory_write(CommitMemoryWriteInput {
+            memory_id: proposed_memory.memory_id.clone(),
+            approved_by: "conformance".to_string(),
+        })
+        .unwrap();
+    let memento = fx
+        .kernel
+        .create_memento(CreateMementoInput {
+            owner_agent_id: fx.worker.agent_id.clone(),
+            owner_thread_id: fx.worker.thread_id.clone(),
+            goal_id: fx.goal.goal_id.clone(),
+            task_id: fx.task.task_id.clone(),
+            anchor: MementoAnchor {
+                anchor_type: MementoAnchorType::Manual,
+                anchor_ref: Some("bundle-context-export".to_string()),
+                condition: None,
+            },
+            content: MementoContent {
+                title: "Bundle context reminder".to_string(),
+                body: "Export owner-scoped context state.".to_string(),
+                checklist: vec!["verify projection".to_string()],
+                structured: None,
+            },
+            projection: MementoProjection {
+                mode: MementoProjectionMode::OwnerContext,
+                priority: MementoPriority::High,
+                max_projection_count: Some(1),
+            },
+            links: MementoLinks {
+                related_child_thread_ids: Vec::new(),
+                related_tool_call_ids: Vec::new(),
+                related_artifact_ids: Vec::new(),
+                related_evidence_ids: vec![evidence.evidence_id.clone()],
+            },
+            supersedes: None,
+            expires_at: None,
+        })
+        .unwrap();
+    let armed_memento = fx
+        .kernel
+        .arm_memento(&fx.worker.agent_id, &memento.memento_id)
+        .unwrap();
+
+    let bundle = fx.kernel.export_task_bundle(&fx.task.task_id).unwrap();
+
+    assert!(bundle
+        .projection_snapshot
+        .context_snapshots
+        .iter()
+        .any(|snapshot| snapshot.context_id == context.context_id
+            && snapshot.loaded_refs == vec![evidence.evidence_id.clone()]));
+    assert!(bundle
+        .projection_snapshot
+        .memory_records
+        .iter()
+        .any(|memory| memory.memory_id == active_memory.memory_id
+            && memory.status == MemoryStatus::Active
+            && memory.source_evidence_ids == vec![evidence.evidence_id.clone()]));
+    assert!(bundle
+        .projection_snapshot
+        .mementos
+        .iter()
+        .any(|candidate| candidate.memento_id == armed_memento.memento_id
+            && candidate.status == MementoStatus::Armed
+            && candidate.links.related_evidence_ids == vec![evidence.evidence_id.clone()]));
+    assert!(bundle
+        .projection_snapshot
+        .evidence
+        .iter()
+        .any(|candidate| candidate.evidence_id == evidence.evidence_id));
+    for required_event in [
+        "ContextLoaded",
+        "MemoryWriteProposed",
+        "MemoryWriteCommitted",
+        "MementoFragmentCreated",
+        "MementoFragmentArmed",
+    ] {
+        assert!(
+            bundle
+                .events
+                .iter()
+                .any(|event| event.event_type == required_event),
+            "missing {required_event}"
+        );
+    }
+
+    let replayed = Kernel::from_events(&bundle.events).unwrap();
+    let replayed_state = replayed.state_snapshot().unwrap();
+    assert!(replayed_state
+        .context_snapshots
+        .contains_key(&context.context_id));
+    assert_eq!(
+        replayed_state
+            .memory_records
+            .get(&active_memory.memory_id)
+            .unwrap()
+            .status,
+        MemoryStatus::Active
+    );
+    assert_eq!(
+        replayed_state
+            .mementos
+            .get(&armed_memento.memento_id)
+            .unwrap()
+            .status,
+        MementoStatus::Armed
+    );
+}
+
+#[test]
 fn replay_bundle_marks_export_kind_without_losing_events() {
     let fx = fixture();
     let task_bundle = fx.kernel.export_task_bundle(&fx.task.task_id).unwrap();
