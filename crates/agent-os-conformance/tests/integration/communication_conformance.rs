@@ -528,6 +528,30 @@ fn control_plane_tool_failures_are_model_visible_without_state_side_effects() {
     for (tool_name, input, expected_stage, expected_error) in [
         (
             "update_checklist",
+            json!({}),
+            "input_schema",
+            "tool.input missing required field items",
+        ),
+        (
+            "update_checklist",
+            json!({"items": "todo"}),
+            "input_schema",
+            "tool.input.items expected array",
+        ),
+        (
+            "update_checklist",
+            json!({"items": [{}]}),
+            "input_schema",
+            "tool.input.items[0] missing required field text",
+        ),
+        (
+            "update_checklist",
+            json!({"items": [{"text": 7}]}),
+            "input_schema",
+            "tool.input.items[0].text expected string",
+        ),
+        (
+            "update_checklist",
             json!({"items": [{"text": "bad status", "status": "done"}]}),
             "input_schema",
             "tool.input.items[0].status does not match any enum value",
@@ -537,6 +561,24 @@ fn control_plane_tool_failures_are_model_visible_without_state_side_effects() {
             json!({"task_id": "task_other", "items": [{"text": "wrong task"}]}),
             "driver",
             "work-state tools can only update the current task",
+        ),
+        (
+            "record_evidence",
+            json!({"claim": "missing evidence type"}),
+            "input_schema",
+            "tool.input missing required field evidence_type",
+        ),
+        (
+            "record_evidence",
+            json!({"evidence_type": "command_log"}),
+            "input_schema",
+            "tool.input missing required field claim",
+        ),
+        (
+            "record_evidence",
+            json!({"evidence_type": "command_log", "claim": 7}),
+            "input_schema",
+            "tool.input.claim expected string",
         ),
         (
             "record_evidence",
@@ -556,9 +598,39 @@ fn control_plane_tool_failures_are_model_visible_without_state_side_effects() {
         ),
         (
             "report_supervisor",
+            json!({}),
+            "input_schema",
+            "tool.input missing required field message",
+        ),
+        (
+            "report_supervisor",
+            json!({"message": 7}),
+            "input_schema",
+            "tool.input.message expected string",
+        ),
+        (
+            "report_supervisor",
+            json!({"message": "bad refs", "artifact_refs": [7]}),
+            "input_schema",
+            "tool.input.artifact_refs[0] expected string",
+        ),
+        (
+            "report_supervisor",
             json!({"message": "bad message type", "message_type": "Progress"}),
             "input_schema",
             "tool.input.message_type does not match any enum value",
+        ),
+        (
+            "accomplish_goal",
+            json!({}),
+            "input_schema",
+            "tool.input missing required field summary",
+        ),
+        (
+            "accomplish_goal",
+            json!({"summary": 7}),
+            "input_schema",
+            "tool.input.summary expected string",
         ),
         (
             "accomplish_goal",
@@ -571,6 +643,12 @@ fn control_plane_tool_failures_are_model_visible_without_state_side_effects() {
             json!({"summary": "bad artifact ref", "artifact_refs": [7]}),
             "input_schema",
             "tool.input.artifact_refs[0] expected string",
+        ),
+        (
+            "accomplish_goal",
+            json!({"summary": "bad known risk ref", "known_risks": [7]}),
+            "input_schema",
+            "tool.input.known_risks[0] expected string",
         ),
     ] {
         let invocation = fx
@@ -603,57 +681,74 @@ fn control_plane_tool_failures_are_model_visible_without_state_side_effects() {
         );
     }
 
-    let ask_human = fx
-        .kernel
-        .invoke_tool(
-            &supervisor.agent_id,
-            &fx.task.task_id,
-            &supervisor.session_id,
-            supervisor_cap.capability_id.clone(),
-            2,
-            ToolInvokeInput {
-                tool_name: "ask_human".to_string(),
-                input: json!({"question": "bad human type", "message_type": "StatusUpdate"}),
-                evidence_claim: Some("ask_human failure was model-visible".to_string()),
-            },
-        )
-        .unwrap();
-    assert_eq!(ask_human.status, ToolCallStatus::Failed);
-    assert!(ask_human.evidence_ids.is_empty());
-    let output = ask_human.output.as_ref().unwrap();
-    assert_eq!(output["status"], "failed");
-    assert_eq!(output["stage"], "input_schema");
-    let error = output["error"].as_str().unwrap_or_default();
-    assert!(
-        error.contains("tool.input.message_type does not match any enum value"),
-        "{error}"
-    );
-
-    let set_goal = fx
-        .kernel
-        .invoke_tool(
-            &supervisor.agent_id,
-            &fx.task.task_id,
-            &supervisor.session_id,
-            supervisor_cap.capability_id,
-            2,
-            ToolInvokeInput {
-                tool_name: "set_goal".to_string(),
-                input: json!({"goal": "bad success criteria", "success_criteria": ["ok", 7]}),
-                evidence_claim: Some("set_goal failure was model-visible".to_string()),
-            },
-        )
-        .unwrap();
-    assert_eq!(set_goal.status, ToolCallStatus::Failed);
-    assert!(set_goal.evidence_ids.is_empty());
-    let output = set_goal.output.as_ref().unwrap();
-    assert_eq!(output["status"], "failed");
-    assert_eq!(output["stage"], "input_schema");
-    let error = output["error"].as_str().unwrap_or_default();
-    assert!(
-        error.contains("tool.input.success_criteria[1] expected string"),
-        "{error}"
-    );
+    for (tool_name, input, expected_error) in [
+        (
+            "ask_human",
+            json!({}),
+            "tool.input missing required field question",
+        ),
+        (
+            "ask_human",
+            json!({"question": 7}),
+            "tool.input.question expected string",
+        ),
+        (
+            "ask_human",
+            json!({"question": "bad refs", "artifact_refs": [7]}),
+            "tool.input.artifact_refs[0] expected string",
+        ),
+        (
+            "ask_human",
+            json!({"question": "bad human type", "message_type": "StatusUpdate"}),
+            "tool.input.message_type does not match any enum value",
+        ),
+        (
+            "set_goal",
+            json!({}),
+            "tool.input missing required field goal",
+        ),
+        (
+            "set_goal",
+            json!({"goal": 7}),
+            "tool.input.goal expected string",
+        ),
+        (
+            "set_goal",
+            json!({"goal": "bad success criteria", "success_criteria": ["ok", 7]}),
+            "tool.input.success_criteria[1] expected string",
+        ),
+        (
+            "set_goal",
+            json!({"goal": "bad failure criteria", "failure_criteria": [7]}),
+            "tool.input.failure_criteria[0] expected string",
+        ),
+    ] {
+        let invocation = fx
+            .kernel
+            .invoke_tool(
+                &supervisor.agent_id,
+                &fx.task.task_id,
+                &supervisor.session_id,
+                supervisor_cap.capability_id.clone(),
+                2,
+                ToolInvokeInput {
+                    tool_name: tool_name.to_string(),
+                    input,
+                    evidence_claim: Some(format!("{tool_name} failure was model-visible")),
+                },
+            )
+            .unwrap();
+        assert_eq!(invocation.status, ToolCallStatus::Failed);
+        assert!(invocation.evidence_ids.is_empty());
+        let output = invocation.output.as_ref().unwrap();
+        assert_eq!(output["status"], "failed");
+        assert_eq!(output["stage"], "input_schema");
+        let error = output["error"].as_str().unwrap_or_default();
+        assert!(
+            error.contains(expected_error),
+            "expected {expected_error:?}, got {tool_name}: {error:?}"
+        );
+    }
 
     let after = fx.kernel.state_snapshot().unwrap();
     let after_task = after.tasks.get(&fx.task.task_id).unwrap();
