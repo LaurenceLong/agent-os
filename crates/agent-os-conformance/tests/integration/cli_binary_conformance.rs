@@ -445,6 +445,10 @@ fn cli_chat_binary_runs_task_through_configured_provider_and_replays_sqlite_stat
                     "models": {
                         "chat-model": {
                             "name": "wire-chat-model",
+                            "options": {
+                                "reasoningEffort": "medium",
+                                "max_tokens": 999999
+                            },
                             "limit": {"context": 65536, "output": 1024},
                             "capabilities": {
                                 "streaming": true,
@@ -479,6 +483,8 @@ fn cli_chat_binary_runs_task_through_configured_provider_and_replays_sqlite_stat
         .arg("6")
         .arg("--runtime-timeout-seconds")
         .arg("30")
+        .arg("--temperature")
+        .arg("0.2")
         .env("AGENT_OS_HOME", &agent_home)
         .output()
         .unwrap();
@@ -510,7 +516,15 @@ fn cli_chat_binary_runs_task_through_configured_provider_and_replays_sqlite_stat
         .unwrap();
     server.join().unwrap();
     assert_eq!(captured_requests.len(), 2);
+    assert_eq!(captured_requests[0]["__http"]["path"], "/chat/completions");
+    assert_eq!(
+        captured_requests[0]["__http"]["headers"]["authorization"],
+        "Bearer test-key"
+    );
     assert_eq!(captured_requests[0]["model"], "wire-chat-model");
+    assert_eq!(captured_requests[0]["reasoningEffort"], "medium");
+    assert_eq!(captured_requests[0]["max_tokens"], 1024);
+    assert_eq!(captured_requests[0]["temperature"], 0.2);
     assert!(captured_requests[0]["tools"]
         .as_array()
         .unwrap()
@@ -1005,12 +1019,26 @@ fn serve_chat_provider_endpoint(listener: TcpListener, requests_tx: mpsc::Sender
 fn read_http_json(stream: &mut TcpStream) -> Value {
     let mut bytes = Vec::new();
     let mut buffer = [0_u8; 1024];
-    let (header_end, content_length) = loop {
+    let (header_end, content_length, path, headers_value) = loop {
         let read = stream.read(&mut buffer).unwrap();
         assert!(read > 0, "connection closed before headers");
         bytes.extend_from_slice(&buffer[..read]);
         if let Some(header_end) = find_header_end(&bytes) {
             let headers = String::from_utf8_lossy(&bytes[..header_end]);
+            let request_path = headers
+                .lines()
+                .next()
+                .and_then(|line| line.split_whitespace().nth(1))
+                .expect("request path")
+                .to_string();
+            let headers_value = headers
+                .lines()
+                .skip(1)
+                .filter_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    Some((name.trim().to_ascii_lowercase(), json!(value.trim())))
+                })
+                .collect::<serde_json::Map<String, Value>>();
             let content_length = headers
                 .lines()
                 .find_map(|line| {
@@ -1020,7 +1048,12 @@ fn read_http_json(stream: &mut TcpStream) -> Value {
                         .flatten()
                 })
                 .expect("content-length header");
-            break (header_end, content_length);
+            break (
+                header_end,
+                content_length,
+                request_path,
+                Value::Object(headers_value),
+            );
         }
     };
 
@@ -1030,7 +1063,18 @@ fn read_http_json(stream: &mut TcpStream) -> Value {
         assert!(read > 0, "connection closed before body");
         bytes.extend_from_slice(&buffer[..read]);
     }
-    serde_json::from_slice(&bytes[body_start..body_start + content_length]).unwrap()
+    let mut body: Value =
+        serde_json::from_slice(&bytes[body_start..body_start + content_length]).unwrap();
+    body.as_object_mut()
+        .expect("provider request body must be an object")
+        .insert(
+            "__http".to_string(),
+            json!({
+                "path": path,
+                "headers": headers_value,
+            }),
+        );
+    body
 }
 
 fn write_http_json(stream: &mut TcpStream, body: &Value) {
