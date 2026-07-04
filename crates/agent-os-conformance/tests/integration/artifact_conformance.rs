@@ -874,6 +874,36 @@ fn read_file_reports_parameter_and_driver_failures_to_model() {
         (
             json!({
                 "workspace_root": workspace.to_string_lossy(),
+            }),
+            "input_schema",
+            "tool.input missing required field path",
+        ),
+        (
+            json!({
+                "workspace_root": workspace.to_string_lossy(),
+                "path": 7,
+            }),
+            "input_schema",
+            "tool.input.path expected string",
+        ),
+        (
+            json!({
+                "path": "paged.txt",
+            }),
+            "input_schema",
+            "tool.input missing required field workspace_root",
+        ),
+        (
+            json!({
+                "workspace_root": 7,
+                "path": "paged.txt",
+            }),
+            "input_schema",
+            "tool.input.workspace_root expected string",
+        ),
+        (
+            json!({
+                "workspace_root": workspace.to_string_lossy(),
                 "path": "paged.txt",
                 "offset": 0,
                 "limit": 1
@@ -928,6 +958,8 @@ fn read_file_reports_parameter_and_driver_failures_to_model() {
             "expected {expected_error:?}, got {error:?}"
         );
     }
+
+    assert!(fx.kernel.state_snapshot().unwrap().evidence.is_empty());
 
     let _ = std::fs::remove_dir_all(workspace);
 }
