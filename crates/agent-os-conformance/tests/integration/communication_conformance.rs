@@ -245,6 +245,35 @@ fn post_blackboard_parameter_failures_do_not_publish_context() {
     for (input, expected_error) in [
         (
             json!({
+                "section": "risk",
+                "content": {"risk": "missing channel should not publish"}
+            }),
+            "tool.input missing required field channel_id",
+        ),
+        (
+            json!({
+                "channel_id": "risks",
+                "content": {"risk": "missing section should not publish"}
+            }),
+            "tool.input missing required field section",
+        ),
+        (
+            json!({
+                "channel_id": "risks",
+                "section": "risk"
+            }),
+            "tool.input missing required field content",
+        ),
+        (
+            json!({
+                "channel_id": 7,
+                "section": "risk",
+                "content": {"risk": "bad channel type should not publish"}
+            }),
+            "tool.input.channel_id expected string",
+        ),
+        (
+            json!({
                 "channel_id": "risks",
                 "scope": "workspace",
                 "section": "risk",
@@ -277,6 +306,15 @@ fn post_blackboard_parameter_failures_do_not_publish_context() {
                 "confidence": 1.5
             }),
             "tool.input.confidence must be <= 1",
+        ),
+        (
+            json!({
+                "channel_id": "risks",
+                "section": "risk",
+                "content": {"risk": "confidence too low"},
+                "confidence": -0.1
+            }),
+            "tool.input.confidence must be >= 0",
         ),
         (
             json!({
