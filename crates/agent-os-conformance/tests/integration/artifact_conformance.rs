@@ -2268,37 +2268,58 @@ fn kernel_tool_plan_projects_direct_hidden_and_disabled_tools() {
 #[test]
 fn tool_search_returns_deferred_tool_summaries() {
     let fx = fixture();
-    fx.kernel
-        .register_tool_descriptor(ToolDescriptor {
-            tool_id: "tool_mcp__echo__echo".to_string(),
-            name: "mcp__echo__echo".to_string(),
-            description: "Echo one text field through MCP.".to_string(),
-            version: "0.3.0".to_string(),
-            driver_class: ToolDriverClass::Mcp,
-            risk_level: 3,
-            input_schema: json!({
-                "type": "object",
-                "required": ["text"],
-                "properties": {"text": {"type": "string"}},
-                "additionalProperties": false
-            }),
-            model_input_schema: Some(json!({
-                "type": "object",
-                "required": ["text"],
-                "properties": {"text": {"type": "string"}},
-                "additionalProperties": false
-            })),
-            output_schema: json!({"type": "object"}),
-            runtime_input_policy: ToolRuntimeInputPolicy {
-                required_resource_scopes: vec!["mcp:echo:echo".to_string()],
-                ..ToolRuntimeInputPolicy::default()
-            },
-            idempotency: IdempotencyMode::ToolNative,
-            evidence_type: Some(EvidenceType::ExternalReference),
-            created_at: now_rfc3339(),
-            ..ToolDescriptor::default()
-        })
-        .unwrap();
+    for (tool_name, description, scope, risk_level) in [
+        (
+            "mcp__alpha__echo",
+            "Echo alpha text through MCP.",
+            "mcp:alpha:echo",
+            2,
+        ),
+        (
+            "mcp__beta__echo",
+            "Echo beta text through MCP.",
+            "mcp:beta:echo",
+            3,
+        ),
+        (
+            "mcp__gamma__echo",
+            "Echo gamma text through MCP.",
+            "mcp:gamma:echo",
+            1,
+        ),
+    ] {
+        fx.kernel
+            .register_tool_descriptor(ToolDescriptor {
+                tool_id: format!("tool_{tool_name}"),
+                name: tool_name.to_string(),
+                description: description.to_string(),
+                version: "0.3.0".to_string(),
+                driver_class: ToolDriverClass::Mcp,
+                risk_level,
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["text"],
+                    "properties": {"text": {"type": "string"}},
+                    "additionalProperties": false
+                }),
+                model_input_schema: Some(json!({
+                    "type": "object",
+                    "required": ["text"],
+                    "properties": {"text": {"type": "string"}},
+                    "additionalProperties": false
+                })),
+                output_schema: json!({"type": "object"}),
+                runtime_input_policy: ToolRuntimeInputPolicy {
+                    required_resource_scopes: vec![scope.to_string()],
+                    ..ToolRuntimeInputPolicy::default()
+                },
+                idempotency: IdempotencyMode::ToolNative,
+                evidence_type: Some(EvidenceType::ExternalReference),
+                created_at: now_rfc3339(),
+                ..ToolDescriptor::default()
+            })
+            .unwrap();
+    }
     let capability = fx
         .kernel
         .grant_capability(
@@ -2311,27 +2332,98 @@ fn tool_search_returns_deferred_tool_summaries() {
         )
         .unwrap();
 
-    let invocation = fx
+    let limited = fx
         .kernel
         .invoke_tool(
             &fx.worker.agent_id,
             &fx.task.task_id,
             &fx.worker.session_id,
-            capability.capability_id,
+            capability.capability_id.clone(),
             1,
             ToolInvokeInput {
                 tool_name: "tool_search".to_string(),
-                input: json!({"query": "echo", "limit": 5}),
+                input: json!({"query": "echo", "limit": 2}),
                 evidence_claim: Some("deferred tool discovery was queried".to_string()),
             },
         )
         .unwrap();
 
-    let output = invocation.output.unwrap();
+    let output = limited.output.unwrap();
     assert_eq!(output["status"], json!("ok"));
-    assert_eq!(output["returned_matches"], json!(1));
-    assert_eq!(output["matches"][0]["name"], json!("mcp__echo__echo"));
+    assert_eq!(output["total_matches"], json!(3));
+    assert_eq!(output["returned_matches"], json!(2));
+    assert_eq!(output["matches"][0]["name"], json!("mcp__alpha__echo"));
+    assert_eq!(output["matches"][1]["name"], json!("mcp__beta__echo"));
     assert_eq!(output["matches"][0]["driver_class"], json!("mcp"));
+
+    let default_limit = fx
+        .kernel
+        .invoke_tool(
+            &fx.worker.agent_id,
+            &fx.task.task_id,
+            &fx.worker.session_id,
+            capability.capability_id.clone(),
+            1,
+            ToolInvokeInput {
+                tool_name: "tool_search".to_string(),
+                input: json!({"query": "echo"}),
+                evidence_claim: Some("deferred tool discovery used the default limit".to_string()),
+            },
+        )
+        .unwrap()
+        .output
+        .unwrap();
+    assert_eq!(default_limit["total_matches"], json!(3));
+    assert_eq!(default_limit["returned_matches"], json!(3));
+
+    let multi_word = fx
+        .kernel
+        .invoke_tool(
+            &fx.worker.agent_id,
+            &fx.task.task_id,
+            &fx.worker.session_id,
+            capability.capability_id.clone(),
+            1,
+            ToolInvokeInput {
+                tool_name: "tool_search".to_string(),
+                input: json!({"query": "gamma echo"}),
+                evidence_claim: Some("multi-word deferred tool discovery was queried".to_string()),
+            },
+        )
+        .unwrap()
+        .output
+        .unwrap();
+    assert_eq!(multi_word["total_matches"], json!(1));
+    assert_eq!(multi_word["matches"][0]["name"], json!("mcp__gamma__echo"));
+
+    let invalid_limit = fx.kernel.invoke_tool(
+        &fx.worker.agent_id,
+        &fx.task.task_id,
+        &fx.worker.session_id,
+        capability.capability_id,
+        1,
+        ToolInvokeInput {
+            tool_name: "tool_search".to_string(),
+            input: json!({"query": "echo", "limit": 0}),
+            evidence_claim: Some("invalid tool_search limit was rejected".to_string()),
+        },
+    );
+    let invalid_limit = invalid_limit.unwrap();
+    assert_eq!(invalid_limit.status, ToolCallStatus::Failed);
+    assert_eq!(
+        invalid_limit
+            .output
+            .as_ref()
+            .and_then(|output| output.get("stage")),
+        Some(&json!("input_schema"))
+    );
+    let error = invalid_limit
+        .output
+        .as_ref()
+        .and_then(|output| output.get("error"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    assert!(error.contains("tool.input.limit must be >= 1"), "{error}");
 }
 
 #[test]
