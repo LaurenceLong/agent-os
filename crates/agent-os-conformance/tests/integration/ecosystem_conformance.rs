@@ -549,7 +549,7 @@ fn skill_tools_enforce_scope_and_skill_root_resource_bounds() {
             &fx.worker.agent_id,
             &fx.task.task_id,
             &fx.worker.session_id,
-            allowed.capability_id,
+            allowed.capability_id.clone(),
             1,
             ToolInvokeInput {
                 tool_name: "read_skill_resource".to_string(),
@@ -566,6 +566,122 @@ fn skill_tools_enforce_scope_and_skill_root_resource_bounds() {
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
     assert!(error.contains("skill resource path") && error.contains("skill root"));
+
+    let broad_skill_access = fx
+        .kernel
+        .grant_capability(
+            &fx.worker.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec![
+                "tool:*".to_string(),
+                "skill:*".to_string(),
+                "skill_file:*".to_string(),
+            ],
+            1,
+            None,
+        )
+        .unwrap();
+    for (tool_name, input, capability_id, expected_stage, expected_error) in [
+        (
+            "load_skill",
+            json!({"name": "review-skill", "offset": 0, "limit": 1}),
+            allowed.capability_id.clone(),
+            "input_schema",
+            "tool.input.offset must be >= 1",
+        ),
+        (
+            "load_skill",
+            json!({"name": "review-skill", "offset": 1, "limit": 1001}),
+            allowed.capability_id.clone(),
+            "input_schema",
+            "tool.input.limit must be <= 1000",
+        ),
+        (
+            "load_skill",
+            json!({"name": "missing-skill", "offset": 1, "limit": 1}),
+            broad_skill_access.capability_id.clone(),
+            "driver",
+            "skill missing-skill",
+        ),
+        (
+            "read_skill_resource",
+            json!({
+                "name": "review-skill",
+                "path": "resources/checklist.md",
+                "offset": 0,
+                "limit": 1
+            }),
+            allowed.capability_id.clone(),
+            "input_schema",
+            "tool.input.offset must be >= 1",
+        ),
+        (
+            "read_skill_resource",
+            json!({
+                "name": "review-skill",
+                "path": "resources/checklist.md",
+                "offset": 1,
+                "limit": 1001
+            }),
+            allowed.capability_id.clone(),
+            "input_schema",
+            "tool.input.limit must be <= 1000",
+        ),
+        (
+            "read_skill_resource",
+            json!({
+                "name": "review-skill",
+                "path": "resources/missing.md",
+                "offset": 1,
+                "limit": 1
+            }),
+            allowed.capability_id.clone(),
+            "driver",
+            "canonicalize skill resource",
+        ),
+        (
+            "read_skill_resource",
+            json!({
+                "name": "missing-skill",
+                "path": "resources/checklist.md",
+                "offset": 1,
+                "limit": 1
+            }),
+            broad_skill_access.capability_id.clone(),
+            "driver",
+            "skill missing-skill",
+        ),
+    ] {
+        let failure = fx
+            .kernel
+            .invoke_tool(
+                &fx.worker.agent_id,
+                &fx.task.task_id,
+                &fx.worker.session_id,
+                capability_id,
+                1,
+                ToolInvokeInput {
+                    tool_name: tool_name.to_string(),
+                    input,
+                    evidence_claim: Some(format!("{tool_name} parameter failure was reported")),
+                },
+            )
+            .unwrap();
+        assert_eq!(failure.status, ToolCallStatus::Failed);
+        assert!(failure.evidence_ids.is_empty());
+        let output = failure.output.as_ref().unwrap();
+        assert_eq!(output["status"], json!("failed"));
+        let error = output["error"].as_str().unwrap_or_default();
+        assert_eq!(
+            output["stage"], expected_stage,
+            "expected stage {expected_stage:?} for {expected_error:?}, got {tool_name}: {error:?}"
+        );
+        assert!(
+            error.contains(expected_error),
+            "expected {expected_error:?}, got {tool_name}: {error:?}"
+        );
+    }
     let _ = fs::remove_dir_all(workspace);
 }
 
