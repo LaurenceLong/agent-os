@@ -1,5 +1,6 @@
 mod app_protocol_conformance;
 mod artifact_conformance;
+mod cli_binary_conformance;
 mod communication_conformance;
 mod context_conformance;
 mod ecosystem_conformance;
