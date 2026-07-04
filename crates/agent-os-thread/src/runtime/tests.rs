@@ -1522,6 +1522,47 @@ fn runtime_projects_finalization_feedback_after_patch_and_command_and_filters_to
 }
 
 #[test]
+fn finalization_feedback_requires_successful_post_patch_command() {
+    fn tool_result(tool_name: &str, output: serde_json::Value) -> ToolExecutionRecord {
+        ToolExecutionRecord {
+            call_id: format!("{tool_name}_call"),
+            tool_name: tool_name.to_string(),
+            status: ToolCallStatus::Completed,
+            input: None,
+            output: Some(output),
+            evidence_ids: vec![format!("{tool_name}_evidence")],
+            evidence_claim: Some(format!("{tool_name} evidence")),
+        }
+    }
+
+    let artifacts = vec![ArtifactRecord {
+        artifact_id: "artifact_patch".to_string(),
+        artifact_type: ArtifactType::Patch,
+        blob_ref: None,
+        evidence_ids: vec!["patch_evidence".to_string()],
+    }];
+    let patch = tool_result("apply_patch", json!({"status": "completed"}));
+
+    let failed_command = tool_result("run_command", json!({"exit_code": 1}));
+    assert!(!super::feedback::should_project_finalization_feedback(
+        &[patch.clone(), failed_command],
+        &artifacts
+    ));
+
+    let missing_exit_code_command = tool_result("run_command", json!({"status": "completed"}));
+    assert!(!super::feedback::should_project_finalization_feedback(
+        &[patch.clone(), missing_exit_code_command],
+        &artifacts
+    ));
+
+    let successful_command = tool_result("run_command", json!({"exit_code": 0}));
+    assert!(super::feedback::should_project_finalization_feedback(
+        &[patch, successful_command],
+        &artifacts
+    ));
+}
+
+#[test]
 fn runtime_projects_pre_patch_resolution_feedback_after_bounded_investigation() {
     struct ResolveAfterPrePatchResolutionFeedback {
         program: std::path::PathBuf,

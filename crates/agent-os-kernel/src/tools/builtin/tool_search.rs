@@ -138,7 +138,7 @@ fn execute(
         },
         ToolPlanningMode::Normal,
     )?;
-    let normalized_query = query.to_lowercase();
+    let normalized_query = normalize_tool_search_text(&query);
     let mut matches = plan
         .entries
         .into_iter()
@@ -172,16 +172,30 @@ fn deferred_tool_matches(descriptor: &ToolDescriptor, normalized_query: &str) ->
     if normalized_query.is_empty() {
         return true;
     }
-    descriptor.name.to_lowercase().contains(normalized_query)
-        || descriptor
-            .description
-            .to_lowercase()
-            .contains(normalized_query)
-        || descriptor
-            .driver_config
-            .to_string()
-            .to_lowercase()
-            .contains(normalized_query)
+    let searchable = normalize_tool_search_text(&format!(
+        "{} {} {}",
+        descriptor.name, descriptor.description, descriptor.driver_config
+    ));
+    searchable.contains(normalized_query)
+        || normalized_query
+            .split_whitespace()
+            .all(|term| searchable.contains(term))
+}
+
+fn normalize_tool_search_text(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[cfg(test)]
@@ -200,5 +214,16 @@ mod tests {
             .examples
             .iter()
             .any(|example| example.parameters == json!({"query": "echo", "limit": 5})));
+    }
+
+    #[test]
+    fn search_matches_multi_word_query_across_tool_name_separators() {
+        let descriptor = ToolDescriptor {
+            name: "mcp__live_echo__echo".to_string(),
+            description: "Echo one text field.".to_string(),
+            ..ToolDescriptor::default()
+        };
+
+        assert!(deferred_tool_matches(&descriptor, "live echo"));
     }
 }

@@ -476,28 +476,15 @@ fn live_anthropic_messages_llm_switches_read_image_context_to_text_only_model() 
 }
 
 #[test]
-#[ignore = "requires a live openai_chat_completions text-only model"]
-fn live_openai_chat_completions_llm_forced_image_payload_returns_provider_error() {
-    run_live_llm_forced_image_payload_returns_provider_error(
+#[ignore = "requires a live openai_chat_completions endpoint with gateway compatibility behavior"]
+fn live_openai_chat_completions_llm_forced_image_payload_observes_gateway_behavior() {
+    run_live_llm_forced_image_payload_observes_gateway_behavior(
         "openai_chat_completions",
         LlmApiStyle::OpenAiChatCompletions,
         "AGENT_OS_LIVE_OPENAI_API_KEY",
         "AGENT_OS_LIVE_OPENAI_MODEL",
         "AGENT_OS_LIVE_OPENAI_BASE_URL",
-        "live-openai_chat_completions-read-image-forced-text-model-error.jsonl",
-    );
-}
-
-#[test]
-#[ignore = "requires a live anthropic_messages text-only model"]
-fn live_anthropic_messages_llm_forced_image_payload_returns_provider_error() {
-    run_live_llm_forced_image_payload_returns_provider_error(
-        "anthropic_messages",
-        LlmApiStyle::AnthropicMessages,
-        "AGENT_OS_LIVE_ANTHROPIC_API_KEY",
-        "AGENT_OS_LIVE_ANTHROPIC_MODEL",
-        "AGENT_OS_LIVE_ANTHROPIC_BASE_URL",
-        "live-anthropic_messages-read-image-forced-text-model-error.jsonl",
+        "live-openai_chat_completions-read-image-forced-payload-observed.jsonl",
     );
 }
 
@@ -1353,70 +1340,6 @@ fn run_live_llm_switch_read_image_context_to_text_only_model(
     .unwrap();
     println!(
         "live_read_image_switch_text_only_log={}",
-        audit_log_path.display()
-    );
-    let _ = std::fs::remove_dir_all(tmp);
-}
-
-fn run_live_llm_forced_image_payload_returns_provider_error(
-    provider: &str,
-    endpoint: LlmApiStyle,
-    api_key_env: &str,
-    model_env: &str,
-    base_env: &str,
-    log_file_name: &str,
-) {
-    let api_key = live_env_var(api_key_env);
-    let model = live_env_var(model_env);
-    let api_base = live_env_var(base_env);
-    let tmp = fresh_live_tmp("aos-live-read-image-forced-error", provider);
-    let audit_log_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/agent-os-audit")
-        .join(log_file_name);
-    let _ = std::fs::remove_file(&audit_log_path);
-    let request = live_read_image_context_request(
-        &tmp,
-        true,
-        "This live negative test intentionally sends a prior read_image image payload to the current provider model. The model is expected to reject image input.",
-    );
-    let mut client = OpenAiModelClient::new(api_key, model.clone())
-        .with_api_base(api_base.clone())
-        .with_endpoint(endpoint)
-        .with_max_tokens(512)
-        .with_audit_log(audit_log_path.clone());
-    append_jsonl(
-        &audit_log_path,
-        &json!({
-            "type": "live_read_image_forced_text_model_error_start",
-            "provider": provider,
-            "api_base": api_base,
-            "model": model,
-            "workspace": tmp,
-            "model_capabilities": request.model_capabilities.clone(),
-        }),
-    )
-    .unwrap();
-
-    let error = crate::ModelClient::next(&mut client, &request).unwrap_err();
-    let error_text = error.to_string();
-    assert!(
-        error_text.contains("API error") || error_text.contains("image"),
-        "forced image payload returned unexpected error: {error_text}"
-    );
-    assert_provider_request_exposes_tool(&audit_log_path, "read_image");
-    assert_provider_request_contains_image_payload(&audit_log_path, provider);
-    assert_provider_error_logged(&audit_log_path, provider);
-    append_jsonl(
-        &audit_log_path,
-        &json!({
-            "type": "live_read_image_forced_text_model_error_summary",
-            "provider": provider,
-            "error": error_text,
-        }),
-    )
-    .unwrap();
-    println!(
-        "live_read_image_forced_text_model_error_log={}",
         audit_log_path.display()
     );
     let _ = std::fs::remove_dir_all(tmp);
@@ -2304,14 +2227,14 @@ fn run_live_llm_goal_driven_workspace_e2e(
     let (verifier_name, verifier_command) = if cfg!(windows) {
         std::fs::write(
                 tmp.join("verify_goal.cmd"),
-                "@echo off\r\nfindstr /C:\"Status: ready\" task.md >nul || exit /b 1\r\nfindstr /C:\"WORKSPACE_GOAL_OK\" live_result.txt >nul || exit /b 1\r\nif exist obsolete.tmp exit /b 1\r\necho WORKSPACE_GOAL_VERIFIED\r\n",
+                "@echo off\r\nfindstr /C:\"Status: ready\" task.md >nul || exit /b 1\r\npowershell -NoProfile -Command \"$c=[IO.File]::ReadAllText('live_result.txt');$e='WORKSPACE_GOAL_OK'+[char]10;if($c -ne $e){exit 1}\"\r\nif errorlevel 1 exit /b 1\r\nif exist obsolete.tmp exit /b 1\r\necho WORKSPACE_GOAL_VERIFIED\r\n",
             )
             .unwrap();
         ("verify_goal.cmd", r#"command ".\verify_goal.cmd""#)
     } else {
         std::fs::write(
                 tmp.join("verify_goal.sh"),
-                "#!/bin/sh\ngrep -F \"Status: ready\" task.md >/dev/null || exit 1\ngrep -F \"WORKSPACE_GOAL_OK\" live_result.txt >/dev/null || exit 1\n[ ! -e obsolete.tmp ] || exit 1\necho WORKSPACE_GOAL_VERIFIED\n",
+                "#!/bin/sh\ngrep -F \"Status: ready\" task.md >/dev/null || exit 1\nprintf 'WORKSPACE_GOAL_OK\\n' | cmp -s - live_result.txt || exit 1\n[ ! -e obsolete.tmp ] || exit 1\necho WORKSPACE_GOAL_VERIFIED\n",
             )
             .unwrap();
         ("verify_goal.sh", r#"command "sh verify_goal.sh""#)

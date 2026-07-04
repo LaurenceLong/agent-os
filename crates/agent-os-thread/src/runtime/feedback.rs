@@ -136,8 +136,18 @@ fn latest_patch_has_following_command_evidence(tool_results: &[ToolExecutionReco
         .any(|result| {
             result.tool_name == "run_command"
                 && result.status == ToolCallStatus::Completed
+                && run_command_succeeded(result)
                 && !result.evidence_ids.is_empty()
         })
+}
+
+fn run_command_succeeded(result: &ToolExecutionRecord) -> bool {
+    result
+        .output
+        .as_ref()
+        .and_then(|output| output.get("exit_code"))
+        .and_then(Value::as_i64)
+        == Some(0)
 }
 
 pub(super) fn finalization_feedback_record(
