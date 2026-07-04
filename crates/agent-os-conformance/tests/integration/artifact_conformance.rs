@@ -808,6 +808,87 @@ fn read_image_returns_base64_data_url_with_source_evidence() {
 }
 
 #[test]
+fn read_image_reports_model_visible_failures() {
+    let fx = fixture();
+    let workspace = std::env::temp_dir().join(format!(
+        "agent-os-read-image-failures-{}-{}",
+        std::process::id(),
+        new_id("case_")
+    ));
+    let env = fx
+        .kernel
+        .create_environment(
+            BackendType::IsolatedWorktree,
+            workspace.to_string_lossy(),
+            "sbox_workspace_write",
+            ReusePolicy::TaskScoped,
+        )
+        .unwrap();
+    fx.kernel
+        .attach_environment(
+            &env.environment_id,
+            &fx.worker.agent_id,
+            &fx.worker.thread_id,
+            &fx.task.task_id,
+            AttachMode::WorkspaceWrite,
+        )
+        .unwrap();
+    std::fs::create_dir_all(workspace.join("folder.png")).unwrap();
+    std::fs::write(workspace.join("vector.svg"), "<svg></svg>\n").unwrap();
+    std::fs::write(workspace.join("empty.png"), []).unwrap();
+    let cap = fx
+        .kernel
+        .grant_capability(
+            &fx.worker.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            1,
+            None,
+        )
+        .unwrap();
+
+    for (path, expected) in [
+        (
+            "vector.svg",
+            "read_image supports png, jpg, jpeg, gif, webp, bmp, tif, tiff, avif, and ico files",
+        ),
+        ("empty.png", "read_image cannot read an empty image file"),
+        ("folder.png", "read_image path must point to a file"),
+    ] {
+        let invocation = fx
+            .kernel
+            .invoke_tool(
+                &fx.worker.agent_id,
+                &fx.task.task_id,
+                &fx.worker.session_id,
+                cap.capability_id.clone(),
+                1,
+                ToolInvokeInput {
+                    tool_name: "read_image".to_string(),
+                    input: json!({
+                        "workspace_root": workspace.to_string_lossy(),
+                        "path": path
+                    }),
+                    evidence_claim: Some(format!("read_image rejected {path}")),
+                },
+            )
+            .unwrap();
+        assert_eq!(invocation.status, ToolCallStatus::Failed);
+        assert!(invocation.evidence_ids.is_empty());
+        let error = invocation
+            .output
+            .as_ref()
+            .and_then(|output| output.get("error"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        assert!(error.contains(expected), "{path}: {error}");
+    }
+
+    let _ = std::fs::remove_dir_all(workspace);
+}
+
+#[test]
 fn long_running_command_returns_running_and_can_be_queried_by_tool_call_id() {
     let fx = fixture();
     let workspace = std::env::temp_dir().join(format!(
