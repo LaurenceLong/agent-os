@@ -721,6 +721,107 @@ fn read_file_paginates_with_offset_limit_metadata() {
 }
 
 #[test]
+fn read_file_reports_parameter_and_driver_failures_to_model() {
+    let fx = fixture();
+    let workspace = std::env::temp_dir().join(format!(
+        "agent-os-read-file-failures-{}-{}",
+        std::process::id(),
+        new_id("case_")
+    ));
+    let env = fx
+        .kernel
+        .create_environment(
+            BackendType::IsolatedWorktree,
+            workspace.to_string_lossy(),
+            "sbox_workspace_write",
+            ReusePolicy::TaskScoped,
+        )
+        .unwrap();
+    fx.kernel
+        .attach_environment(
+            &env.environment_id,
+            &fx.worker.agent_id,
+            &fx.worker.thread_id,
+            &fx.task.task_id,
+            AttachMode::WorkspaceWrite,
+        )
+        .unwrap();
+    std::fs::write(workspace.join("paged.txt"), "one\ntwo\n").unwrap();
+    let cap = fx
+        .kernel
+        .grant_capability(
+            &fx.worker.agent_id,
+            &fx.task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:*".to_string()],
+            1,
+            None,
+        )
+        .unwrap();
+
+    for (input, expected_stage, expected_error) in [
+        (
+            json!({
+                "workspace_root": workspace.to_string_lossy(),
+                "path": "paged.txt",
+                "offset": 0,
+                "limit": 1
+            }),
+            "input_schema",
+            "tool.input.offset must be >= 1",
+        ),
+        (
+            json!({
+                "workspace_root": workspace.to_string_lossy(),
+                "path": "paged.txt",
+                "offset": 1,
+                "limit": 1001
+            }),
+            "input_schema",
+            "tool.input.limit must be <= 1000",
+        ),
+        (
+            json!({
+                "workspace_root": workspace.to_string_lossy(),
+                "path": "missing.txt",
+                "offset": 1,
+                "limit": 1
+            }),
+            "driver",
+            "read workspace file",
+        ),
+    ] {
+        let invocation = fx
+            .kernel
+            .invoke_tool(
+                &fx.worker.agent_id,
+                &fx.task.task_id,
+                &fx.worker.session_id,
+                cap.capability_id.clone(),
+                1,
+                ToolInvokeInput {
+                    tool_name: "read_file".to_string(),
+                    input,
+                    evidence_claim: Some("read_file failure was model-visible".to_string()),
+                },
+            )
+            .unwrap();
+        assert_eq!(invocation.status, ToolCallStatus::Failed);
+        assert!(invocation.evidence_ids.is_empty());
+        let output = invocation.output.as_ref().unwrap();
+        assert_eq!(output["status"], "failed");
+        assert_eq!(output["stage"], expected_stage);
+        let error = output["error"].as_str().unwrap_or_default();
+        assert!(
+            error.contains(expected_error),
+            "expected {expected_error:?}, got {error:?}"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(workspace);
+}
+
+#[test]
 fn read_image_returns_base64_data_url_with_source_evidence() {
     let fx = fixture();
     let workspace = std::env::temp_dir().join(format!(
