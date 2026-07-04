@@ -56,6 +56,11 @@ fn descriptor(now: &str) -> ToolDescriptor {
                     "Returns bounded content matches with workspace-relative paths, line numbers, and line previews.",
                 ),
                 schema::example(
+                    "Page case-sensitive matches inside a directory scope.",
+                    json!({"path": "notes", "include": "*.txt", "pattern": "Needle", "case_sensitive": true, "offset": 1, "limit": 1}),
+                    "Searches only txt files under notes, keeps case-sensitive matches, skips the first match, and returns one result.",
+                ),
+                schema::example(
                     "Find instruction text anywhere in the workspace.",
                     json!({"pattern": "forward-only", "limit": 20}),
                     "Returns matching UTF-8 file lines without running a shell command.",
@@ -151,5 +156,9 @@ mod tests {
             .examples
             .iter()
             .any(|example| example.parameters.get("include").is_some()));
+        assert!(descriptor.examples.iter().any(|example| {
+            example.parameters
+                == json!({"path": "notes", "include": "*.txt", "pattern": "Needle", "case_sensitive": true, "offset": 1, "limit": 1})
+        }));
     }
 }

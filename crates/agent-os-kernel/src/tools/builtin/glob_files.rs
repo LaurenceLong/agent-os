@@ -51,6 +51,11 @@ fn descriptor(now: &str) -> ToolDescriptor {
                     "Returns bounded workspace-relative file paths matching the glob.",
                 ),
                 schema::example(
+                    "Page results inside one directory scope.",
+                    json!({"path": "notes", "pattern": "*.txt", "offset": 1, "limit": 1}),
+                    "Searches the notes directory, applies the *.txt pattern inside that scope, skips the first match, and returns one result.",
+                ),
+                schema::example(
                     "Find instruction files by path shape.",
                     json!({"pattern": "**/AGENTS.md"}),
                     "Returns matching workspace-relative file paths without running a shell command.",
@@ -142,5 +147,9 @@ mod tests {
             .examples
             .iter()
             .any(|example| example.parameters == json!({"pattern": "**/AGENTS.md"})));
+        assert!(descriptor.examples.iter().any(|example| {
+            example.parameters
+                == json!({"path": "notes", "pattern": "*.txt", "offset": 1, "limit": 1})
+        }));
     }
 }

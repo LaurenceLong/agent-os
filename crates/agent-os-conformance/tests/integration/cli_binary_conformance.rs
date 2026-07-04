@@ -301,6 +301,151 @@ fn cli_run_binary_executes_external_model_through_hostd_and_replays_sqlite_state
     remove_dir_all_retry(&root);
 }
 
+#[test]
+fn cli_resume_binary_recovers_running_thread_and_completes_runtime_job_through_hostd() {
+    let root = isolated_temp_dir("cli-resume-binary");
+    fs::create_dir_all(&root).unwrap();
+    let target_dir = root.join("cargo-target");
+    build_cli_and_hostd_binaries(&target_dir);
+    let workspace = root.join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    let state_db = root.join("state").join("agent-os.sqlite");
+    fs::create_dir_all(state_db.parent().unwrap()).unwrap();
+    let model_program = compile_external_run_model(&root);
+
+    let kernel = Kernel::with_replayed_store(SqliteStore::open(&state_db).unwrap()).unwrap();
+    let goal = kernel
+        .register_goal(RegisterGoalInput {
+            namespace: "cli-binary-conformance".to_string(),
+            created_by: "conformance".to_string(),
+            title: "CLI binary resume".to_string(),
+            description: "Seed a resumable runtime thread for the CLI resume binary".to_string(),
+            acceptance_criteria: vec![
+                "resume recovers the running thread through hostd".to_string(),
+                "resume completes a runtime job through the configured model command".to_string(),
+            ],
+            constraints: Vec::new(),
+            risk_level: 4,
+            deadline: None,
+        })
+        .unwrap();
+    let task = kernel
+        .spawn_task(SpawnTaskInput {
+            goal_id: goal.goal_id.clone(),
+            parent_task_id: None,
+            title: "Resume CLI binary state".to_string(),
+            description: "Seed durable state for CLI resume conformance".to_string(),
+            depends_on: Vec::new(),
+            required_artifact_types: Vec::new(),
+            required_evidence_types: vec![EvidenceType::DiffRef],
+            priority: 10,
+            risk_level: 4,
+        })
+        .unwrap();
+    let agent = kernel
+        .spawn_agent(SpawnAgentInput {
+            task_id: task.task_id.clone(),
+            role_profile_id: "role_producer".to_string(),
+            owner: "conformance".to_string(),
+            goal: "resume and write result.md".to_string(),
+            success_criteria: vec!["result.md exists".to_string()],
+            failure_criteria: Vec::new(),
+            parent_thread_id: None,
+            workspace_roots: vec![workspace.to_string_lossy().to_string()],
+        })
+        .unwrap();
+    let environment = kernel
+        .create_environment(
+            BackendType::IsolatedWorktree,
+            workspace.to_string_lossy(),
+            "sbox_workspace_write",
+            ReusePolicy::TaskScoped,
+        )
+        .unwrap();
+    kernel
+        .attach_environment(
+            &environment.environment_id,
+            &agent.agent_id,
+            &agent.thread_id,
+            &task.task_id,
+            AttachMode::WorkspaceWrite,
+        )
+        .unwrap();
+    kernel
+        .grant_capability(
+            &agent.agent_id,
+            &task.task_id,
+            vec!["tool.invoke".to_string()],
+            vec!["tool:apply_patch".to_string()],
+            4,
+            None,
+        )
+        .unwrap();
+    kernel.start_turn(&agent.thread_id).unwrap();
+    drop(kernel);
+
+    let output = Command::new(binary_path(&target_dir, "agent-os"))
+        .arg("resume")
+        .arg("--thread-id")
+        .arg(&agent.thread_id)
+        .arg("--workspace")
+        .arg(&workspace)
+        .arg("--bundle-output")
+        .arg("bundle/resume.json")
+        .arg("--state-db")
+        .arg(&state_db)
+        .arg("--model-command")
+        .arg(&model_program)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "agent-os resume failed with status {}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["status"], "completed");
+    assert_eq!(value["thread_id"], agent.thread_id);
+    assert_eq!(value["task_id"], task.task_id);
+    assert_eq!(value["previous_thread_status"], "Running");
+    assert_eq!(value["runtime_status"], "Completed");
+    assert_eq!(value["runtime_job_status"], "completed");
+    assert_eq!(
+        fs::read_to_string(workspace.join("result.md")).unwrap(),
+        "cli binary run completed\n"
+    );
+    let bundle_path = workspace.join("bundle").join("resume.json");
+    assert_eq!(
+        PathBuf::from(value["bundle_path"].as_str().unwrap()),
+        bundle_path
+    );
+    let bundle: Value = serde_json::from_slice(&fs::read(bundle_path).unwrap()).unwrap();
+    assert_eq!(bundle["root_task_id"], task.task_id);
+    assert!(value["turns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|turn| turn["status"] == "Completed"));
+    assert!(value["runtime_jobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|job| job["status"] == "completed"));
+
+    let replayed = Kernel::with_replayed_store(SqliteStore::open(&state_db).unwrap()).unwrap();
+    let replayed_state = replayed.state_snapshot().unwrap();
+    assert!(replayed_state.final_submissions.contains_key(&task.task_id));
+    assert_eq!(
+        replayed_state.threads.get(&agent.thread_id).unwrap().status,
+        ThreadStatus::Completed
+    );
+
+    drop(replayed);
+    remove_dir_all_retry(&root);
+}
+
 fn build_cli_and_hostd_binaries(target_dir: &Path) {
     let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let output = Command::new(cargo)
