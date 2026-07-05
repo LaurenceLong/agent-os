@@ -1,7 +1,7 @@
 use crate::{all_commands, default_keymap, timeline_lines, TuiApp, TuiAppClient, TuiExitReport};
 use agent_os_sys::{AgentOsError, AgentOsResult};
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
+    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -14,7 +14,7 @@ use ratatui::{
     Terminal,
 };
 use std::io::{self, Stdout};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub fn run<C: TuiAppClient>(app: &mut TuiApp<C>) -> AgentOsResult<TuiExitReport> {
     app.initialize()?;
@@ -36,6 +36,7 @@ fn run_loop<C: TuiAppClient>(
     app: &mut TuiApp<C>,
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
 ) -> AgentOsResult<()> {
+    let mut last_refresh = Instant::now();
     while !app.should_exit {
         terminal
             .draw(|frame| render(frame, app))
@@ -46,6 +47,10 @@ fn run_loop<C: TuiAppClient>(
             }
         }
         app.drain_notifications()?;
+        if last_refresh.elapsed() >= Duration::from_secs(1) {
+            app.refresh_current_thread()?;
+            last_refresh = Instant::now();
+        }
     }
     Ok(())
 }
@@ -65,7 +70,10 @@ fn cleanup_terminal(
     Ok(())
 }
 
-fn handle_key<C: TuiAppClient>(app: &mut TuiApp<C>, key: KeyEvent) -> AgentOsResult<()> {
+pub(crate) fn handle_key<C: TuiAppClient>(app: &mut TuiApp<C>, key: KeyEvent) -> AgentOsResult<()> {
+    if key.kind != KeyEventKind::Press {
+        return Ok(());
+    }
     match (key.code, key.modifiers) {
         (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
             if app.projection.running() {
@@ -275,4 +283,46 @@ fn centered_rect(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
 
 fn terminal_error(context: &'static str) -> impl FnOnce(io::Error) -> AgentOsError {
     move |error| AgentOsError::Validation(format!("{context}: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::TuiOptions;
+    use agent_os_sys::{AppNotificationEnvelope, AppRequest};
+    use serde_json::Value;
+
+    #[test]
+    fn key_release_does_not_duplicate_input() {
+        let mut app = TuiApp::new(FakeTuiClient, TuiOptions::default());
+
+        handle_key(
+            &mut app,
+            KeyEvent::new_with_kind(KeyCode::Char('/'), KeyModifiers::NONE, KeyEventKind::Press),
+        )
+        .unwrap();
+        handle_key(
+            &mut app,
+            KeyEvent::new_with_kind(
+                KeyCode::Char('/'),
+                KeyModifiers::NONE,
+                KeyEventKind::Release,
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(app.composer.text, "/");
+    }
+
+    struct FakeTuiClient;
+
+    impl crate::TuiAppClient for FakeTuiClient {
+        fn request(&mut self, _request: AppRequest) -> AgentOsResult<Value> {
+            Ok(serde_json::json!({}))
+        }
+
+        fn read_notification(&mut self) -> AgentOsResult<Option<AppNotificationEnvelope>> {
+            Ok(None)
+        }
+    }
 }

@@ -1,6 +1,6 @@
 use crate::command_registry::{command_by_slash, CommandTarget};
 use crate::{BottomPane, ComposerState, Overlay, TuiExitReport, TuiOptions, TuiProjection};
-use agent_os_sys::{AgentOsResult, AppNotificationEnvelope, AppRequest, ProjectionCursor};
+use agent_os_sys::{AgentOsResult, AppNotificationEnvelope, AppRequest};
 use serde_json::Value;
 
 pub trait TuiAppClient {
@@ -57,11 +57,6 @@ impl<C: TuiAppClient> TuiApp<C> {
             return Ok(());
         }
         self.client.request(AppRequest::Initialize)?;
-        self.client.request(AppRequest::Subscribe {
-            cursor: Some(ProjectionCursor {
-                last_event_ordinal: 0,
-            }),
-        })?;
         if let Some(thread_id) = self.options.thread.clone().or(self.options.resume.clone()) {
             let body = self.client.request(AppRequest::ThreadRead {
                 client_thread_id: thread_id,
@@ -323,6 +318,17 @@ impl<C: TuiAppClient> TuiApp<C> {
         Ok(())
     }
 
+    pub fn refresh_current_thread(&mut self) -> AgentOsResult<()> {
+        let Some(thread_id) = self.projection.current_thread_id.clone() else {
+            return Ok(());
+        };
+        let body = self.client.request(AppRequest::ThreadRead {
+            client_thread_id: thread_id,
+        })?;
+        self.projection.apply_thread_read(&body);
+        Ok(())
+    }
+
     pub fn close_top_mode(&mut self) {
         if self.overlay.take().is_none() {
             self.bottom_pane = None;
@@ -464,6 +470,16 @@ mod tests {
         assert!(app.client.requests.is_empty());
     }
 
+    #[test]
+    fn initialize_without_explicit_thread_does_not_subscribe_or_select_history() {
+        let mut app = TuiApp::new(FakeTuiClient::default(), TuiOptions::default());
+
+        app.initialize().unwrap();
+
+        assert_eq!(app.projection.current_thread_id, None);
+        assert_eq!(app.client.requests, vec!["initialize"]);
+    }
+
     #[derive(Default)]
     struct FakeTuiClient {
         requests: Vec<&'static str>,
@@ -472,6 +488,10 @@ mod tests {
     impl TuiAppClient for FakeTuiClient {
         fn request(&mut self, request: AppRequest) -> AgentOsResult<Value> {
             match request {
+                AppRequest::Initialize => {
+                    self.requests.push("initialize");
+                    Ok(json!({"initialized": true}))
+                }
                 AppRequest::ThreadStart { goal, .. } => {
                     self.requests.push("thread/start");
                     assert_eq!(goal, "Fix the tests");
