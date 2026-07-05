@@ -2,6 +2,7 @@ use crate::{
     AgentOsHost, ExternalRuntimeModelConfig, HostRuntimeModelConfig, ProviderRuntimeModelConfig,
 };
 use agent_os_sys::{AgentOsError, AgentOsResult};
+use clap::Parser;
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
 
@@ -11,116 +12,71 @@ pub struct HostArgs {
     pub runtime_model_config: Option<HostRuntimeModelConfig>,
 }
 
+#[derive(Debug, Clone, Parser)]
+#[command(name = "agent-os-hostd", version, about = "Agent-OS stdio host")]
+struct HostArgsCli {
+    #[arg(long)]
+    stdio: bool,
+    #[arg(long)]
+    state_db: PathBuf,
+    #[arg(long)]
+    model_command: Option<PathBuf>,
+    #[arg(long = "model-arg", allow_hyphen_values = true)]
+    model_args: Vec<String>,
+    #[arg(long)]
+    model: Option<String>,
+    #[arg(long)]
+    provider_config: Option<PathBuf>,
+    #[arg(long, default_value_t = 16)]
+    max_steps: u32,
+    #[arg(long)]
+    max_tokens: Option<u64>,
+    #[arg(long)]
+    temperature: Option<String>,
+}
+
 impl HostArgs {
     pub fn parse(args: impl IntoIterator<Item = String>) -> AgentOsResult<Self> {
-        let mut state_db = None;
-        let mut stdio = false;
-        let mut model_command = None;
-        let mut model_args = Vec::new();
-        let mut model = None;
-        let mut provider_config = None;
-        let mut max_steps = 16u32;
-        let mut max_tokens = None;
-        let mut temperature = None;
-        let mut args = args.into_iter();
-        while let Some(arg) = args.next() {
-            match arg.as_str() {
-                "--stdio" => stdio = true,
-                "--state-db" => {
-                    let path = args.next().ok_or_else(|| {
-                        AgentOsError::Validation("--state-db requires a path".to_string())
-                    })?;
-                    state_db = Some(PathBuf::from(path));
-                }
-                "--model-command" => {
-                    let path = args.next().ok_or_else(|| {
-                        AgentOsError::Validation("--model-command requires a path".to_string())
-                    })?;
-                    model_command = Some(PathBuf::from(path));
-                }
-                "--model-arg" => {
-                    model_args.push(args.next().ok_or_else(|| {
-                        AgentOsError::Validation("--model-arg requires a value".to_string())
-                    })?);
-                }
-                "--model" => {
-                    model = Some(args.next().ok_or_else(|| {
-                        AgentOsError::Validation("--model requires a provider/model id".to_string())
-                    })?);
-                }
-                "--provider-config" => {
-                    let path = args.next().ok_or_else(|| {
-                        AgentOsError::Validation("--provider-config requires a path".to_string())
-                    })?;
-                    provider_config = Some(PathBuf::from(path));
-                }
-                "--max-steps" => {
-                    let value = args.next().ok_or_else(|| {
-                        AgentOsError::Validation("--max-steps requires a value".to_string())
-                    })?;
-                    max_steps = value.parse().map_err(|_| {
-                        AgentOsError::Validation("--max-steps must be a number".to_string())
-                    })?;
-                }
-                "--max-tokens" => {
-                    let value = args.next().ok_or_else(|| {
-                        AgentOsError::Validation("--max-tokens requires a value".to_string())
-                    })?;
-                    max_tokens = Some(value.parse().map_err(|_| {
-                        AgentOsError::Validation("--max-tokens must be a number".to_string())
-                    })?);
-                }
-                "--temperature" => {
-                    temperature = Some(args.next().ok_or_else(|| {
-                        AgentOsError::Validation("--temperature requires a value".to_string())
-                    })?);
-                }
-                _ => {
-                    return Err(AgentOsError::Validation(format!(
-                        "unknown hostd argument {arg}"
-                    )))
-                }
-            }
-        }
-        if !stdio {
+        let cli =
+            HostArgsCli::try_parse_from(std::iter::once("agent-os-hostd".to_string()).chain(args))
+                .map_err(|error| AgentOsError::Validation(error.to_string()))?;
+        if !cli.stdio {
             return Err(AgentOsError::Validation(
                 "hostd requires --stdio transport".to_string(),
             ));
         }
-        let state_db = state_db
-            .ok_or_else(|| AgentOsError::Validation("hostd requires --state-db".to_string()))?;
-        if model_command.is_some() && (model.is_some() || provider_config.is_some()) {
+        if cli.model_command.is_some() && (cli.model.is_some() || cli.provider_config.is_some()) {
             return Err(AgentOsError::Validation(
                 "--model-command cannot be combined with provider runtime config".to_string(),
             ));
         }
-        let runtime_model_config = if let Some(program) = model_command {
+        let runtime_model_config = if let Some(program) = cli.model_command {
             Some(HostRuntimeModelConfig::External(
                 ExternalRuntimeModelConfig {
                     program,
-                    args: model_args,
-                    max_steps,
+                    args: cli.model_args,
+                    max_steps: cli.max_steps,
                 },
             ))
-        } else if model.is_some()
-            || provider_config.is_some()
-            || max_tokens.is_some()
-            || temperature.is_some()
+        } else if cli.model.is_some()
+            || cli.provider_config.is_some()
+            || cli.max_tokens.is_some()
+            || cli.temperature.is_some()
         {
             Some(HostRuntimeModelConfig::Provider(
                 ProviderRuntimeModelConfig {
-                    model,
-                    config_path: provider_config,
-                    max_steps,
-                    max_tokens,
-                    temperature,
+                    model: cli.model,
+                    config_path: cli.provider_config,
+                    max_steps: cli.max_steps,
+                    max_tokens: cli.max_tokens,
+                    temperature: cli.temperature,
                 },
             ))
         } else {
             None
         };
         Ok(Self {
-            state_db,
+            state_db: cli.state_db,
             runtime_model_config,
         })
     }
@@ -133,6 +89,14 @@ where
     W: Write,
 {
     let args = HostArgs::parse(args)?;
+    serve_stdio_host(args, reader, writer)
+}
+
+pub fn serve_stdio_host<R, W>(args: HostArgs, reader: R, writer: W) -> AgentOsResult<()>
+where
+    R: BufRead,
+    W: Write,
+{
     let host = match args.runtime_model_config {
         Some(config) => AgentOsHost::open_sqlite(args.state_db)?.with_runtime_model_config(config),
         None => AgentOsHost::open_sqlite(args.state_db)?,

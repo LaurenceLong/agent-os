@@ -15,7 +15,7 @@ fn run_from_app_client_polls_projection_until_runtime_completed() {
         &mut client,
         &RunOptions {
             workspace,
-            task: "Write result.md".to_string(),
+            prompt: vec!["Write".to_string(), "result.md".to_string()],
             output: PathBuf::from("result.md"),
             bundle_output: None,
             state_db: Some(PathBuf::from("state.sqlite")),
@@ -58,7 +58,7 @@ fn run_from_app_client_exports_bundle_when_requested() {
         &mut client,
         &RunOptions {
             workspace: workspace.clone(),
-            task: "Write result.md".to_string(),
+            prompt: vec!["Write".to_string(), "result.md".to_string()],
             output: PathBuf::from("result.md"),
             bundle_output: Some(PathBuf::from("bundle/task.json")),
             state_db: Some(PathBuf::from("state.sqlite")),
@@ -92,7 +92,13 @@ fn run_from_app_client_exports_bundle_when_requested() {
 fn cli_run_rejects_bundle_output_path_escape() {
     let options = RunOptions {
         workspace: PathBuf::from("."),
-        task: "Write a deterministic task report".to_string(),
+        prompt: vec![
+            "Write".to_string(),
+            "a".to_string(),
+            "deterministic".to_string(),
+            "task".to_string(),
+            "report".to_string(),
+        ],
         output: PathBuf::from("result.md"),
         bundle_output: Some(PathBuf::from("../bundle.json")),
         state_db: None,
@@ -251,7 +257,7 @@ impl RunAppClient for FakeRunClient {
 fn cli_run_rejects_output_path_escape() {
     let options = RunOptions {
         workspace: PathBuf::from("."),
-        task: "bad output".to_string(),
+        prompt: vec!["bad".to_string(), "output".to_string()],
         output: PathBuf::from("../escape.md"),
         bundle_output: None,
         state_db: None,
@@ -274,7 +280,13 @@ fn cli_run_persists_events_to_state_db_for_restart_replay() {
     let model_program = compile_external_run_model(&workspace);
     let options = RunOptions {
         workspace: workspace.clone(),
-        task: "Write a durable task report".to_string(),
+        prompt: vec![
+            "Write".to_string(),
+            "a".to_string(),
+            "durable".to_string(),
+            "task".to_string(),
+            "report".to_string(),
+        ],
         output: PathBuf::from("result.md"),
         bundle_output: None,
         state_db: Some(state_db.clone()),
@@ -386,7 +398,14 @@ fn first_evidence_id(input: &str) -> String {
     );
     let options = RunOptions {
         workspace: workspace.clone(),
-        task: "Write result.md with an external model".to_string(),
+        prompt: vec![
+            "Write".to_string(),
+            "result.md".to_string(),
+            "with".to_string(),
+            "an".to_string(),
+            "external".to_string(),
+            "model".to_string(),
+        ],
         output: PathBuf::from("result.md"),
         bundle_output: Some(PathBuf::from("bundle/run.json")),
         state_db: Some(workspace.join("agent-os.sqlite")),

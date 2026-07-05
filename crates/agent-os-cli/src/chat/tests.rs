@@ -28,6 +28,7 @@ fn chat_session_process_task_uses_app_client_projection_contract() {
         temperature: None,
         state_db: None,
         bundle_output: None,
+        positional_task: Vec::new(),
     };
 
     session
@@ -68,6 +69,7 @@ fn chat_session_exports_bundle_when_requested() {
         temperature: None,
         state_db: None,
         bundle_output: Some(std::path::PathBuf::from("bundle/chat.json")),
+        positional_task: Vec::new(),
     };
 
     session
@@ -216,8 +218,19 @@ impl ChatAppClient for FakeChatClient {
 
 #[test]
 fn chat_options_with_initial_task_run_in_batch_mode() {
-    let mut options =
-        ChatOptions::parse(&["--task-file".to_string(), "task.md".to_string()]).unwrap();
+    let mut options = ChatOptions {
+        workspace: std::path::PathBuf::from("."),
+        task: None,
+        task_file: Some(std::path::PathBuf::from("task.md")),
+        model: None,
+        max_steps: 32,
+        runtime_timeout_seconds: 120,
+        max_tokens: None,
+        temperature: None,
+        state_db: None,
+        bundle_output: None,
+        positional_task: Vec::new(),
+    };
     assert!(exits_after_initial_task(&options));
 
     options.task_file = None;
@@ -225,6 +238,10 @@ fn chat_options_with_initial_task_run_in_batch_mode() {
     assert!(exits_after_initial_task(&options));
 
     options.task = None;
+    options.positional_task = vec!["positional".to_string(), "task".to_string()];
+    assert!(exits_after_initial_task(&options));
+
+    options.positional_task.clear();
     assert!(!exits_after_initial_task(&options));
 }
 

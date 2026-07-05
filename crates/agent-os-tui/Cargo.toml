@@ -1,0 +1,12 @@
+[package]
+name = "agent-os-tui"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+
+[dependencies]
+agent-os-host.workspace = true
+agent-os-sys.workspace = true
+crossterm.workspace = true
+ratatui.workspace = true
+serde_json.workspace = true

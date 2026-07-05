@@ -216,7 +216,6 @@ fn cli_binaries_read_nonempty_sqlite_thread_and_process_projection_through_hostd
 
     let status_output = Command::new(binary_path(&target_dir, "agent-os"))
         .arg("status")
-        .arg("--thread-id")
         .arg(&agent.thread_id)
         .arg("--state-db")
         .arg(&state_db)
@@ -224,7 +223,7 @@ fn cli_binaries_read_nonempty_sqlite_thread_and_process_projection_through_hostd
         .unwrap();
     assert!(
         status_output.status.success(),
-        "agent-os status --thread-id failed with status {}\nstdout:\n{}\nstderr:\n{}",
+        "agent-os status <thread-id> failed with status {}\nstdout:\n{}\nstderr:\n{}",
         status_output.status,
         String::from_utf8_lossy(&status_output.stdout),
         String::from_utf8_lossy(&status_output.stderr)
@@ -289,10 +288,9 @@ fn cli_run_binary_executes_external_model_through_hostd_and_replays_sqlite_state
 
     let output = Command::new(binary_path(&target_dir, "agent-os"))
         .arg("run")
+        .arg("Write result.md from CLI binary conformance")
         .arg("--workspace")
         .arg(&workspace)
-        .arg("--task")
-        .arg("Write result.md from CLI binary conformance")
         .arg("--output")
         .arg("result.md")
         .arg("--bundle-output")
@@ -661,7 +659,6 @@ fn cli_resume_binary_recovers_running_thread_and_completes_runtime_job_through_h
 
     let output = Command::new(binary_path(&target_dir, "agent-os"))
         .arg("resume")
-        .arg("--thread-id")
         .arg(&agent.thread_id)
         .arg("--workspace")
         .arg(&workspace)

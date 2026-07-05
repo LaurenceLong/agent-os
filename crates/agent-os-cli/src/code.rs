@@ -78,7 +78,7 @@ impl CodeAppClient for StdioHostAppClient {
 fn build_code_task_prompt(options: &CodeOptions) -> AgentOsResult<String> {
     let request = SoftwareWorkflowRequest {
         workspace_root: options.workspace.clone(),
-        task: options.task.clone(),
+        task: options.task_text(),
         target_file: options.file.clone(),
         exact_edit: options
             .old
@@ -88,8 +88,10 @@ fn build_code_task_prompt(options: &CodeOptions) -> AgentOsResult<String> {
                 old: old.clone(),
                 new: new.clone(),
             }),
-        test_program: options.test_program.clone(),
-        test_args: options.test_args.clone(),
+        test_program: options.test_program().map_err(|error| {
+            AgentOsError::Validation(format!("resolve default test executable: {error}"))
+        })?,
+        test_args: options.test_args(),
         edit_plan_source: None,
     };
     Ok(SoftwareWorkflowPrompt::from_request(&request)?.prompt)
@@ -290,11 +292,11 @@ mod tests {
             &mut client,
             &CodeOptions {
                 workspace,
-                task: "Change answer from one to two".to_string(),
+                task: vec!["Change answer from one to two".to_string()],
                 file: Some(PathBuf::from("src/lib.rs")),
                 old: Some("1".to_string()),
                 new: Some("2".to_string()),
-                test_program: PathBuf::from("test.exe"),
+                test_program: Some(PathBuf::from("test.exe")),
                 test_args: vec!["--help".to_string()],
                 bundle_output: None,
                 state_db: Some(PathBuf::from("state.sqlite")),
@@ -303,11 +305,11 @@ mod tests {
             },
             build_code_task_prompt(&CodeOptions {
                 workspace: PathBuf::from("workspace"),
-                task: "Change answer from one to two".to_string(),
+                task: vec!["Change answer from one to two".to_string()],
                 file: Some(PathBuf::from("src/lib.rs")),
                 old: Some("1".to_string()),
                 new: Some("2".to_string()),
-                test_program: PathBuf::from("test.exe"),
+                test_program: Some(PathBuf::from("test.exe")),
                 test_args: vec!["--help".to_string()],
                 bundle_output: None,
                 state_db: Some(PathBuf::from("state.sqlite")),
@@ -347,11 +349,11 @@ mod tests {
         let mut client = FakeCodeClient::default();
         let options = CodeOptions {
             workspace: workspace.clone(),
-            task: "Change answer from one to two".to_string(),
+            task: vec!["Change answer from one to two".to_string()],
             file: Some(PathBuf::from("src/lib.rs")),
             old: Some("1".to_string()),
             new: Some("2".to_string()),
-            test_program: PathBuf::from("test.exe"),
+            test_program: Some(PathBuf::from("test.exe")),
             test_args: vec!["--help".to_string()],
             bundle_output: Some(PathBuf::from("bundle/code.json")),
             state_db: Some(PathBuf::from("state.sqlite")),
@@ -538,11 +540,11 @@ mod tests {
         .unwrap();
         let options = CodeOptions {
             workspace: workspace.clone(),
-            task: "Change answer from one to two".to_string(),
+            task: vec!["Change answer from one to two".to_string()],
             file: Some(PathBuf::from("src/lib.rs")),
             old: Some("1".to_string()),
             new: Some("2".to_string()),
-            test_program: env::current_exe().unwrap(),
+            test_program: Some(env::current_exe().unwrap()),
             test_args: vec!["--help".to_string()],
             bundle_output: Some(PathBuf::from("bundle/code.json")),
             state_db: Some(workspace.join("agent-os.sqlite")),
@@ -582,11 +584,11 @@ mod tests {
         .unwrap();
         let options = CodeOptions {
             workspace: workspace.clone(),
-            task: "Change answer from one to two".to_string(),
+            task: vec!["Change answer from one to two".to_string()],
             file: None,
             old: None,
             new: None,
-            test_program: env::current_exe().unwrap(),
+            test_program: Some(env::current_exe().unwrap()),
             test_args: vec!["--help".to_string()],
             bundle_output: None,
             state_db: Some(workspace.join("agent-os.sqlite")),
@@ -607,11 +609,11 @@ mod tests {
     fn cli_code_rejects_bundle_output_path_escape() {
         let options = CodeOptions {
             workspace: PathBuf::from("."),
-            task: "Change answer from one to two".to_string(),
+            task: vec!["Change answer from one to two".to_string()],
             file: Some(PathBuf::from("src/lib.rs")),
             old: Some("1".to_string()),
             new: Some("2".to_string()),
-            test_program: PathBuf::from("test.exe"),
+            test_program: Some(PathBuf::from("test.exe")),
             test_args: vec!["--help".to_string()],
             bundle_output: Some(PathBuf::from("../bundle.json")),
             state_db: None,

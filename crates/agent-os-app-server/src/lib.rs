@@ -10,6 +10,7 @@ use agent_os_sys::{
 };
 use serde::Serialize;
 use serde_json::{json, Value};
+use std::collections::VecDeque;
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, Write};
 
@@ -102,6 +103,7 @@ pub struct JsonlAppClient<R, W> {
     reader: R,
     writer: W,
     next_request_id: u64,
+    pending_notifications: VecDeque<AppNotificationEnvelope>,
 }
 
 impl<R, W> JsonlAppClient<R, W>
@@ -115,6 +117,7 @@ where
             reader,
             writer,
             next_request_id: 1,
+            pending_notifications: VecDeque::new(),
         }
     }
 
@@ -141,20 +144,30 @@ where
         self.writer
             .flush()
             .map_err(|error| AgentOsError::Validation(format!("flush app request: {error}")))?;
-        let mut response = String::new();
-        let bytes = self
-            .reader
-            .read_line(&mut response)
-            .map_err(|error| AgentOsError::Validation(format!("read app response: {error}")))?;
-        if bytes == 0 {
-            return Err(AgentOsError::Validation(
-                "app-server closed before response".to_string(),
-            ));
+        loop {
+            let mut line = String::new();
+            let bytes = self
+                .reader
+                .read_line(&mut line)
+                .map_err(|error| AgentOsError::Validation(format!("read app response: {error}")))?;
+            if bytes == 0 {
+                return Err(AgentOsError::Validation(
+                    "app-server closed before response".to_string(),
+                ));
+            }
+            let line = line.trim_end();
+            if let Ok(response) = serde_json::from_str::<AppResponseEnvelope>(line) {
+                return Ok(response);
+            }
+            let notification: AppNotificationEnvelope = serde_json::from_str(line)?;
+            self.pending_notifications.push_back(notification);
         }
-        Ok(serde_json::from_str(response.trim_end())?)
     }
 
     pub fn read_notification(&mut self) -> AgentOsResult<Option<AppNotificationEnvelope>> {
+        if let Some(notification) = self.pending_notifications.pop_front() {
+            return Ok(Some(notification));
+        }
         let mut line = String::new();
         let bytes = self
             .reader
@@ -164,6 +177,10 @@ where
             return Ok(None);
         }
         Ok(Some(serde_json::from_str(line.trim_end())?))
+    }
+
+    pub fn take_pending_notification(&mut self) -> Option<AppNotificationEnvelope> {
+        self.pending_notifications.pop_front()
     }
 
     pub fn into_inner(self) -> (R, W) {

@@ -37,7 +37,7 @@ pub(crate) fn run_e2e_task(options: &RunOptions) -> AgentOsResult<Value> {
     let mut app_client = StdioHostAppClient::open(&config)?;
     let task_prompt = format!(
         "{}\nRequested workspace output path: {}",
-        options.task,
+        options.task_text(),
         options.output.to_string_lossy()
     );
     let mut output = run_from_app_client(&mut app_client, options, task_prompt, &state_db)?;

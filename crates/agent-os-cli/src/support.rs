@@ -1,23 +1,16 @@
-use agent_os_app_server::JsonlAppClient;
-use agent_os_config::AgentOsPaths;
 #[cfg(test)]
 use agent_os_host::AgentOsHost;
+pub(crate) use agent_os_host::{StdioHostClient as StdioHostAppClient, StdioHostConfig};
 #[cfg(test)]
 use agent_os_kernel::Kernel;
 #[cfg(test)]
 use agent_os_store::LocalBlobStore;
 #[cfg(test)]
 use agent_os_store_sqlite::SqliteStore;
-use agent_os_sys::{
-    now_rfc3339, AgentOsError, AgentOsResult, AppRequest, AppResponse, ClientConnection,
-    ClientKind, SecurityLevel,
-};
+use agent_os_sys::{AgentOsError, AgentOsResult};
 use std::fs;
-use std::io::{self, BufReader};
+use std::io;
 use std::path::{Component, Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-#[cfg(test)]
-use std::sync::OnceLock;
 
 pub(crate) fn ensure_safe_relative_workspace_path(path: &Path, flag: &str) -> AgentOsResult<()> {
     if path.is_absolute()
@@ -37,13 +30,11 @@ pub(crate) fn io_result<T>(result: io::Result<T>, context: &str) -> AgentOsResul
 }
 
 pub(crate) fn default_state_db() -> AgentOsResult<PathBuf> {
-    Ok(AgentOsPaths::resolve()?.default_state_db())
+    agent_os_host::default_state_db()
 }
 
 pub(crate) fn default_state_db_for_workspace(workspace: &Path) -> AgentOsResult<PathBuf> {
-    Ok(AgentOsPaths::resolve()?
-        .project_runtime_paths(workspace)?
-        .state_db)
+    agent_os_host::default_state_db_for_workspace(workspace)
 }
 
 pub(crate) fn write_task_bundle_from_app_response(
@@ -62,213 +53,6 @@ pub(crate) fn write_task_bundle_from_app_response(
     let bytes = serde_json::to_vec_pretty(bundle)?;
     io_result(fs::write(&path, bytes), "write task bundle")?;
     Ok(Some(path.to_string_lossy().to_string()))
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct StdioHostConfig {
-    pub(crate) state_db: PathBuf,
-    pub(crate) model_command: Option<PathBuf>,
-    pub(crate) model_args: Vec<String>,
-    pub(crate) model: Option<String>,
-    pub(crate) provider_config: Option<PathBuf>,
-    pub(crate) max_steps: Option<u32>,
-    pub(crate) max_tokens: Option<u64>,
-    pub(crate) temperature: Option<String>,
-}
-
-impl StdioHostConfig {
-    pub(crate) fn state_db(state_db: impl Into<PathBuf>) -> Self {
-        Self {
-            state_db: state_db.into(),
-            model_command: None,
-            model_args: Vec::new(),
-            model: None,
-            provider_config: None,
-            max_steps: None,
-            max_tokens: None,
-            temperature: None,
-        }
-    }
-}
-
-pub(crate) struct StdioHostAppClient {
-    client: JsonlAppClient<BufReader<ChildStdout>, ChildStdin>,
-    child: Child,
-}
-
-impl StdioHostAppClient {
-    pub(crate) fn open(config: &StdioHostConfig) -> AgentOsResult<Self> {
-        if let Some(parent) = config.state_db.parent() {
-            if !parent.as_os_str().is_empty() {
-                io_result(fs::create_dir_all(parent), "create state database parent")?;
-            }
-        }
-        let hostd = resolve_hostd_executable()?;
-        let mut command = Command::new(&hostd);
-        command
-            .arg("--stdio")
-            .arg("--state-db")
-            .arg(&config.state_db);
-        if let Some(model_command) = &config.model_command {
-            command.arg("--model-command").arg(model_command);
-            for arg in &config.model_args {
-                command.arg("--model-arg").arg(arg);
-            }
-        }
-        if let Some(model) = &config.model {
-            command.arg("--model").arg(model);
-        }
-        if let Some(provider_config) = &config.provider_config {
-            command.arg("--provider-config").arg(provider_config);
-        }
-        if let Some(max_steps) = config.max_steps {
-            command.arg("--max-steps").arg(max_steps.to_string());
-        }
-        if let Some(max_tokens) = config.max_tokens {
-            command.arg("--max-tokens").arg(max_tokens.to_string());
-        }
-        if let Some(temperature) = &config.temperature {
-            command.arg("--temperature").arg(temperature);
-        }
-        let mut child = command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .map_err(|error| {
-                AgentOsError::Validation(format!(
-                    "spawn hostd {}: {error}",
-                    hostd.to_string_lossy()
-                ))
-            })?;
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| AgentOsError::Validation("hostd stdin was not piped".to_string()))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| AgentOsError::Validation("hostd stdout was not piped".to_string()))?;
-        Ok(Self {
-            client: JsonlAppClient::new(cli_client(), BufReader::new(stdout), stdin),
-            child,
-        })
-    }
-
-    pub(crate) fn request(&mut self, request: AppRequest) -> AgentOsResult<serde_json::Value> {
-        let response = self.client.request(request)?;
-        match response.response {
-            AppResponse::Accepted(body) => Ok(body),
-            AppResponse::Rejected { code, message } => Err(AgentOsError::Validation(format!(
-                "app-server {code}: {message}"
-            ))),
-        }
-    }
-}
-
-impl Drop for StdioHostAppClient {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-pub(crate) fn cli_client() -> ClientConnection {
-    ClientConnection {
-        client_id: "agent-os-cli".to_string(),
-        client_name: "Agent-OS CLI".to_string(),
-        client_kind: ClientKind::TerminalUi,
-        authority: SecurityLevel::HUMAN_ROOT,
-        connected_at: now_rfc3339(),
-    }
-}
-
-pub(crate) fn resolve_hostd_executable() -> AgentOsResult<PathBuf> {
-    #[cfg(test)]
-    ensure_cargo_test_hostd_executable()?;
-
-    let current_exe = std::env::current_exe().map_err(|error| {
-        AgentOsError::Validation(format!("resolve current executable: {error}"))
-    })?;
-    let current_dir = current_exe.parent().ok_or_else(|| {
-        AgentOsError::Validation(format!(
-            "current executable has no parent: {}",
-            current_exe.to_string_lossy()
-        ))
-    })?;
-    let direct = current_dir.join(hostd_executable_file_name());
-    if direct.exists() {
-        return Ok(direct);
-    }
-    let cargo_test = if current_dir.file_name().and_then(|name| name.to_str()) == Some("deps") {
-        current_dir
-            .parent()
-            .map(|parent| parent.join(hostd_executable_file_name()))
-    } else {
-        None
-    };
-    if let Some(candidate) = cargo_test {
-        if candidate.exists() {
-            return Ok(candidate);
-        }
-    }
-    Err(AgentOsError::Validation(format!(
-        "hostd executable not found next to {}; expected {}",
-        current_exe.to_string_lossy(),
-        hostd_executable_file_name().display()
-    )))
-}
-
-#[cfg(test)]
-fn ensure_cargo_test_hostd_executable() -> AgentOsResult<()> {
-    static HOSTD_BUILD: OnceLock<Result<(), String>> = OnceLock::new();
-    match HOSTD_BUILD
-        .get_or_init(|| build_cargo_test_hostd_executable().map_err(|error| error.to_string()))
-    {
-        Ok(()) => Ok(()),
-        Err(message) => Err(AgentOsError::Validation(message.clone())),
-    }
-}
-
-#[cfg(test)]
-fn build_cargo_test_hostd_executable() -> AgentOsResult<()> {
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let workspace_root = manifest_dir
-        .parent()
-        .and_then(Path::parent)
-        .ok_or_else(|| {
-            AgentOsError::Validation(format!(
-                "resolve workspace root from {}",
-                manifest_dir.to_string_lossy()
-            ))
-        })?;
-    let output = Command::new(cargo)
-        .arg("build")
-        .arg("-p")
-        .arg("agent-os-host")
-        .arg("--bin")
-        .arg("agent-os-hostd")
-        .current_dir(workspace_root)
-        .output()
-        .map_err(|error| AgentOsError::Validation(format!("build hostd for CLI tests: {error}")))?;
-    if output.status.success() {
-        return Ok(());
-    }
-    Err(AgentOsError::Validation(format!(
-        "build hostd for CLI tests failed with status {}\nstdout:\n{}\nstderr:\n{}",
-        output.status,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    )))
-}
-
-fn hostd_executable_file_name() -> &'static Path {
-    Path::new(if cfg!(windows) {
-        "agent-os-hostd.exe"
-    } else {
-        "agent-os-hostd"
-    })
 }
 
 #[cfg(test)]

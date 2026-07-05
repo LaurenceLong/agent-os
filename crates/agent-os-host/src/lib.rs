@@ -2,6 +2,7 @@
 
 mod app_handlers;
 mod app_projection;
+mod client;
 mod notifications;
 mod runtime_jobs;
 mod runtime_model;
@@ -26,6 +27,10 @@ use agent_os_sys::{
 use agent_os_thread::{
     ModelClient, RuntimeConfig, RuntimeJob, RuntimeJobRecord, RuntimeRunReport, ThreadRuntime,
 };
+pub use client::{
+    default_state_db, default_state_db_for_workspace, resolve_hostd_executable, terminal_ui_client,
+    StdioHostClient, StdioHostConfig,
+};
 pub use runtime_model::{
     ExternalRuntimeModelConfig, HostRuntimeModelConfig, ProviderRuntimeModelConfig,
 };
@@ -34,7 +39,7 @@ use std::fmt;
 use std::io::{BufRead, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-pub use stdio::{run_stdio_host, HostArgs};
+pub use stdio::{run_stdio_host, serve_stdio_host, HostArgs};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use types::RuntimeWorkerJoinHandle;
 pub use types::{HostReplaySummary, HostShutdownReport};

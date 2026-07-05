@@ -37,7 +37,7 @@ fn process_from_app_client(
         ProcessAction::Stop => AppRequest::ProcessStop {
             process_id: options.process_id.clone().ok_or_else(|| {
                 agent_os_sys::AgentOsError::Validation(
-                    "--process-id is required for process stop".to_string(),
+                    "process stop requires <process-id>".to_string(),
                 )
             })?,
             reason: options.reason.clone(),
@@ -45,7 +45,7 @@ fn process_from_app_client(
         ProcessAction::Kill => AppRequest::ProcessKill {
             process_id: options.process_id.clone().ok_or_else(|| {
                 agent_os_sys::AgentOsError::Validation(
-                    "--process-id is required for process kill".to_string(),
+                    "process kill requires <process-id>".to_string(),
                 )
             })?,
             reason: options.reason.clone(),

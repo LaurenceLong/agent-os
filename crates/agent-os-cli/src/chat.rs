@@ -112,12 +112,12 @@ impl ChatAppClient for StdioHostAppClient {
 }
 
 fn exits_after_initial_task(options: &ChatOptions) -> bool {
-    options.task.is_some() || options.task_file.is_some()
+    options.task_text().is_some() || options.task_file.is_some()
 }
 
 fn resolve_initial_task(options: &ChatOptions) -> AgentOsResult<Option<String>> {
-    if let Some(task) = &options.task {
-        return Ok(Some(task.clone()));
+    if let Some(task) = options.task_text() {
+        return Ok(Some(task));
     }
     let Some(task_file) = &options.task_file else {
         return Ok(None);
