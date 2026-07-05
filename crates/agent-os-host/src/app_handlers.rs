@@ -170,6 +170,12 @@ impl AppKernelService for AgentOsHost {
     ) -> AgentOsResult<Vec<AppNotificationEnvelope>> {
         self.notifications_since(cursor)
     }
+
+    fn current_projection_cursor(&self) -> AgentOsResult<ProjectionCursor> {
+        Ok(ProjectionCursor {
+            last_event_ordinal: self.kernel().events()?.len() as u64,
+        })
+    }
 }
 
 impl AgentOsHost {

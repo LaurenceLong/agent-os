@@ -27,6 +27,12 @@ pub trait AppKernelService {
     ) -> AgentOsResult<Vec<AppNotificationEnvelope>> {
         Ok(Vec::new())
     }
+
+    fn current_projection_cursor(&self) -> AgentOsResult<ProjectionCursor> {
+        Ok(ProjectionCursor {
+            last_event_ordinal: 0,
+        })
+    }
 }
 
 pub struct ThreadReadProjection<
@@ -322,9 +328,13 @@ where
     fn subscribe(&mut self, cursor: Option<ProjectionCursor>) -> AppResponse {
         let subscription_id = format!("sub_{:016x}", self.next_subscription_id);
         self.next_subscription_id += 1;
-        let cursor = cursor.unwrap_or(ProjectionCursor {
-            last_event_ordinal: 0,
-        });
+        let cursor = match cursor {
+            Some(cursor) => cursor,
+            None => match self.service.current_projection_cursor() {
+                Ok(cursor) => cursor,
+                Err(error) => return error_response(error),
+            },
+        };
         self.subscriptions
             .insert(subscription_id.clone(), cursor.clone());
         AppResponse::Accepted(json!({
@@ -530,6 +540,27 @@ mod tests {
     }
 
     #[test]
+    fn subscribe_without_cursor_starts_from_current_projection_cursor() {
+        let mut server = AppServer::new(FakeService::with_current_cursor(ProjectionCursor {
+            last_event_ordinal: 9,
+        }));
+        initialize(&mut server);
+
+        let subscribed = server.handle_envelope(AppRequestEnvelope {
+            protocol: app_protocol_version(),
+            request_id: "req_subscribe_live".to_string(),
+            client: human_client(),
+            request: AppRequest::Subscribe { cursor: None },
+        });
+        let AppResponse::Accepted(body) = subscribed.response else {
+            panic!("subscribe rejected");
+        };
+
+        assert_eq!(body["cursor"]["last_event_ordinal"], 9);
+        assert!(server.drain_notifications().unwrap().is_empty());
+    }
+
+    #[test]
     fn drain_notifications_replays_subscribed_cursor_and_advances() {
         let mut server = AppServer::new(FakeService::with_notifications(vec![
             notification_at(2, 1),
@@ -701,16 +732,35 @@ mod tests {
         ));
     }
 
-    #[derive(Default)]
     struct FakeService {
         requests: RefCell<Vec<AppRequest>>,
         notifications: RefCell<Vec<AppNotificationEnvelope>>,
+        current_cursor: ProjectionCursor,
+    }
+
+    impl Default for FakeService {
+        fn default() -> Self {
+            Self {
+                requests: RefCell::default(),
+                notifications: RefCell::default(),
+                current_cursor: ProjectionCursor {
+                    last_event_ordinal: 0,
+                },
+            }
+        }
     }
 
     impl FakeService {
         fn with_notifications(notifications: Vec<AppNotificationEnvelope>) -> Self {
             Self {
                 notifications: RefCell::new(notifications),
+                ..Self::default()
+            }
+        }
+
+        fn with_current_cursor(current_cursor: ProjectionCursor) -> Self {
+            Self {
+                current_cursor,
                 ..Self::default()
             }
         }
@@ -744,6 +794,10 @@ mod tests {
                 })
                 .cloned()
                 .collect())
+        }
+
+        fn current_projection_cursor(&self) -> AgentOsResult<ProjectionCursor> {
+            Ok(self.current_cursor.clone())
         }
     }
 

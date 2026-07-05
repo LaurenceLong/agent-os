@@ -57,6 +57,8 @@ impl<C: TuiAppClient> TuiApp<C> {
             return Ok(());
         }
         self.client.request(AppRequest::Initialize)?;
+        self.client
+            .request(AppRequest::Subscribe { cursor: None })?;
         if let Some(thread_id) = self.options.thread.clone().or(self.options.resume.clone()) {
             let body = self.client.request(AppRequest::ThreadRead {
                 client_thread_id: thread_id,
@@ -477,7 +479,7 @@ mod tests {
         app.initialize().unwrap();
 
         assert_eq!(app.projection.current_thread_id, None);
-        assert_eq!(app.client.requests, vec!["initialize"]);
+        assert_eq!(app.client.requests, vec!["initialize", "subscribe"]);
     }
 
     #[derive(Default)]
@@ -491,6 +493,14 @@ mod tests {
                 AppRequest::Initialize => {
                     self.requests.push("initialize");
                     Ok(json!({"initialized": true}))
+                }
+                AppRequest::Subscribe { cursor } => {
+                    self.requests.push("subscribe");
+                    assert_eq!(cursor, None);
+                    Ok(json!({
+                        "subscription_id": "sub_1",
+                        "cursor": {"last_event_ordinal": 12}
+                    }))
                 }
                 AppRequest::ThreadStart { goal, .. } => {
                     self.requests.push("thread/start");
