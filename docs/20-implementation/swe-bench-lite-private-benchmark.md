@@ -194,14 +194,14 @@ python benchmarks/swe-bench-lite/private20_runner.py run-agent-os \
 
 This sample was selected by shuffling the 20-task manifest with random seed
 `20260630` and taking the first five tasks. The runner resolves `LLM_API_KEY`,
-`LLM_MODEL`, `LLM_BASE_URL`, and optional `LLM_API_STYLE` from the process
+`LLM_MODEL`, `LLM_BASE_URL`, and optional `LLM_ENDPOINT` from the process
 environment first and then from the repository-root `.env` file. `LLM_MODEL` is
 the provider request model name; the runner writes an Agent-OS `config.json`
 entry whose local model key is the sanitized selection name and whose `name`
 field is the request model. `--api-key-file` overrides the API key source, and
-`--base-url`, `--model`, `--api-style`, `--context-limit`, or `--output-limit`
-override their matching runtime config values. If neither source supplies API
-style, the runner uses `anthropic-compatible`. Before claiming this gate, verify that
+`--base-url`, `--model`, `--endpoint`, `--context-limit`, or `--output-limit`
+override their matching runtime config values. If neither source supplies a
+provider endpoint, the runner uses `anthropic_messages`. Before claiming this gate, verify that
 `/root/swebench-repo-cache` contains bare clones for `sympy__sympy.git`,
 `mwaskom__seaborn.git`,
 `matplotlib__matplotlib.git`, and `pydata__xarray.git`.

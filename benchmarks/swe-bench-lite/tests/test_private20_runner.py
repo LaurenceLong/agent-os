@@ -324,7 +324,7 @@ class Private20RunnerTests(unittest.TestCase):
                     base_url="http://model.example/anthropic",
                     model="tongyi/qwen3.6-plus",
                     api_key="test-key",
-                    api_style="anthropic-compatible",
+                    endpoint="anthropic_messages",
                 ),
             )
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -334,11 +334,22 @@ class Private20RunnerTests(unittest.TestCase):
         self.assertEqual(data["model"], "default/tongyi_qwen3.6-plus")
         provider = data["provider"]["default"]
         self.assertEqual(provider["api_key"], "test-key")
-        self.assertEqual(provider["api_style"], "anthropic-compatible")
+        self.assertEqual(provider["endpoint"], "anthropic_messages")
         self.assertEqual(provider["options"]["base_url"], "http://model.example/anthropic")
         model = provider["models"]["tongyi_qwen3.6-plus"]
         self.assertEqual(model["name"], "tongyi/qwen3.6-plus")
         self.assertEqual(model["limit"], {"context": 128000, "output": 8192})
+        self.assertEqual(
+            model["capabilities"],
+            {
+                "streaming": True,
+                "tool_calling": True,
+                "reasoning": True,
+                "temperature": True,
+                "image_input": True,
+                "structured_output": True,
+            },
+        )
 
     def test_agent_os_config_model_id_rejects_empty_request_model(self):
         self.assertEqual(agent_os_config_model_id(" provider/model "), "provider_model")
@@ -406,22 +417,22 @@ class Private20RunnerTests(unittest.TestCase):
 
     def test_resolve_config_value_uses_default_after_env_and_dotenv(self):
         value = resolve_config_value(
-            "LLM_API_STYLE",
+            "LLM_ENDPOINT",
             explicit=None,
             env={},
-            dotenv_values={"LLM_API_STYLE": "openai-compatible"},
-            default="anthropic-compatible",
+            dotenv_values={"LLM_ENDPOINT": "openai_chat_completions"},
+            default="anthropic_messages",
         )
-        self.assertEqual(value, "openai-compatible")
+        self.assertEqual(value, "openai_chat_completions")
 
         value = resolve_config_value(
-            "LLM_API_STYLE",
+            "LLM_ENDPOINT",
             explicit=None,
             env={},
             dotenv_values={},
-            default="anthropic-compatible",
+            default="anthropic_messages",
         )
-        self.assertEqual(value, "anthropic-compatible")
+        self.assertEqual(value, "anthropic_messages")
 
     def test_resolve_api_key_uses_dotenv_when_environment_is_absent(self):
         key = resolve_api_key(
@@ -450,7 +461,7 @@ class Private20RunnerTests(unittest.TestCase):
 
         self.assertIsNone(args.base_url)
         self.assertIsNone(args.model)
-        self.assertIsNone(args.api_style)
+        self.assertIsNone(args.endpoint)
 
     def test_build_task_process_env_removes_runner_python_state(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
@@ -599,7 +610,7 @@ class Private20RunnerTests(unittest.TestCase):
                     base_url="http://model.example/anthropic",
                     model="tongyi/qwen3.6-plus",
                     api_key="test-key",
-                    api_style="anthropic-compatible",
+                    endpoint="anthropic_messages",
                 ),
                 max_steps=12,
                 task_timeout_seconds=34,

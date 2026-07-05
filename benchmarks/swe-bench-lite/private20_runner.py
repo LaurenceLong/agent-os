@@ -33,7 +33,7 @@ class ProviderSpec:
     base_url: str
     model: str
     api_key: str
-    api_style: str
+    endpoint: str
     context_limit: int = 128000
     output_limit: int = 8192
 
@@ -367,7 +367,7 @@ def write_agent_os_provider_config(*, config_home: Path, provider: ProviderSpec)
         "provider": {
             "default": {
                 "api_key": provider.api_key,
-                "api_style": provider.api_style,
+                "endpoint": provider.endpoint,
                 "options": {
                     "base_url": provider.base_url,
                 },
@@ -377,6 +377,14 @@ def write_agent_os_provider_config(*, config_home: Path, provider: ProviderSpec)
                         "limit": {
                             "context": provider.context_limit,
                             "output": provider.output_limit,
+                        },
+                        "capabilities": {
+                            "streaming": True,
+                            "tool_calling": True,
+                            "reasoning": True,
+                            "temperature": True,
+                            "image_input": True,
+                            "structured_output": True,
                         },
                     },
                 },
@@ -765,7 +773,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     run_agent.add_argument("--model")
     run_agent.add_argument("--api-key-file", type=Path)
     run_agent.add_argument("--api-key-env", default="LLM_API_KEY")
-    run_agent.add_argument("--api-style")
+    run_agent.add_argument("--endpoint")
     run_agent.add_argument("--context-limit", type=int, default=128000)
     run_agent.add_argument("--output-limit", type=int, default=8192)
     run_agent.add_argument("--max-steps", type=int, default=48)
@@ -852,11 +860,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 dotenv_values=dotenv_values,
             ),
             api_key=api_key,
-            api_style=resolve_config_value(
-                "LLM_API_STYLE",
-                explicit=args.api_style,
+            endpoint=resolve_config_value(
+                "LLM_ENDPOINT",
+                explicit=args.endpoint,
                 dotenv_values=dotenv_values,
-                default="anthropic-compatible",
+                default="anthropic_messages",
             ),
             context_limit=args.context_limit,
             output_limit=args.output_limit,
