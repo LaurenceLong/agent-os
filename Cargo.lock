@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "agent-os-app-server"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "agent-os-sys",
  "serde",
@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "agent-os-cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "agent-os-app-server",
  "agent-os-config",
@@ -35,7 +35,7 @@ dependencies = [
 
 [[package]]
 name = "agent-os-config"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "agent-os-sys",
  "serde",
@@ -45,7 +45,7 @@ dependencies = [
 
 [[package]]
 name = "agent-os-conformance"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "agent-os-app-server",
  "agent-os-config",
@@ -62,7 +62,7 @@ dependencies = [
 
 [[package]]
 name = "agent-os-distro"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "agent-os-sys",
  "serde",
@@ -71,7 +71,7 @@ dependencies = [
 
 [[package]]
 name = "agent-os-ecosystem"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "agent-os-config",
  "agent-os-kernel",
@@ -82,7 +82,7 @@ dependencies = [
 
 [[package]]
 name = "agent-os-host"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "agent-os-app-server",
  "agent-os-config",
@@ -99,7 +99,7 @@ dependencies = [
 
 [[package]]
 name = "agent-os-kernel"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "agent-os-store",
  "agent-os-sys",
@@ -112,7 +112,7 @@ dependencies = [
 
 [[package]]
 name = "agent-os-store"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "agent-os-sys",
  "serde",
@@ -122,7 +122,7 @@ dependencies = [
 
 [[package]]
 name = "agent-os-store-sqlite"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "agent-os-store",
  "agent-os-sys",
@@ -133,7 +133,7 @@ dependencies = [
 
 [[package]]
 name = "agent-os-sys"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -143,7 +143,7 @@ dependencies = [
 
 [[package]]
 name = "agent-os-thread"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "agent-os-kernel",
  "agent-os-store",

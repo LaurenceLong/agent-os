@@ -2706,7 +2706,7 @@ fn kernel_tool_plan_projects_direct_hidden_and_disabled_tools() {
             tool_id: "tool_mcp__echo__echo".to_string(),
             name: "mcp__echo__echo".to_string(),
             description: "Echo one text field through MCP.".to_string(),
-            version: "0.3.0".to_string(),
+            version: "0.4.0".to_string(),
             driver_class: ToolDriverClass::Mcp,
             risk_level: 3,
             input_schema: json!({
@@ -2901,7 +2901,7 @@ fn tool_search_returns_deferred_tool_summaries() {
                 tool_id: format!("tool_{tool_name}"),
                 name: tool_name.to_string(),
                 description: description.to_string(),
-                version: "0.3.0".to_string(),
+                version: "0.4.0".to_string(),
                 driver_class: ToolDriverClass::Mcp,
                 risk_level,
                 input_schema: json!({
@@ -3164,7 +3164,7 @@ fn tool_descriptor_registration_rejects_invalid_lifecycle_policy() {
         .register_tool_descriptor(ToolDescriptor {
             tool_id: "tool_bad_lifecycle".to_string(),
             name: "bad_lifecycle".to_string(),
-            version: "0.3.0".to_string(),
+            version: "0.4.0".to_string(),
             driver_class: ToolDriverClass::KernelBuiltin,
             risk_level: 1,
             input_schema: json!({"type": "object"}),

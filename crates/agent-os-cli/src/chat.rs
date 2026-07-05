@@ -250,7 +250,7 @@ impl ChatSession {
                 .unwrap_or_default();
             let _ = writeln!(
                 io::stdout(),
-                "\n  Done — {} tool call(s), {} artifact(s), {} event(s)",
+                "\n  Done - {} tool call(s), {} artifact(s), {} event(s)",
                 tool_results.len(),
                 artifact_count,
                 event_count,
@@ -259,7 +259,7 @@ impl ChatSession {
     }
 
     fn print_welcome(&self) {
-        let _ = writeln!(io::stdout(), "\nAgent-OS v0.3 — Interactive Coding Agent");
+        let _ = writeln!(io::stdout(), "\nAgent-OS v0.4 - Interactive Coding Agent");
         let _ = writeln!(io::stdout(), "  Workspace: {}", self.workspace.display());
         let _ = writeln!(io::stdout(), "  Provider:  {}", self.provider);
         let _ = writeln!(io::stdout(), "  Model:     {}", self.model);
@@ -431,10 +431,10 @@ fn print_help() {
     let _ = writeln!(
         io::stdout(),
         "Commands:\n  \
-         <task>   — Give the agent a coding task\n  \
-         status   — Show session statistics\n  \
-         help     — Show this message\n  \
-         exit     — End the session"
+         <task>   - Give the agent a coding task\n  \
+         status   - Show session statistics\n  \
+         help     - Show this message\n  \
+         exit     - End the session"
     );
 }
 

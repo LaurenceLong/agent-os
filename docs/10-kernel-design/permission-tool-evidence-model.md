@@ -2,7 +2,7 @@
 
 Status: normative
 
-Last updated: 2026-07-03
+Last updated: 2026-07-05
 
 ## 1. Purpose
 
@@ -111,7 +111,7 @@ Human attention is modeled as scarce control-plane state through budget ledgers 
 
 All tool calls MUST go through Tool Broker.
 
-The current v0.3.0 model-visible tool surface is typed by domain.
+The current v0.4.0 model-visible tool surface is typed by domain.
 
 Core and dynamically imported model-visible tools MUST project descriptions and
 model input schemas from registered kernel `ToolDescriptor` records. Provider
@@ -126,10 +126,21 @@ instructions.
 Host OS substrate tools are exactly:
 
 ```text
+glob_files
+grep_files
 read_file
 read_image
 apply_patch
 run_command
+write_stdin
+```
+
+Ecosystem and deferred discovery tools are:
+
+```text
+load_skill
+read_skill_resource
+tool_search
 ```
 
 Agent-OS control-plane tools are:
@@ -139,8 +150,6 @@ set_goal
 accomplish_goal
 update_checklist
 record_evidence
-load_skill
-read_skill_resource
 report_supervisor
 post_blackboard
 ask_human

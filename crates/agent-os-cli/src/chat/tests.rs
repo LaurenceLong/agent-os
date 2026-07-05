@@ -189,7 +189,7 @@ impl ChatAppClient for FakeChatClient {
                 assert_eq!(client_thread_id, "thread_1");
                 Ok(json!({
                     "bundle": {
-                        "abi_version": "0.3.0",
+                        "abi_version": "0.4.0",
                         "bundle_kind": "task",
                         "exported_at": "2026-06-30T00:00:00Z",
                         "root_task_id": "task_1",

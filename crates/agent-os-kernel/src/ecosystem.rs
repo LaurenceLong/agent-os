@@ -207,7 +207,7 @@ pub fn mcp_tool_descriptor(
         tool_id: format!("tool_{model_tool_name}"),
         name: model_tool_name,
         description: description.to_string(),
-        version: "0.3.0".to_string(),
+        version: "0.4.0".to_string(),
         driver_class: ToolDriverClass::Mcp,
         risk_level: 3,
         input_schema: input_schema.clone(),

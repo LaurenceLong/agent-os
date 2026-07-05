@@ -2,7 +2,7 @@
 
 Status: planning baseline
 
-Last updated: 2026-07-03
+Last updated: 2026-07-05
 
 ## 1. Strategy
 
@@ -19,7 +19,7 @@ The project SHOULD NOT start with a UI, a marketplace, or a generic workflow bui
 ## Current Implementation Snapshot
 
 The current repository is no longer only a planning artifact. It contains a
-single-node Rust implementation of the v0.3.0 kernel, host, and Agent Thread
+single-node Rust implementation of the v0.4.0 kernel, host, and Agent Thread
 runtime:
 
 - `agent-os-sys` owns ABI/data types.
@@ -29,8 +29,9 @@ runtime:
   mediation, environments, leases, communication, blackboard entries, evidence,
   artifacts, review, verification, final submissions, and task bundle export.
 - `agent-os-config` owns cross-platform Agent-OS roots, global
-  `config.json`, project overrides, provider catalog resolution, last-good
-  global config backup, and project runtime paths.
+  `config.json`, project overrides, provider catalog resolution, built-in JSON
+  model defaults with safe fallback capabilities, last-good global config
+  backup, and project runtime paths.
 - `agent-os-ecosystem` discovers global and project rules, instructions,
   skills, commands, agents, and MCP declarations before they are imported into
   typed kernel state.
@@ -54,27 +55,33 @@ runtime:
   `provider/model` from the user's global config plus project overrides, and
   lets the host run provider-backed runtime jobs.
 - Provider-backed runtime jobs consume typed model `limit`, `capabilities`, and
-  model `options`; model `limit.output` supplies the default max-output token
-  bound, provider-specific reasoning options are passed through explicitly, and
-  LLM API failures are classified before they enter runtime feedback.
+  model `options`; missing model metadata is resolved from the built-in catalog
+  by provider request name, model `limit.output` supplies the default
+  max-output token bound, provider-specific reasoning options are passed
+  through explicitly, and LLM API failures are classified before they enter
+  runtime feedback.
 - `agent-os-conformance` captures the durable contract across lifecycle,
   security, communication, storage, provider routing, software distribution,
   runtime resume, and export behavior.
 - `benchmarks/swe-bench-lite/private20_runner.py` contains the private
   SWE-bench Lite runner and official-harness evaluation workflow.
 
-The current model-visible v0.3.0 tool surface is:
+The current model-visible v0.4.0 tool surface is:
 
 ```text
 Host OS:
+  glob_files
+  grep_files
   read_file
   read_image
   apply_patch
   run_command
+  write_stdin
 
 Ecosystem:
   load_skill
   read_skill_resource
+  tool_search
 
 Work State:
   set_goal
@@ -86,6 +93,7 @@ Communication:
   report_supervisor
   post_blackboard
   ask_human
+  request_permissions
 
 Agent Supervision:
   agent_control
@@ -263,10 +271,17 @@ Deliverables:
 
 - Tool Broker service
 - Host OS model-visible tools:
+  - `glob_files`
+  - `grep_files`
   - `read_file`
   - `read_image`
   - `apply_patch`
   - `run_command`
+  - `write_stdin`
+- Ecosystem and deferred discovery tools:
+  - `load_skill`
+  - `read_skill_resource`
+  - `tool_search`
 - Agent-OS control-plane tool taxonomy:
   - work state: `set_goal`, `accomplish_goal`, `update_checklist`, `record_evidence`
   - communication: `report_supervisor`, `post_blackboard`, `ask_human`, `request_permissions`

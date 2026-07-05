@@ -204,11 +204,11 @@ Agent Threads MUST yield at these boundaries:
 
 Each yield SHOULD create or update a checkpoint.
 
-The kernel may suspend, resume, compact, replan, delete session state, purge current projection state, or terminate an Agent Thread only at yield boundaries in v0.3.0.
+The kernel may suspend, resume, compact, replan, delete session state, purge current projection state, or terminate an Agent Thread only at yield boundaries in v0.4.0.
 
 ## 6. Core Roles and Supervisor Levels
 
-Agent-OS v0.3.0 keeps the core role set small:
+Agent-OS v0.4.0 keeps the core role set small:
 
 ```text
 SupervisorAgent

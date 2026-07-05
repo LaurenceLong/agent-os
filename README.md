@@ -1,4 +1,4 @@
-﻿# Agent-OS
+# Agent-OS
 
 Agent-OS is a production-oriented runtime kernel for agent organizations.
 
@@ -8,7 +8,7 @@ The central execution unit is the Agent Thread. An Agent Thread is not an arbitr
 
 ## Design Baseline
 
-Current baseline: `v0.3-design + Rust single-node host/runtime`
+Current baseline: `v0.4-design + Rust single-node host/runtime`
 
 This repository contains the design contract and a Rust implementation that follows it. Implementation work should not start by adopting LangGraph, AutoGen, CrewAI, OpenHands, or any other agent framework as the core runtime. Those projects can be studied, wrapped, or hosted as compatibility guests, but the Agent-OS kernel and Agent Thread Runtime must be owned by this project.
 
@@ -55,7 +55,7 @@ Implemented kernel surfaces include:
 - host-backed interactive `chat` execution through `agent-os-hostd --stdio`, the app-server JSONL protocol, SQLite-backed runtime job records, and user-level provider configuration
 - Agent Thread Runtime loop that consumes provider-neutral model actions, records provider stream events, bounds provider requests with a hard client timeout, executes tool proposals through Tool Broker, yields on background-running tools, bounds pre-patch investigation loops, auto-commits patch artifacts from diff evidence, blocks nonzero process checks, submits evidence-backed final output through the broker, checkpoints, and replays
 - external process model adapter for `ModelTurnRequest` JSON over stdin and `ModelTurnResponse` JSON over stdout, so real provider wrappers can drive the same runtime without linking provider SDKs into the kernel
-- a converged v0.3 Host OS tool surface of `glob_files`, `grep_files`, `read_file`, `read_image`, `apply_patch`, and `run_command`, with each built-in tool owned by its own kernel Rust module and descriptor
+- a converged v0.4 Host OS tool surface of `glob_files`, `grep_files`, `read_file`, `read_image`, `apply_patch`, `run_command`, and `write_stdin`, with each built-in tool owned by its own kernel Rust module and descriptor
 - Agent-OS control-plane tools for objective/checklist state, Supervisor communication, scoped blackboard posts, human asks, evidence records, supervised child agents, and final session submission
 - app-server-owned thread projections, including coarse `thread/read`, paged
   turn and timeline reads, branch fork records, rollback records, and manual
@@ -68,7 +68,7 @@ Implemented kernel surfaces include:
 
 ## Core Surface
 
-Agent-OS v0.3.0 separates these surfaces that must not be conflated:
+Agent-OS v0.4.0 separates these surfaces that must not be conflated:
 
 ```text
 Host OS tools:
@@ -78,9 +78,10 @@ Host OS tools:
   read_image
   apply_patch
   run_command
+  write_stdin
 
 Ecosystem tools:
-  load_skill, read_skill_resource
+  load_skill, read_skill_resource, tool_search
 
 Agent-OS control-plane tools:
   set_goal, accomplish_goal, update_checklist, record_evidence
@@ -129,8 +130,8 @@ Config shape:
 
 ```json
 {
-  "model": "openai/gpt-4o",
-  "small_model": "openai/gpt-4o-mini",
+  "model": "openai/gpt-5.2-codex",
+  "small_model": "openai/gpt-5.2",
   "provider": {
     "openai": {
       "api_key": "replace-with-your-api-key",
@@ -140,29 +141,14 @@ Config shape:
         "timeout_ms": 120000
       },
       "models": {
-        "gpt-4o": {
-          "name": "gpt-4o",
-          "limit": {"context": 128000, "output": 16384},
-          "capabilities": {
-            "streaming": true,
-            "tool_calling": true,
-            "reasoning": true,
-            "temperature": true,
-            "image_input": true,
-            "structured_output": true
+        "gpt-5.2-codex": {
+          "name": "gpt-5.2-codex",
+          "options": {
+            "reasoningEffort": "low"
           }
         },
-        "gpt-4o-mini": {
-          "name": "gpt-4o-mini",
-          "limit": {"context": 128000, "output": 16384},
-          "capabilities": {
-            "streaming": true,
-            "tool_calling": true,
-            "reasoning": true,
-            "temperature": true,
-            "image_input": true,
-            "structured_output": true
-          }
+        "gpt-5.2": {
+          "name": "gpt-5.2"
         }
       }
     }
@@ -175,8 +161,18 @@ provider owns its credential, `endpoint`, endpoint options, and model catalog.
 `endpoint` is required and supports the canonical values
 `openai_chat_completions`, `openai_responses`, and `anthropic_messages`. Use
 `agent-os chat --model <provider/model>` to select a non-default model from
-the merged global/project config. Each model entry must explicitly define
-`name`, `limit.context`, and `limit.output`; `limit.input` is optional.
+the merged global/project config.
+
+The selected value is `model = "<provider object key>/<models object key>"`.
+The actual provider request uses the resolved model entry `name`; if `name` is
+omitted, Agent-OS uses the model key. Missing `limit` and `capabilities` values
+are filled from the built-in model catalog at
+`crates/agent-os-config/src/model_catalog/defaults.json`; unknown models fall
+back to a safe text-default contract with streaming, tool calling, reasoning,
+temperature, and structured output enabled, and image input disabled. Catalog
+matching uses the request `name`, first by exact full match and then by
+`/`-split final segment with `ends_with`.
+
 Model `options` is an object merged into the provider request body before
 runtime-controlled fields, so reasoning controls such as `reasoningEffort`,
 `reasoningSummary`, or provider-native `thinking` settings belong there.

@@ -502,7 +502,7 @@ fn runtime_rejects_non_visible_tool_call_without_broker_invocation() {
             tool_id: "tool_mcp__echo__echo".to_string(),
             name: "mcp__echo__echo".to_string(),
             description: "Echo one text field through MCP.".to_string(),
-            version: "0.3.0".to_string(),
+            version: "0.4.0".to_string(),
             driver_class: ToolDriverClass::Mcp,
             risk_level: 3,
             input_schema: json!({
@@ -624,7 +624,7 @@ fn runtime_exposes_deferred_tool_after_tool_search_match() {
             tool_id: "tool_mcp__echo__echo".to_string(),
             name: "mcp__echo__echo".to_string(),
             description: "Echo one text field through MCP.".to_string(),
-            version: "0.3.0".to_string(),
+            version: "0.4.0".to_string(),
             driver_class: ToolDriverClass::Mcp,
             risk_level: 3,
             input_schema: json!({

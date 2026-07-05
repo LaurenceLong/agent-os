@@ -1586,7 +1586,7 @@ fn mcp_echo_tool() -> McpToolDefinition {
             tool_id: "tool_mcp__echo__echo".to_string(),
             name: "mcp__echo__echo".to_string(),
             description: "Echo one text field.".to_string(),
-            version: "0.3.0".to_string(),
+            version: "0.4.0".to_string(),
             driver_class: ToolDriverClass::Mcp,
             risk_level: 3,
             input_schema: schema.clone(),

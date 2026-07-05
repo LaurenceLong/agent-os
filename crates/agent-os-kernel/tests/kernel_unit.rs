@@ -78,7 +78,7 @@ fn default_model_aliases_mark_multimodal_and_text_only_routes() {
         let model_alias = state.model_aliases.get(alias).expect("seeded model alias");
         assert!(
             model_alias.capabilities.image_input,
-            "{alias} should expose image input in the v0.3 default catalog"
+            "{alias} should expose image input in the v0.4 default catalog"
         );
     }
 

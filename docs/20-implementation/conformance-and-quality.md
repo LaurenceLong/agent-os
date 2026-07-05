@@ -227,7 +227,7 @@ Ecosystem conformance tests MUST verify:
   schemas and direct dynamic tool schemas from kernel `ToolDescriptor` records,
   with deferred dynamic tools discoverable through `tool_search`
 
-## 5.4 Current v0.3 Tool and Live Coverage
+## 5.4 Current v0.4 Tool and Live Coverage
 
 The current repo includes both deterministic mock/adapter tests and ignored live
 LLM e2e tests.
@@ -393,7 +393,7 @@ cleanup, and permission action families before requests reach the kernel guard.
 The 2026-06-30 long-running kernel refactor gate used the all-scenario command
 above from WSL with exported provider variables. The observed result was 10
 ignored-by-default live LLM e2e tests passing: five OpenAI-compatible scenarios
-and five Anthropic-compatible scenarios. The v0.3 image-input gate adds six
+and five Anthropic-compatible scenarios. The v0.4 image-input gate adds six
 ignored-by-default `read_image` live scenarios across OpenAI-compatible and
 Anthropic-compatible adapter styles.
 

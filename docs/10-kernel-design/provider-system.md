@@ -2,7 +2,7 @@
 
 Status: normative
 
-Last updated: 2026-07-03
+Last updated: 2026-07-05
 
 ## 1. Purpose
 
@@ -123,9 +123,10 @@ provider_profiles:
       name: default
     retry_policy:
       max_attempts: 2
-      backoff_ms: 0
+      initial_backoff_ms: 30000
+      max_backoff_ms: 30000
     transform_policy:
-      adapter_style: openai-compatible
+      adapter_style: openai_chat_completions
     reasoning_defaults: {}
     tool_visibility_profile: null
     timeout_ms: 120000
@@ -192,33 +193,25 @@ The current runtime config uses an explicit Agent-OS provider/model surface:
 
 ```json
 {
-  "model": "openai/gpt-4o",
-  "small_model": "openai/gpt-4o-mini",
+  "model": "openai/gpt-5.2-codex",
+  "small_model": "openai/gpt-5.2",
   "provider": {
     "openai": {
       "api_key": "replace-with-your-api-key",
-      "api_style": "openai-compatible",
+      "endpoint": "openai_chat_completions",
       "options": {
         "base_url": "https://api.openai.com/v1",
         "timeout_ms": 120000
       },
       "models": {
-        "gpt-4o": {
-          "name": "gpt-4o",
+        "gpt-5.2-codex": {
+          "name": "gpt-5.2-codex",
           "options": {
             "reasoningEffort": "low"
-          },
-          "limit": {
-            "context": 128000,
-            "output": 16384
           }
         },
-        "gpt-4o-mini": {
-          "name": "gpt-4o-mini",
-          "limit": {
-            "context": 128000,
-            "output": 16384
-          }
+        "gpt-5.2": {
+          "name": "gpt-5.2"
         }
       }
     }
@@ -229,30 +222,51 @@ The current runtime config uses an explicit Agent-OS provider/model surface:
 `model` and `small_model` use `provider_id/model_id` form. `small_model` is a
 reserved lightweight-task selection and is validated against the catalog even
 when a runtime path does not consume it yet. Each provider entry requires
-`api_key`, `api_style`, `options.base_url`, and at least one model entry.
-`api_style` accepts `openai-compatible` or `anthropic-compatible`. The `models`
-map key is the local display and selection name used by `provider/model`.
-Provider IDs and model keys are ID segments: they must be non-empty and must not
-contain `/` or whitespace.
-Each model entry must define `name`; that value is the exact provider request
-model name. The `models` map key is only the local Agent-OS selection id used in
-`provider/model`, not a request-name substitute. A model entry may also define
-provider-specific options, `limit`, and capability overrides.
-`limit.context` and `limit.output` are required; `limit.input` is optional. The
-runtime uses `limit.output` as the default max-output token bound when no
-CLI/runtime override is supplied. Model capabilities start from the built-in
-known-model catalog when the configured provider/model key or request model name
-is known; models outside that catalog default capabilities to false. Provider
-JSON `capabilities` is a per-field override, so `{"image_input": false}`
-disables only image input while preserving other catalog fields. Model `options`
-is an object merged into provider requests before runtime-controlled fields, so
-reasoning controls such as
+`api_key`, `endpoint`, `options.base_url`, and at least one model entry.
+`endpoint` accepts `openai_chat_completions`, `openai_responses`, or
+`anthropic_messages`. The `models` map key is the local display and selection
+name used by `provider/model`. Provider IDs and model keys are ID segments:
+they must be non-empty and must not contain `/` or whitespace.
+
+Each model entry may define `name`; when present, that value is the exact
+provider request model name. When absent, Agent-OS uses the local model key as
+the request name. In both cases, model selection remains
+`<provider object key>/<models object key>`, while the provider request uses the
+resolved entry `name`. A model entry may also define provider-specific
+`options`, `limit`, and capability overrides.
+
+`limit.context`, `limit.output`, `limit.input`, and `capabilities` are optional
+model metadata in user config. Missing values are filled from the built-in
+model catalog at `crates/agent-os-config/src/model_catalog/defaults.json`.
+Catalog matching is based on the resolved request `name`: first exact full
+match, then, if no exact match exists, split the request name on `/` and match
+the final segment with `ends_with`. This lets hosted names such as
+`openai/gpt-oss-20b`, `qwen/qwen3-coder-30b`, or provider-prefixed remote
+names still resolve to known model defaults.
+
+If the configured model is not found in the catalog, Agent-OS uses the catalog
+fallback: `limit.context=128000`, `limit.output=16000`, and default
+capabilities with `streaming`, `tool_calling`, `reasoning`, `temperature`, and
+`structured_output` enabled while `image_input` is disabled. Provider JSON
+`capabilities` remains a per-field override, so `{"image_input": false}`
+disables only image input while preserving other catalog fields. The runtime
+uses the resolved `limit.output` as the default max-output token bound when no
+CLI/runtime override is supplied. Model `options` is an object merged into
+provider requests before runtime-controlled fields, so reasoning controls such as
 `reasoningEffort`, `reasoningSummary`, or native `thinking` settings are
 explicit model metadata rather than adapter guesses.
+
+The model catalog is loaded as a separate data file so future distributions can
+add remote refresh or hot-update behavior without changing the provider config
+shape. If a preferred or downloaded catalog fails to parse, startup falls back
+to the embedded built-in catalog. If the embedded catalog is ever invalid,
+Agent-OS still falls back to a minimal hard-coded default contract rather than
+crashing during startup.
+
 `agent-os chat --model <provider/model>` selects a non-default model from the
 merged global/project config. Project config may override `model`,
 `small_model`, provider options, and model metadata, but it must not contain
-provider `api_key` or `api_style` values. The host receives the selected full
+provider `api_key` or `endpoint` values. The host receives the selected full
 model id through the app-server/stdio launch path and builds the configured
 runtime model client inside `agent-os-host`, not inside the CLI process.
 

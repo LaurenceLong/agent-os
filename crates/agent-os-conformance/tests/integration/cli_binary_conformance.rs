@@ -529,7 +529,7 @@ fn cli_chat_binary_runs_task_through_configured_provider_and_replays_sqlite_stat
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("Agent-OS v0.3"));
+    assert!(stdout.contains("Agent-OS v0.4"));
     assert!(stdout.contains("Provider:  local"));
     assert!(stdout.contains("Model:     local/chat-model"));
     assert!(stdout.contains("Session: 1 task(s)"));
