@@ -1,0 +1,785 @@
+{
+  "fallback": {
+    "limit": {
+      "context": 128000,
+      "output": 16000
+    },
+    "capabilities": {
+      "streaming": true,
+      "tool_calling": true,
+      "reasoning": true,
+      "temperature": true,
+      "image_input": false,
+      "structured_output": true
+    }
+  },
+  "models": [
+    {
+      "providers": ["openai"],
+      "name": "gpt-5.2",
+      "limit": { "context": 400000, "output": 128000 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": false,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["openai"],
+      "name": "gpt-5.2-codex",
+      "limit": { "context": 400000, "output": 128000 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": true,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["openai"],
+      "name": "gpt-5.1",
+      "limit": { "context": 400000, "output": 128000 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": false,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["openai"],
+      "name": "gpt-5.1-codex",
+      "limit": { "context": 400000, "output": 128000 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": true,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["openai"],
+      "name": "gpt-5",
+      "limit": { "context": 400000, "output": 128000 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": true,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["openai"],
+      "name": "gpt-5-mini",
+      "limit": { "context": 400000, "output": 128000 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": true,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["openai"],
+      "name": "gpt-5-nano",
+      "limit": { "context": 400000, "output": 128000 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": true,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["openai"],
+      "name": "gpt-4.1",
+      "limit": { "context": 1047576, "output": 32768 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": true,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["openai"],
+      "name": "gpt-4.1-mini",
+      "limit": { "context": 1047576, "output": 32768 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": true,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["openai"],
+      "name": "gpt-4.1-nano",
+      "limit": { "context": 1047576, "output": 32768 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": true,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["openai"],
+      "name": "gpt-4o",
+      "limit": { "context": 128000, "output": 16384 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": true,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["openai"],
+      "name": "gpt-4o-mini",
+      "limit": { "context": 128000, "output": 16384 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": true,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["openai"],
+      "name": "o4-mini",
+      "limit": { "context": 200000, "output": 100000 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": true,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["openai"],
+      "name": "o3",
+      "limit": { "context": 200000, "output": 100000 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": true,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["openai"],
+      "name": "o3-mini",
+      "limit": { "context": 200000, "output": 100000 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": false,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["anthropic"],
+      "name": "claude-opus-4-5",
+      "limit": { "context": 200000, "output": 64000 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": true,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["anthropic"],
+      "name": "claude-opus-4-5-20251101",
+      "limit": { "context": 200000, "output": 64000 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": true,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["anthropic"],
+      "name": "claude-opus-4-1",
+      "limit": { "context": 200000, "output": 32000 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": true,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["anthropic"],
+      "name": "claude-opus-4-1-20250805",
+      "limit": { "context": 200000, "output": 32000 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": true,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["anthropic"],
+      "name": "claude-sonnet-4-5",
+      "limit": { "context": 200000, "output": 64000 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": true,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["anthropic"],
+      "name": "claude-sonnet-4-5-20250929",
+      "limit": { "context": 200000, "output": 64000 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": true,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["anthropic"],
+      "name": "claude-sonnet-4-20250514",
+      "limit": { "context": 200000, "output": 64000 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": true,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["anthropic"],
+      "name": "claude-haiku-4-5",
+      "limit": { "context": 200000, "output": 64000 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": true,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["anthropic"],
+      "name": "claude-haiku-4-5-20251001",
+      "limit": { "context": 200000, "output": 64000 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": true,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["anthropic"],
+      "name": "claude-3-7-sonnet-latest",
+      "limit": { "context": 200000, "output": 64000 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": true,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["anthropic"],
+      "name": "claude-3-5-haiku-latest",
+      "limit": { "context": 200000, "output": 8192 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": true,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["alibaba", "tongyi"],
+      "name": "qwen3.6-plus",
+      "limit": { "context": 1000000, "output": 65536 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": true,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["alibaba", "tongyi"],
+      "name": "qwen3.6-max-preview",
+      "limit": { "context": 262144, "output": 65536 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": false,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["alibaba", "tongyi"],
+      "name": "qwen3.6-27b",
+      "limit": { "context": 262144, "output": 65536 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": true,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["alibaba", "tongyi"],
+      "name": "qwen3.5-plus",
+      "limit": { "context": 1000000, "output": 65536 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": true,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["alibaba", "tongyi"],
+      "name": "qwen3-max",
+      "limit": { "context": 262144, "output": 65536 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": false,
+        "temperature": true,
+        "image_input": false,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["alibaba", "tongyi"],
+      "name": "qwen3-coder-plus",
+      "limit": { "context": 1000000, "output": 65536 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": false,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["deepseek"],
+      "name": "deepseek-chat",
+      "limit": { "context": 1000000, "output": 384000 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": false,
+        "temperature": true,
+        "image_input": false,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["deepseek"],
+      "name": "deepseek-reasoner",
+      "limit": { "context": 1000000, "output": 384000 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": false,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["deepseek"],
+      "name": "deepseek-v4-pro",
+      "limit": { "context": 1000000, "output": 384000 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": false,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["deepseek"],
+      "name": "deepseek-v4-flash",
+      "limit": { "context": 1000000, "output": 384000 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": false,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["zhipuai"],
+      "name": "glm-5v-turbo",
+      "limit": { "context": 200000, "output": 131072 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": true,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["zhipuai"],
+      "name": "glm-5.2",
+      "limit": { "context": 200000, "output": 131072 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": false,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["zhipuai"],
+      "name": "glm-5.1",
+      "limit": { "context": 200000, "output": 131072 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": false,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["zhipuai"],
+      "name": "glm-5",
+      "limit": { "context": 204800, "output": 131072 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": false,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["zhipuai"],
+      "name": "glm-4.7",
+      "limit": { "context": 204800, "output": 131072 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": false,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["zhipuai"],
+      "name": "glm-4.6",
+      "limit": { "context": 204800, "output": 131072 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": false,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["zhipuai"],
+      "name": "glm-4.5",
+      "limit": { "context": 131072, "output": 98304 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": false,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["moonshotai-cn"],
+      "name": "kimi-k2.6",
+      "limit": { "context": 262144, "output": 262144 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": true,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["moonshotai-cn"],
+      "name": "kimi-k2.5",
+      "limit": { "context": 262144, "output": 262144 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": false,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["moonshotai-cn"],
+      "name": "kimi-k2-thinking",
+      "limit": { "context": 262144, "output": 262144 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": false,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["moonshotai-cn"],
+      "name": "kimi-k2-thinking-turbo",
+      "limit": { "context": 262144, "output": 262144 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": false,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["xai"],
+      "name": "grok-4.3",
+      "limit": { "context": 1000000, "output": 30000 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": true,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["xai"],
+      "name": "grok-4-1-fast",
+      "limit": { "context": 2000000, "output": 30000 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": true,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["xai"],
+      "name": "grok-4-fast",
+      "limit": { "context": 2000000, "output": 30000 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": true,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["xai"],
+      "name": "grok-code-fast-1",
+      "limit": { "context": 256000, "output": 10000 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": false,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["xai"],
+      "name": "grok-4",
+      "limit": { "context": 256000, "output": 64000 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": false,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["mistral"],
+      "name": "mistral-medium-latest",
+      "limit": { "context": 262144, "output": 262144 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": true,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["mistral"],
+      "name": "mistral-small-latest",
+      "limit": { "context": 256000, "output": 256000 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": true,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["mistral"],
+      "name": "devstral-medium-latest",
+      "limit": { "context": 262144, "output": 262144 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": false,
+        "temperature": true,
+        "image_input": false,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["mistral"],
+      "name": "devstral-2512",
+      "limit": { "context": 262144, "output": 262144 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": false,
+        "temperature": true,
+        "image_input": false,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["xiaomi"],
+      "name": "mimo-v2.5-pro",
+      "limit": { "context": 1048576, "output": 131072 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": false,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["lmstudio"],
+      "name": "openai/gpt-oss-20b",
+      "limit": { "context": 131072, "output": 32768 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": true,
+        "temperature": true,
+        "image_input": false,
+        "structured_output": true
+      }
+    },
+    {
+      "providers": ["lmstudio"],
+      "name": "qwen/qwen3-coder-30b",
+      "limit": { "context": 262144, "output": 65536 },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "reasoning": false,
+        "temperature": true,
+        "image_input": false,
+        "structured_output": true
+      }
+    }
+  ]
+}

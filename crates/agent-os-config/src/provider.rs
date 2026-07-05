@@ -395,31 +395,27 @@ fn resolve_provider_entries(
                 .into_iter()
                 .map(|(model_id, model)| {
                     let model_id = valid_id_segment(&model_id, "model")?;
-                    let name = model.name.ok_or_else(|| {
-                        AgentOsError::Validation(format!(
-                            "Agent-OS config provider `{provider_id}` model `{model_id}` must define name"
-                        ))
-                    })?;
-                    if name.trim().is_empty() {
-                        return Err(AgentOsError::Validation(format!(
-                            "Agent-OS config provider `{provider_id}` model `{model_id}` has empty name"
-                        )));
-                    }
-                    let name = name.trim().to_string();
-                    let limit = model.limit.ok_or_else(|| {
-                        AgentOsError::Validation(format!(
-                            "Agent-OS config provider `{provider_id}` model `{model_id}` must define limit.context and limit.output"
-                        ))
-                    })?;
-                    limit.validate_for_model(&provider_id, &model_id)?;
-                    let mut capabilities = model_catalog::default_model_capabilities(
+                    let configured_name = model
+                        .name
+                        .map(|name| {
+                            let name = name.trim().to_string();
+                            if name.is_empty() {
+                                return Err(AgentOsError::Validation(format!(
+                                    "Agent-OS config provider `{provider_id}` model `{model_id}` has empty name"
+                                )));
+                            }
+                            Ok(name)
+                        })
+                        .transpose()?;
+                    let catalog_request_name = configured_name.as_deref().unwrap_or(&model_id);
+                    let catalog = model_catalog::default_model_config(
                         &provider_id,
-                        &model_id,
-                    )
-                    .or_else(|| {
-                        model_catalog::default_model_capabilities(&provider_id, &name)
-                    })
-                    .unwrap_or_default();
+                        catalog_request_name,
+                    );
+                    let name = configured_name.unwrap_or_else(|| catalog.name.clone());
+                    let limit = model.limit.unwrap_or_else(|| catalog.limit.clone());
+                    limit.validate_for_model(&provider_id, &model_id)?;
+                    let mut capabilities = catalog.capabilities;
                     if let Some(configured_capabilities) = &model.capabilities {
                         configured_capabilities.apply_to(&mut capabilities);
                     }
@@ -760,8 +756,8 @@ mod tests {
     }
 
     #[test]
-    fn model_name_and_limit_are_required_and_validated() {
-        let missing_name = AgentOsConfigFile {
+    fn model_name_and_limit_default_and_explicit_limit_is_validated() {
+        let defaulted_model = AgentOsConfigFile {
             model: Some("openai/custom-model".to_string()),
             provider: BTreeMap::from([(
                 "openai".to_string(),
@@ -774,42 +770,26 @@ mod tests {
                     },
                     models: BTreeMap::from([(
                         "custom-model".to_string(),
-                        ModelConfigEntry {
-                            limit: Some(test_limit(128000, 16384)),
-                            ..ModelConfigEntry::default()
-                        },
+                        ModelConfigEntry::default(),
                     )]),
                 },
             )]),
             small_model: None,
         };
-        let error = ProviderCatalog::from_config(missing_name).unwrap_err();
-        assert!(error.to_string().contains("must define name"));
 
-        let missing_limit = AgentOsConfigFile {
-            model: Some("openai/custom-model".to_string()),
-            provider: BTreeMap::from([(
-                "openai".to_string(),
-                ProviderConfigEntry {
-                    api_key: Some("key".to_string()),
-                    endpoint: Some("openai_chat_completions".to_string()),
-                    options: ProviderOptions {
-                        base_url: Some("https://api.example.test/v1".to_string()),
-                        timeout_ms: None,
-                    },
-                    models: BTreeMap::from([(
-                        "custom-model".to_string(),
-                        ModelConfigEntry {
-                            name: Some("provider-custom-model".to_string()),
-                            ..ModelConfigEntry::default()
-                        },
-                    )]),
-                },
-            )]),
-            small_model: None,
-        };
-        let error = ProviderCatalog::from_config(missing_limit).unwrap_err();
-        assert!(error.to_string().contains("must define limit.context"));
+        let model = ProviderCatalog::from_config(defaulted_model)
+            .unwrap()
+            .resolve(None)
+            .unwrap();
+        assert_eq!(model.name, "custom-model");
+        assert_eq!(model.limit.context, 128000);
+        assert_eq!(model.limit.output, 16000);
+        assert!(model.capabilities.streaming);
+        assert!(model.capabilities.tool_calling);
+        assert!(model.capabilities.reasoning);
+        assert!(model.capabilities.temperature);
+        assert!(!model.capabilities.image_input);
+        assert!(model.capabilities.structured_output);
 
         let invalid_input = AgentOsConfigFile {
             model: Some("openai/custom-model".to_string()),
@@ -911,7 +891,7 @@ mod tests {
     }
 
     #[test]
-    fn omitted_model_capabilities_fail_closed_for_image_input() {
+    fn omitted_model_capabilities_use_text_default() {
         let catalog = ProviderCatalog::from_config(AgentOsConfigFile {
             model: Some("openai/text-model".to_string()),
             provider: BTreeMap::from([(
@@ -940,7 +920,46 @@ mod tests {
         let model = catalog.resolve(None).unwrap();
 
         assert!(!model.capabilities.image_input);
-        assert!(model.capabilities.is_empty());
+        assert!(model.capabilities.streaming);
+        assert!(model.capabilities.tool_calling);
+        assert!(model.capabilities.reasoning);
+        assert!(model.capabilities.temperature);
+        assert!(model.capabilities.structured_output);
+    }
+
+    #[test]
+    fn configured_provider_request_name_matches_catalog_by_suffix() {
+        let catalog = ProviderCatalog::from_config(AgentOsConfigFile {
+            model: Some("default/tongyi_qwen3_6_plus".to_string()),
+            provider: BTreeMap::from([(
+                "default".to_string(),
+                ProviderConfigEntry {
+                    api_key: Some("key".to_string()),
+                    endpoint: Some("openai_chat_completions".to_string()),
+                    options: ProviderOptions {
+                        base_url: Some("https://api.example.test/v1".to_string()),
+                        timeout_ms: None,
+                    },
+                    models: BTreeMap::from([(
+                        "tongyi_qwen3_6_plus".to_string(),
+                        ModelConfigEntry {
+                            name: Some("tongyi/qwen3.6-plus".to_string()),
+                            ..ModelConfigEntry::default()
+                        },
+                    )]),
+                },
+            )]),
+            small_model: None,
+        })
+        .unwrap();
+
+        let model = catalog.resolve(None).unwrap();
+
+        assert_eq!(model.name, "tongyi/qwen3.6-plus");
+        assert_eq!(model.limit.context, 1_000_000);
+        assert_eq!(model.limit.output, 65_536);
+        assert!(model.capabilities.image_input);
+        assert!(model.capabilities.tool_calling);
     }
 
     #[test]
