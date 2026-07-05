@@ -159,20 +159,29 @@ fn render_bottom_pane<C: TuiAppClient>(
         return;
     };
     let text = match pane.title() {
-        "Threads" => vec![Line::from(
+        "Threads" => projection_rows(
+            &app.projection.threads,
             "Use /threads to refresh and /resume <thread-id> to switch.",
-        )],
-        "Models" => vec![Line::from(format!(
-            "model={} profile={}",
-            app.options.model.as_deref().unwrap_or("default"),
-            app.options.profile.as_deref().unwrap_or("default")
-        ))],
+        ),
+        "Models" => {
+            let mut rows = vec![Line::from(format!(
+                "model={} profile={}",
+                app.options.model.as_deref().unwrap_or("default"),
+                app.options.profile.as_deref().unwrap_or("default")
+            ))];
+            rows.extend(projection_rows(&app.projection.models, "No models loaded."));
+            rows
+        }
         "Processes" => app
             .projection
             .process_sessions
             .iter()
             .map(|process| Line::from(process.to_string()))
             .collect(),
+        "Permissions" => projection_rows(
+            &app.projection.permission_profiles,
+            "No permission profiles loaded.",
+        ),
         "Approvals" => app
             .projection
             .approvals
@@ -191,6 +200,16 @@ fn render_bottom_pane<C: TuiAppClient>(
         Paragraph::new(text).block(block).wrap(Wrap { trim: false }),
         area,
     );
+}
+
+fn projection_rows(values: &[serde_json::Value], empty: &str) -> Vec<Line<'static>> {
+    if values.is_empty() {
+        return vec![Line::from(empty.to_string())];
+    }
+    values
+        .iter()
+        .map(|value| Line::from(value.to_string()))
+        .collect()
 }
 
 fn render_composer<C: TuiAppClient>(frame: &mut ratatui::Frame<'_>, area: Rect, app: &TuiApp<C>) {
@@ -236,6 +255,8 @@ fn render_overlay<C: TuiAppClient>(frame: &mut ratatui::Frame<'_>, area: Rect, a
                 "runtime jobs: {}",
                 app.projection.runtime_jobs.len()
             )),
+            Line::from(format!("models: {}", app.projection.models.len())),
+            Line::from(format!("providers: {}", app.projection.providers.len())),
             Line::from(format!("artifacts: {}", app.projection.artifacts.len())),
             Line::from(format!("evidence: {}", app.projection.evidence.len())),
             Line::from(format!("resources: {}", app.projection.resources.len())),

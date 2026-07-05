@@ -6,10 +6,15 @@ pub struct TuiProjection {
     pub current_thread_id: Option<String>,
     pub current_turn_id: Option<String>,
     pub thread_status: Option<String>,
+    pub threads: Vec<Value>,
     pub timeline: Vec<String>,
     pub runtime_jobs: Vec<Value>,
     pub process_sessions: Vec<Value>,
     pub approvals: Vec<Value>,
+    pub models: Vec<Value>,
+    pub providers: Vec<Value>,
+    pub usage: Option<Value>,
+    pub permission_profiles: Vec<Value>,
     pub artifacts: Vec<Value>,
     pub evidence: Vec<Value>,
     pub resources: Vec<Value>,
@@ -58,6 +63,36 @@ impl TuiProjection {
         if body["runtime_job"].is_object() {
             self.runtime_jobs.push(body["runtime_job"].clone());
         }
+    }
+
+    pub fn apply_thread_list(&mut self, body: &Value) {
+        self.threads = body["threads"].as_array().cloned().unwrap_or_default();
+    }
+
+    pub fn apply_process_list(&mut self, body: &Value) {
+        self.process_sessions = body["process_sessions"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+    }
+
+    pub fn apply_model_list(&mut self, body: &Value) {
+        self.models = body["models"].as_array().cloned().unwrap_or_default();
+    }
+
+    pub fn apply_provider_capabilities(&mut self, body: &Value) {
+        self.providers = body["providers"].as_array().cloned().unwrap_or_default();
+    }
+
+    pub fn apply_usage(&mut self, body: &Value) {
+        self.usage = Some(body.clone());
+    }
+
+    pub fn apply_permission_profiles(&mut self, body: &Value) {
+        self.permission_profiles = body["permission_profiles"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
     }
 
     pub fn apply_notification(&mut self, envelope: &AppNotificationEnvelope) {

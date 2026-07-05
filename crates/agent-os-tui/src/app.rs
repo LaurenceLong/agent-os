@@ -1,6 +1,6 @@
 use crate::command_registry::{command_by_slash, CommandTarget};
 use crate::{BottomPane, ComposerState, Overlay, TuiExitReport, TuiOptions, TuiProjection};
-use agent_os_sys::{AgentOsResult, AppNotificationEnvelope, AppRequest};
+use agent_os_sys::{AgentOsResult, AppNotificationEnvelope, AppRequest, StatsQuery};
 use serde_json::Value;
 
 pub trait TuiAppClient {
@@ -137,6 +137,7 @@ impl<C: TuiAppClient> TuiApp<C> {
                 let body = self
                     .client
                     .request(AppRequest::ThreadList { archived: None })?;
+                self.projection.apply_thread_list(&body);
                 self.bottom_pane = Some(BottomPane::Threads);
                 self.status_line = format!(
                     "{} thread(s)",
@@ -211,11 +212,23 @@ impl<C: TuiAppClient> TuiApp<C> {
                 self.status_line = "Scrollback cleared".to_string();
             }
             "status" => {
+                let body = self.client.request(AppRequest::StatsRead {
+                    query: StatsQuery {
+                        client_thread_id: self.projection.current_thread_id.clone(),
+                        ..StatsQuery::default()
+                    },
+                })?;
+                self.projection.apply_usage(&body);
+                self.refresh_current_thread()?;
                 self.bottom_pane = Some(BottomPane::Status);
                 self.status_line = "Opened status panel".to_string();
             }
             "model" => {
                 if args.is_empty() {
+                    let body = self.client.request(AppRequest::ModelList {
+                        workspace: self.workspace_string(),
+                    })?;
+                    self.projection.apply_model_list(&body);
                     self.bottom_pane = Some(BottomPane::Models);
                     self.status_line = "Opened model picker".to_string();
                 } else {
@@ -233,6 +246,8 @@ impl<C: TuiAppClient> TuiApp<C> {
                 }
             }
             "permissions" => {
+                let body = self.client.request(AppRequest::PermissionProfileList)?;
+                self.projection.apply_permission_profiles(&body);
                 self.bottom_pane = Some(BottomPane::Permissions);
                 self.status_line = "Opened permissions panel".to_string();
             }
@@ -254,6 +269,10 @@ impl<C: TuiAppClient> TuiApp<C> {
                 }
             }
             "processes" => {
+                let body = self
+                    .client
+                    .request(AppRequest::ProcessList { state: None })?;
+                self.projection.apply_process_list(&body);
                 self.bottom_pane = Some(BottomPane::Processes);
                 self.status_line = "Opened process panel".to_string();
             }
@@ -288,10 +307,22 @@ impl<C: TuiAppClient> TuiApp<C> {
                 self.status_line = "Opened MCP".to_string();
             }
             "provider" => {
+                let body = self.client.request(AppRequest::ProviderCapabilitiesRead {
+                    workspace: self.workspace_string(),
+                    provider_id: None,
+                })?;
+                self.projection.apply_provider_capabilities(&body);
                 self.overlay = Some(Overlay::Provider);
                 self.status_line = "Opened provider".to_string();
             }
             "usage" => {
+                let body = self.client.request(AppRequest::ProviderUsageRead {
+                    query: StatsQuery {
+                        client_thread_id: self.projection.current_thread_id.clone(),
+                        ..StatsQuery::default()
+                    },
+                })?;
+                self.projection.apply_usage(&body);
                 self.overlay = Some(Overlay::Usage);
                 self.status_line = "Opened usage".to_string();
             }
@@ -415,6 +446,13 @@ impl<C: TuiAppClient> TuiApp<C> {
             agent_os_sys::AgentOsError::Validation("no current thread selected".to_string())
         })
     }
+
+    fn workspace_string(&self) -> Option<String> {
+        self.options
+            .workspace
+            .as_ref()
+            .map(|path| path.to_string_lossy().to_string())
+    }
 }
 
 fn parse_approval_response(args: &str) -> AgentOsResult<(&str, bool)> {
@@ -520,6 +558,44 @@ mod tests {
     }
 
     #[test]
+    fn projection_commands_read_app_protocol_projections() {
+        let mut app = TuiApp::new(FakeTuiClient::default(), TuiOptions::default());
+
+        app.handle_input("/threads").unwrap();
+        app.handle_input("/processes").unwrap();
+        app.handle_input("/model").unwrap();
+        app.handle_input("/provider").unwrap();
+        app.handle_input("/usage").unwrap();
+        app.handle_input("/permissions").unwrap();
+        app.handle_input("/status").unwrap();
+
+        assert_eq!(
+            app.client.requests,
+            vec![
+                "thread/list",
+                "process/list",
+                "model/list",
+                "provider/capabilities/read",
+                "provider/usage/read",
+                "permission_profile/list",
+                "stats/read",
+            ]
+        );
+        assert_eq!(app.projection.threads[0]["client_thread_id"], "thread_1");
+        assert_eq!(app.projection.process_sessions[0]["process_id"], "proc_1");
+        assert_eq!(app.projection.models[0]["model"], "model_1");
+        assert_eq!(app.projection.providers[0]["provider_id"], "provider_1");
+        assert_eq!(
+            app.projection.permission_profiles[0]["profile_id"],
+            "trusted"
+        );
+        assert_eq!(
+            app.projection.usage.as_ref().unwrap()["snapshot"]["provider_calls"],
+            3
+        );
+    }
+
+    #[test]
     fn initialize_without_explicit_thread_does_not_subscribe_or_select_history() {
         let mut app = TuiApp::new(FakeTuiClient::default(), TuiOptions::default());
 
@@ -617,6 +693,42 @@ mod tests {
                     assert_eq!(approval_id, "approval_1");
                     assert!(approved);
                     Ok(json!({"approval": {"approval_id": "approval_1", "status": "approved"}}))
+                }
+                AppRequest::ThreadList { archived } => {
+                    self.requests.push("thread/list");
+                    assert_eq!(archived, None);
+                    Ok(json!({"threads": [{"client_thread_id": "thread_1"}]}))
+                }
+                AppRequest::ProcessList { state } => {
+                    self.requests.push("process/list");
+                    assert_eq!(state, None);
+                    Ok(json!({"process_sessions": [{"process_id": "proc_1"}]}))
+                }
+                AppRequest::ModelList { workspace: _ } => {
+                    self.requests.push("model/list");
+                    Ok(json!({"models": [{"model": "model_1"}]}))
+                }
+                AppRequest::ProviderCapabilitiesRead {
+                    workspace: _,
+                    provider_id,
+                } => {
+                    self.requests.push("provider/capabilities/read");
+                    assert_eq!(provider_id, None);
+                    Ok(json!({"providers": [{"provider_id": "provider_1"}]}))
+                }
+                AppRequest::ProviderUsageRead { query } => {
+                    self.requests.push("provider/usage/read");
+                    assert_eq!(query.client_thread_id, None);
+                    Ok(json!({"snapshot": {"provider_calls": 3}}))
+                }
+                AppRequest::PermissionProfileList => {
+                    self.requests.push("permission_profile/list");
+                    Ok(json!({"permission_profiles": [{"profile_id": "trusted"}]}))
+                }
+                AppRequest::StatsRead { query } => {
+                    self.requests.push("stats/read");
+                    assert_eq!(query.client_thread_id, None);
+                    Ok(json!({"snapshot": {"provider_calls": 3}}))
                 }
                 other => panic!("unexpected request {other:?}"),
             }
