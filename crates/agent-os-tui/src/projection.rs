@@ -9,6 +9,7 @@ pub struct TuiProjection {
     pub timeline: Vec<String>,
     pub runtime_jobs: Vec<Value>,
     pub process_sessions: Vec<Value>,
+    pub approvals: Vec<Value>,
     pub artifacts: Vec<Value>,
     pub evidence: Vec<Value>,
     pub resources: Vec<Value>,
@@ -81,6 +82,9 @@ impl TuiProjection {
             }
             AppNotification::ApprovalRequested(approval)
             | AppNotification::ApprovalResolved(approval) => {
+                if let Ok(value) = serde_json::to_value(approval) {
+                    self.approvals.push(value);
+                }
                 self.timeline.push(format!(
                     "approval {} {:?}",
                     approval.approval_id, approval.status
@@ -151,6 +155,7 @@ fn timeline_item_type_label(item_type: TimelineItemType) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_os_sys::{ApprovalQueueProjection, ProjectionCursor};
     use serde_json::json;
 
     #[test]
@@ -171,5 +176,32 @@ mod tests {
         assert_eq!(projection.current_thread_id.as_deref(), Some("thread_1"));
         assert_eq!(projection.current_turn_id.as_deref(), Some("turn_1"));
         assert_eq!(projection.timeline, vec!["tool read_file Completed"]);
+    }
+
+    #[test]
+    fn projection_retains_approval_notifications() {
+        let mut projection = TuiProjection::default();
+
+        projection.apply_notification(&AppNotificationEnvelope {
+            protocol: "agent-os.app.v1".to_string(),
+            subscription_id: Some("sub_1".to_string()),
+            cursor: ProjectionCursor {
+                last_event_ordinal: 1,
+            },
+            notification: AppNotification::ApprovalRequested(ApprovalQueueProjection {
+                approval_id: "approval_1".to_string(),
+                client_thread_id: Some("thread_1".to_string()),
+                agent_id: "agent_1".to_string(),
+                task_id: "task_1".to_string(),
+                status: "pending".to_string(),
+                requested_at: "2026-07-05T00:00:00Z".to_string(),
+                resolved_at: None,
+                payload: json!({"tool": "run_command"}),
+            }),
+        });
+
+        assert_eq!(projection.approvals.len(), 1);
+        assert_eq!(projection.approvals[0]["approval_id"], "approval_1");
+        assert_eq!(projection.timeline, vec!["approval approval_1 \"pending\""]);
     }
 }

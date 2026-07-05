@@ -237,8 +237,21 @@ impl<C: TuiAppClient> TuiApp<C> {
                 self.status_line = "Opened permissions panel".to_string();
             }
             "approve" => {
-                self.bottom_pane = Some(BottomPane::Approvals);
-                self.status_line = "Opened approvals panel".to_string();
+                if args.is_empty() {
+                    self.bottom_pane = Some(BottomPane::Approvals);
+                    self.status_line = "Opened approvals panel".to_string();
+                } else {
+                    let (approval_id, approved) = parse_approval_response(args)?;
+                    self.client.request(AppRequest::ApprovalRespond {
+                        approval_id: approval_id.to_string(),
+                        approved,
+                    })?;
+                    self.status_line = if approved {
+                        format!("Approved {approval_id}")
+                    } else {
+                        format!("Denied {approval_id}")
+                    };
+                }
             }
             "processes" => {
                 self.bottom_pane = Some(BottomPane::Processes);
@@ -404,6 +417,30 @@ impl<C: TuiAppClient> TuiApp<C> {
     }
 }
 
+fn parse_approval_response(args: &str) -> AgentOsResult<(&str, bool)> {
+    let mut parts = args.split_whitespace();
+    let approval_id = parts.next().ok_or_else(|| {
+        agent_os_sys::AgentOsError::Validation(
+            "/approve requires <approval-id> approve|deny".to_string(),
+        )
+    })?;
+    let decision = parts.next().ok_or_else(|| {
+        agent_os_sys::AgentOsError::Validation(
+            "/approve requires <approval-id> approve|deny".to_string(),
+        )
+    })?;
+    let approved = match decision {
+        "approve" | "approved" | "yes" | "y" => true,
+        "deny" | "denied" | "no" | "n" => false,
+        other => {
+            return Err(agent_os_sys::AgentOsError::Validation(format!(
+                "unknown approval decision {other}; use approve or deny"
+            )))
+        }
+    };
+    Ok((approval_id, approved))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -470,6 +507,16 @@ mod tests {
 
         assert_eq!(app.overlay, Some(Overlay::Tools));
         assert!(app.client.requests.is_empty());
+    }
+
+    #[test]
+    fn approve_with_decision_maps_to_approval_respond() {
+        let mut app = TuiApp::new(FakeTuiClient::default(), TuiOptions::default());
+
+        app.handle_input("/approve approval_1 approve").unwrap();
+
+        assert_eq!(app.status_line, "Approved approval_1");
+        assert_eq!(app.client.requests, vec!["approval/respond"]);
     }
 
     #[test]
@@ -561,6 +608,15 @@ mod tests {
                     self.requests.push("thread/compact");
                     assert_eq!(client_thread_id, "thread_fork");
                     Ok(json!({}))
+                }
+                AppRequest::ApprovalRespond {
+                    approval_id,
+                    approved,
+                } => {
+                    self.requests.push("approval/respond");
+                    assert_eq!(approval_id, "approval_1");
+                    assert!(approved);
+                    Ok(json!({"approval": {"approval_id": "approval_1", "status": "approved"}}))
                 }
                 other => panic!("unexpected request {other:?}"),
             }

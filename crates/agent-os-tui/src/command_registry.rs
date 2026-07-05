@@ -256,10 +256,10 @@ const COMMANDS: &[CommandDefinition] = &[
         "approve",
         CommandCategory::Permissions,
         CommandTarget::AppRequest,
-        false,
+        true,
         true,
         "Approvals",
-        "Open pending approvals.",
+        "Open pending approvals or respond to one.",
     ),
     command(
         "tools",

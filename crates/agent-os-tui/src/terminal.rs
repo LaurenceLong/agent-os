@@ -173,6 +173,12 @@ fn render_bottom_pane<C: TuiAppClient>(
             .iter()
             .map(|process| Line::from(process.to_string()))
             .collect(),
+        "Approvals" => app
+            .projection
+            .approvals
+            .iter()
+            .map(|approval| Line::from(approval.to_string()))
+            .collect(),
         _ => vec![Line::from(format!(
             "thread={:?} turn={:?} runtime_jobs={}",
             app.projection.current_thread_id,
